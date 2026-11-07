@@ -9,7 +9,8 @@ build/
 *.dylib
 xiaoya-media-server
 
-# Go Test & Coverage
+# Go Test, Vendor & Coverage
+vendor/
 *.test
 *.out
 coverage.html

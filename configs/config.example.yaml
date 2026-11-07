@@ -1,0 +1,39 @@
+server:
+  listen: "0.0.0.0:8096"
+
+database:
+  driver: postgres
+  dsn: "" # 推荐通过环境变量 DATABASE_URL 或 /run/bootstrap/postgres-password 注入
+
+xiaoya:
+  sqlite_path: /xiaoya-db/strm_internal.db
+  read_only: true
+
+monitor:
+  enabled: true
+  interval: 10m
+  roots:
+    - /每日更新/电视剧/国产剧（115）
+    - /每日更新/电视剧/国产剧
+
+strm:
+  output_root: /media/strm
+  recursive: true
+  max_path_length: 235
+  media_extensions: all
+  attachments: full
+  preserve_source_structure: true
+  target_base_url: http://xiaoya.host:5678
+
+alist:
+  base_url: http://xiaoya.host:5678
+
+metadata:
+  nfo_policy: prefer
+  tmdb:
+    enabled: true
+    api_key: "" # 请通过环境变量 TMDB_API_KEY 注入，切勿提交真实密钥
+    language: zh-CN
+
+playback:
+  mode: redirect
