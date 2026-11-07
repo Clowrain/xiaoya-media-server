@@ -41,6 +41,14 @@ func (s *Service) SetProcessor(p ResourceProcessor) {
 	s.processor = p
 }
 
+func (s *Service) SetReader(r *xiaoya.Reader) {
+	s.reader = r
+}
+
+func (s *Service) Reader() *xiaoya.Reader {
+	return s.reader
+}
+
 func (s *Service) Store() *SQLStore {
 	return s.store
 }
