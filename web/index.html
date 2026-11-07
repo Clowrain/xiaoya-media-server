@@ -1022,7 +1022,7 @@
                 <button class="secondary" data-id="${esc(r.id)}" data-enabled="${!r.enabled}" data-interval="${r.interval_sec}" onclick="toggleMonitorRoot(this.dataset.id,this.dataset.enabled==='true',Number(this.dataset.interval))">${r.enabled?'停用':'启用'}</button>
                 <button class="danger" data-id="${esc(r.id)}" data-path="${esc(r.root_path)}" onclick="deleteMonitorRoot(this.dataset.id,this.dataset.path)">移除</button>
               </div>
-            </div>`).join('')||'<div class="muted" style="padding:28px;text-align:center">暂无监控目录，请点击上方添加（如 /每日更新/电视剧/国产剧）</div>'}
+            </div>`).join('')||'<div class="muted" style="padding:28px;text-align:center">暂无监控目录，请点击上方添加或通过下方 AList 目录直览选择入库</div>'}
         </div>
 
         <div class="bar" style="margin-bottom:12px;justify-content:space-between">
@@ -1102,8 +1102,8 @@
       d.innerHTML=`
         <h2>添加小雅指定监控目录</h2>
         <form id="f-addroot" class="form-grid single" style="margin-top:14px">
-          <label>小雅网盘目录绝对路径（如：/每日更新/电视剧/国产剧）
-            <input name="path" required placeholder="/每日更新/...">
+          <label>小雅网盘目录绝对路径（如：/电视剧 或 /电影）
+            <input name="path" required placeholder="/电视剧/...">
           </label>
           <label>扫描同步周期（秒）
             <input name="interval" type="number" min="60" value="600" required>

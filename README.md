@@ -9,7 +9,7 @@
 1. **完整 Emby 兼容媒体服务（单进程统一交付）**
    - 原生兼容 Infuse、VidHub、SenPlayer 及内置 Web 影库；支持 302 直链重定向播放、过期 `?sign=...` 自动刷新回退、外挂字幕发现与 `.srt -> WebVTT` 动态转换、播放进度续播与真实 `/Shows/NextUp` 下一集推荐。
 2. **小雅 SQLite 零侵入只读目录监控**
-   - 通过 `mode=ro` + `PRAGMA query_only=1` 只读消费小雅 `strm_internal.db`（WAL 安全），支持精确路径注册（默认监控 `/每日更新/电视剧/国产剧（115）` 与 `/每日更新/电视剧/国产剧`），建立基线快照、分钟级 `id > last_max_node_id` 增量发现与全树差异对账。
+   - 通过 `mode=ro` + `PRAGMA query_only=1` 只读消费小雅 `strm_internal.db`（WAL 安全），支持精确路径注册与按需监控，建立基线快照、分钟级 `id > last_max_node_id` 增量发现与全树差异对账。
 3. **100% 兼容 `strm.py` ∪ `strm2.py` 的 Go 原生 STRM 与附件引擎**
    - 覆盖全部 21 类视频扩展名、10 类附件扩展名及无后缀分集节点（如 `E01..E27`），精确复刻 11 字符 URL 编码、`%20` 空格规整、防 `.strm.strm`、235 字符截断消歧、备用字符翻译表与 SHA-256 原子幂等写入，并通过实时 `python3` 黄金测试验证。
 4. **`prefer` NFO 优先策略 + TMDB v3 自动刮削**
