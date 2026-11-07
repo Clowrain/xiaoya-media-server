@@ -60,9 +60,6 @@ func NewPipeline(ctx context.Context, cfg *config.Config, app *embyserver.App, s
 	_ = p.EnsureSQLiteReader(ctx)
 	p.discovery = discovery.NewService(store, p.reader, p.strmEng)
 
-	// Unconditionally remove legacy demo default monitor roots
-	_, _ = store.DB().ExecContext(ctx, "DELETE FROM monitor_roots WHERE root_path IN ('/每日更新/电视剧/国产剧（115）', '/每日更新/电视剧/国产剧')")
-
 	if cfg.Monitor.Enabled && len(cfg.Monitor.Roots) > 0 {
 		if _, err := p.discovery.RegisterMonitorRoots(ctx, cfg.Monitor.Roots, cfg.Monitor.Interval); err != nil {
 			log.Printf("register initial monitor roots warning: %v", err)

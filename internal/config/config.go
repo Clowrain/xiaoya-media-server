@@ -191,8 +191,7 @@ func (c *Config) applyEnv() {
 		parts := strings.Split(v, ",")
 		roots := make([]string, 0, len(parts))
 		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if p != "" && p != "/每日更新/电视剧/国产剧（115）" && p != "/每日更新/电视剧/国产剧" {
+			if p = strings.TrimSpace(p); p != "" {
 				roots = append(roots, p)
 			}
 		}
