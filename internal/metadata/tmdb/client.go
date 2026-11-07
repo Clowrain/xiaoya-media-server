@@ -48,6 +48,10 @@ type SearchResult struct {
 	PosterURL     string  `json:"poster_url"`
 	BackdropURL   string  `json:"backdrop_url"`
 	Rating        float64 `json:"rating"`
+	Name          string  `json:"name,omitempty"`
+	PosterPath    string  `json:"poster_path,omitempty"`
+	ReleaseDate   string  `json:"release_date,omitempty"`
+	FirstAirDate  string  `json:"first_air_date,omitempty"`
 }
 
 type PersonCredit struct {
@@ -256,6 +260,8 @@ func (c *Client) SearchMovie(ctx context.Context, query string, year int) ([]Sea
 			PosterURL:     c.ImageURL("w500", r.PosterPath),
 			BackdropURL:   c.ImageURL("w1280", r.BackdropPath),
 			Rating:        r.VoteAverage,
+			PosterPath:    r.PosterPath,
+			ReleaseDate:   r.ReleaseDate,
 		})
 	}
 	return out, nil
@@ -296,12 +302,15 @@ func (c *Client) SearchTV(ctx context.Context, query string, year int) ([]Search
 			ID:            r.ID,
 			MediaType:     "tv",
 			Title:         r.Name,
+			Name:          r.Name,
 			OriginalTitle: r.OriginalName,
 			Year:          yearFromDate(r.FirstAirDate),
 			Overview:      r.Overview,
 			PosterURL:     c.ImageURL("w500", r.PosterPath),
 			BackdropURL:   c.ImageURL("w1280", r.BackdropPath),
 			Rating:        r.VoteAverage,
+			PosterPath:    r.PosterPath,
+			FirstAirDate:  r.FirstAirDate,
 		})
 	}
 	return out, nil

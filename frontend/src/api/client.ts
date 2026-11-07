@@ -281,7 +281,7 @@ export async function searchTmdb(q: string, kind: string, year?: string): Promis
   const params: Record<string, string> = { q, kind };
   if (year) params.year = year;
   const data = await request(`/admin/tmdb/search?${new URLSearchParams(params)}`);
-  return Array.isArray(data) ? data : (data.results || []);
+  return Array.isArray(data) ? data : (data.Items || data.items || data.results || []);
 }
 
 export async function matchTmdb(itemId: string, tmdbId: number | string, kind: string): Promise<void> {

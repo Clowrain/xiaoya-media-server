@@ -544,7 +544,7 @@ func (a *App) adminTMDB(w http.ResponseWriter, r *http.Request, path string) {
 				fail(w, 502, err.Error())
 				return
 			}
-			respond(w, M{"Items": res})
+			respond(w, M{"Items": res, "results": res})
 			return
 		}
 		res, err := cli.SearchMovie(ctx, query, year)
@@ -552,7 +552,7 @@ func (a *App) adminTMDB(w http.ResponseWriter, r *http.Request, path string) {
 			fail(w, 502, err.Error())
 			return
 		}
-		respond(w, M{"Items": res})
+		respond(w, M{"Items": res, "results": res})
 
 	case "/admin/tmdb/match":
 		if r.Method != http.MethodPost {

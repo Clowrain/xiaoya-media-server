@@ -350,10 +350,10 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-96 overflow-y-auto p-1">
               {searchResults.map((r) => {
                 const title = r.title || r.name || '未知片名';
-                const date = r.release_date || r.first_air_date || '';
-                const posterUrl = r.poster_path
+                const date = r.year ? String(r.year) : (r.release_date || r.first_air_date || '');
+                const posterUrl = r.poster_url || (r.poster_path
                   ? `https://image.tmdb.org/t/p/w185${r.poster_path}`
-                  : null;
+                  : null);
 
                 return (
                   <div
