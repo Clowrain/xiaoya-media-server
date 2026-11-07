@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"xiaoya-media-server/internal/config"
+	"xiaoya-media-server/internal/resource/discovery"
 	"xiaoya-media-server/web"
 )
 
@@ -93,6 +94,7 @@ func (a *App) init() {
 	must(a.versionsSchema())
 	must(a.initialsSchema())
 	must(a.tmdbSchema())
+	must(discovery.NewSQLStore(a.db.DB, "postgres").EnsureSchema(context.Background()))
 	mustExecLogin := `CREATE TABLE IF NOT EXISTS user_logins(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, last_login BIGINT NOT NULL)`
 	_, loginErr := a.db.Exec(mustExecLogin)
 	must(loginErr)
@@ -1391,6 +1393,33 @@ func (a *App) TriggerScanAll() {
 		if libID, ok := lib["Id"].(string); ok && libID != "" {
 			go a.scanLibraryMode(libID, true)
 		}
+	}
+}
+
+// TriggerScopedPathScan triggers an incremental scoped scan on any library containing targetPath.
+func (a *App) TriggerScopedPathScan(targetPath string) {
+	if a == nil || a.db == nil || strings.TrimSpace(targetPath) == "" {
+		return
+	}
+	targetPath = filepath.Clean(targetPath)
+	rows, err := a.db.Query("SELECT id, path FROM libraries")
+	if err != nil {
+		return
+	}
+	type match struct{ id, path string }
+	var matches []match
+	for rows.Next() {
+		var m match
+		if rows.Scan(&m.id, &m.path) == nil {
+			cleanRoot := filepath.Clean(m.path)
+			if targetPath == cleanRoot || strings.HasPrefix(targetPath, cleanRoot+string(filepath.Separator)) {
+				matches = append(matches, m)
+			}
+		}
+	}
+	rows.Close()
+	for _, m := range matches {
+		go a.scanLibraryScoped(m.id, true, false, []string{targetPath})
 	}
 }
 
