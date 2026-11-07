@@ -408,6 +408,7 @@
   <main id="app"></main>
 
   <dialog id="modal"></dialog>
+  <dialog id="dir-modal" style="width:min(640px,calc(100vw - 24px));padding:22px;z-index:105"></dialog>
   <dialog id="logs" aria-label="全链路运行日志与排错中心" style="width:min(980px,96vw);height:min(720px,90vh);padding:22px">
     <div class="bar" style="margin-bottom:12px;justify-content:space-between">
       <div class="bar">
@@ -874,19 +875,33 @@
             <select name="kind"><option value="movies">电影 (Movies)</option><option value="tvshows">电视剧 (TV Shows)</option></select>
           </label>
           <label>媒体库名称<input name="name" required placeholder="如：国产剧、华语电影"></label>
-          <label>STRM 所在目录（点击选择）
-            <input name="path" id="lib-path-input" required readonly placeholder="/media/strm/..." style="cursor:pointer">
+          <label>STRM 本地挂载目录
+            <div class="bar" style="margin:0;gap:8px">
+              <input name="path" id="lib-path-input" required placeholder="/media/strm" value="/media/strm" style="flex:1">
+              <button type="button" class="secondary" id="btn-browse-dir" style="white-space:nowrap">📂 浏览目录</button>
+            </div>
+            <div class="bar" style="gap:6px;margin-top:8px;flex-wrap:wrap">
+              <span class="muted" style="font-size:12px">快捷填入:</span>
+              <button type="button" class="secondary" style="height:26px;font-size:11.5px;padding:0 8px" onclick="$('#lib-path-input').value='/media/strm'">/media/strm</button>
+              <button type="button" class="secondary" style="height:26px;font-size:11.5px;padding:0 8px" onclick="$('#lib-path-input').value='/media/strm/电影'">/media/strm/电影</button>
+              <button type="button" class="secondary" style="height:26px;font-size:11.5px;padding:0 8px" onclick="$('#lib-path-input').value='/media/strm/电视剧'">/media/strm/电视剧</button>
+            </div>
           </label>
-          <div class="bar" style="justify-content:flex-end;margin-top:10px">
+          <div class="bar" style="justify-content:flex-end;margin-top:12px">
             <button type="button" class="secondary" onclick="closeModal()">取消</button>
             <button type="submit">创建并扫描</button>
           </div>
         </form>`;
       d.showModal();
-      $('#lib-path-input').onclick=()=>pickLocalDir(p=>{$('#lib-path-input').value=p});
+      $('#btn-browse-dir').onclick=()=>{
+        pickLocalDir(p=>{$('#lib-path-input').value=p}, $('#lib-path-input').value||'/media/strm');
+      };
       $('#f-newlib').onsubmit=run(async e=>{
         e.preventDefault();const f=new FormData(e.target);
-        await api('/admin/libraries','POST',{Name:f.get('name'),Kind:f.get('kind'),Paths:[f.get('path')]});
+        const name=f.get('name').trim(), p=f.get('path').trim();
+        if(!name)throw Error('请输入媒体库名称');
+        if(!p)throw Error('请输入 STRM 本地挂载目录');
+        await api('/admin/libraries','POST',{Name:name,Kind:f.get('kind'),Paths:[p]});
         closeModal();toast('媒体库已创建');renderTabLibraries();
       });
     }
@@ -896,24 +911,29 @@
       const d=$('#modal');d.className='';
       const locs=lib.Locations||(lib.Path?[lib.Path]:[]);
       d.innerHTML=`
-        <h2>管理目录 · ${esc(lib.Name)}</h2>
+        <h2>管理媒体目录 · ${esc(lib.Name)}</h2>
         <div style="display:flex;flex-direction:column;gap:8px;margin:16px 0">
           ${locs.map((p,i)=>`
             <div class="bar" style="background:var(--surface2);padding:10px 14px;border-radius:10px;justify-content:space-between">
               <code>${esc(p)}</code>
-              <button class="danger" style="height:32px;padding:0 10px" onclick="removeFolderFromLib('${id}','${esc(p)}')">移除</button>
+              <button class="danger" style="height:32px;padding:0 10px" data-path="${esc(p)}" onclick="removeFolderFromLib('${id}',this.dataset.path)">移除</button>
             </div>`).join('')||'<p class="muted">未挂载任何目录</p>'}
         </div>
-        <div class="bar" style="justify-content:space-between;margin-top:14px">
-          <button class="secondary" onclick="addFolderToLib('${id}')">＋ 添加新目录</button>
-          <button onclick="closeModal()">完成</button>
+        <form id="f-addfolder" class="bar" style="gap:8px;margin-bottom:16px">
+          <input name="path" id="add-folder-input" placeholder="/media/strm 或手动键入路径" style="flex:1" required>
+          <button type="button" class="secondary" onclick="pickLocalDir(p=>{$('#add-folder-input').value=p}, $('#add-folder-input').value||'/media/strm')">📂 浏览</button>
+          <button type="submit">＋ 绑定目录</button>
+        </form>
+        <div class="bar" style="justify-content:flex-end">
+          <button type="button" class="secondary" onclick="closeModal()">关闭</button>
         </div>`;
       d.showModal();
-    }
-    function addFolderToLib(id){
-      pickLocalDir(async p=>{
+      $('#f-addfolder').onsubmit=run(async e=>{
+        e.preventDefault();
+        const p=$('#add-folder-input').value.trim();
+        if(!p)throw Error('请输入目录路径');
         await api('/admin/library-folders','POST',{ID:id,Path:p});
-        toast('目录已添加');dialogManageFolders(id);renderTabLibraries();
+        toast('目录已添加并触发扫描');dialogManageFolders(id);renderTabLibraries();
       });
     }
     async function removeFolderFromLib(id,path){
@@ -921,29 +941,77 @@
       await api('/admin/library-folders','DELETE',{ID:id,Path:path});
       toast('目录已移除');dialogManageFolders(id);renderTabLibraries();
     }
-    function pickLocalDir(cb,path='/media'){
-      run(async()=>{
-        const b=await api('/admin/directories?'+new URLSearchParams({Path:path}));
-        const d=document.createElement('dialog');
-        d.innerHTML=`
-          <h2>选择本地 STRM 目录</h2>
-          <p class="muted" style="margin:6px 0 14px;font-size:12px">${esc(b.Path)}</p>
-          <div style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:16px">
-            ${b.Directories.map(x=>`<button class="secondary" style="justify-content:flex-start" data-p="${esc(x.Path)}">📁 ${esc(x.Name)}</button>`).join('')||'<div class="muted">无子目录</div>'}
+
+    let dirPickerCb=null, currentPickedPath='/media/strm';
+    async function pickLocalDir(cb,path='/media/strm'){
+      dirPickerCb=cb;
+      currentPickedPath=path||'/media/strm';
+      const dm=$('#dir-modal');if(!dm)return;
+      if(!dm.open)dm.showModal();
+      await renderDirPickerContent(currentPickedPath);
+    }
+    async function renderDirPickerContent(path){
+      const dm=$('#dir-modal');if(!dm)return;
+      currentPickedPath=path||'/media';
+      dm.innerHTML=`
+        <div class="bar" style="margin-bottom:12px;justify-content:space-between">
+          <h2 style="margin:0;font-size:18px">选择服务器媒体目录</h2>
+          <button class="secondary icon-btn" onclick="$('#dir-modal').close()">✕</button>
+        </div>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">
+          当前浏览：<code style="color:var(--accent);font-size:13px">${esc(currentPickedPath)}</code>
+        </div>
+        <div class="bar" style="margin-bottom:12px;gap:6px;flex-wrap:wrap">
+          <button class="secondary" style="height:28px;font-size:12px;padding:0 8px" onclick="renderDirPickerContent('/media')">/media</button>
+          <button class="secondary" style="height:28px;font-size:12px;padding:0 8px" onclick="renderDirPickerContent('/media/strm')">/media/strm</button>
+          <button class="secondary" style="height:28px;font-size:12px;padding:0 8px" ${currentPickedPath==='/media'||currentPickedPath==='/'?'disabled':''} onclick="navDirPickerUp('${esc(currentPickedPath)}')">⬆ 上一级</button>
+        </div>
+        <div id="dir-picker-list" class="item-list" style="max-height:300px;overflow-y:auto;margin-bottom:16px">
+          <div class="muted" style="padding:20px;text-align:center">正在读取目录…</div>
+        </div>
+        <div class="bar" style="justify-content:space-between;align-items:center">
+          <span class="muted" style="font-size:12px">选定后将填入表单</span>
+          <div class="bar">
+            <button type="button" class="secondary" onclick="$('#dir-modal').close()">取消</button>
+            <button type="button" onclick="confirmDirPicker('${esc(currentPickedPath)}')">选择当前目录</button>
           </div>
-          <div class="bar" style="justify-content:space-between">
-            <button class="secondary" id="p-up" ${b.Path==='/media'?'disabled':''}>上一级</button>
-            <div class="bar">
-              <button class="secondary" id="p-cancel">取消</button>
-              <button id="p-sel">选择当前目录</button>
-            </div>
-          </div>`;
-        document.body.appendChild(d);d.showModal();
-        d.querySelectorAll('[data-p]').forEach(el=>el.onclick=()=>{d.close();d.remove();pickLocalDir(cb,el.dataset.p)});
-        d.querySelector('#p-up').onclick=()=>{d.close();d.remove();pickLocalDir(cb,b.Path.slice(0,b.Path.lastIndexOf('/'))||'/media')};
-        d.querySelector('#p-cancel').onclick=()=>{d.close();d.remove()};
-        d.querySelector('#p-sel').onclick=()=>{d.close();d.remove();cb(b.Path)};
-      })();
+        </div>
+      `;
+      try{
+        const b=await api('/admin/directories?'+new URLSearchParams({Path:currentPickedPath}));
+        const box=$('#dir-picker-list');if(!box)return;
+        const dirs=b.Directories||[];
+        if(!dirs.length){
+          box.innerHTML='<div class="muted" style="padding:24px;text-align:center">此目录下无更多子文件夹，可直接点击右下角「选择当前目录」</div>';
+        }else{
+          box.innerHTML=dirs.map(x=>`
+            <div class="item-row" style="padding:8px 12px">
+              <span style="font-size:18px">📁</span>
+              <div class="item-info">
+                <strong>${esc(x.Name)}</strong>
+                <small class="muted">${esc(x.Path)}</small>
+              </div>
+              <div class="bar" style="margin:0;gap:6px">
+                <button class="secondary" style="height:30px;font-size:12px;padding:0 10px" data-path="${esc(x.Path)}" onclick="renderDirPickerContent(this.dataset.path)">进入 ➔</button>
+                <button style="height:30px;font-size:12px;padding:0 10px" data-path="${esc(x.Path)}" onclick="confirmDirPicker(this.dataset.path)">选择此目录 ✓</button>
+              </div>
+            </div>`).join('');
+        }
+      }catch(e){
+        const box=$('#dir-picker-list');
+        if(box)box.innerHTML=`<div class="muted" style="padding:20px;text-align:center;color:var(--danger)">无法读取目录：${esc(e.message)}<br><small class="muted" style="margin-top:6px;display:block">如目录尚未创建，可直接在输入框中手动输入路径</small></div>`;
+      }
+    }
+    function navDirPickerUp(p){
+      if(!p||p==='/media'||p==='/')return;
+      const idx=p.lastIndexOf('/');
+      const parent=idx>0?p.slice(0,idx):'/media';
+      renderDirPickerContent(parent);
+    }
+    function confirmDirPicker(p){
+      $('#dir-modal')?.close();
+      if(dirPickerCb)dirPickerCb(p);
+      toast('已选择目录：'+p);
     }
     async function dialogSchedule(){
       const c=await api('/admin/scan-schedule');
@@ -975,7 +1043,7 @@
     }
 
     /* Tab 1: Xiaoya Sync & AList Import (Integrated) */
-    let alistPath='/', alistSearch='';
+    let alistPath='/', alistSearch='', alistPage=1, alistPerPage=25, alistTotal=0;
     async function renderTabXiaoyaSync(){
       const box=$('#admin-main');if(!box)return;
       const [ov,roots]=await Promise.all([api('/api/system/overview'),api('/api/monitor/roots')]);
@@ -1038,9 +1106,10 @@
         </div>
         <div class="muted" style="font-size:12px;margin-bottom:8px">当前路径：<code>${esc(alistPath)}</code></div>
         <div class="item-list" id="alist-list"></div>
+        <div id="alist-pagination" style="margin-top:10px"></div>
       `;
 
-      $('#alist-btn-search').onclick=()=>{alistSearch=$('#alist-kw').value.trim();loadAListItems()};
+      $('#alist-btn-search').onclick=()=>{alistSearch=$('#alist-kw').value.trim();alistPage=1;loadAListItems()};
       $('#alist-kw').onkeydown=e=>{if(e.key==='Enter')$('#alist-btn-search').click()};
       await loadAListItems();
     }
@@ -1049,11 +1118,22 @@
       const box=$('#alist-list');if(!box)return;
       box.innerHTML='<div class="muted" style="padding:24px;text-align:center">正在加载 AList 资源…</div>';
       try{
+        const qs=alistSearch
+          ?new URLSearchParams({keywords:alistSearch,parent:alistPath,page:String(alistPage),per_page:String(alistPerPage)})
+          :new URLSearchParams({path:alistPath,page:String(alistPage),per_page:String(alistPerPage)});
         const data=alistSearch
-          ?await api('/api/alist/search?'+new URLSearchParams({keywords:alistSearch,parent:alistPath}))
-          :await api('/api/alist/browse?'+new URLSearchParams({path:alistPath}));
+          ?await api('/api/alist/search?'+qs)
+          :await api('/api/alist/browse?'+qs);
         const items=data.items||[];
-        if(!items.length){box.innerHTML='<div class="muted" style="padding:28px;text-align:center">当前目录无项目或无搜索结果</div>';return}
+        alistTotal=data.total||items.length;
+        const totalPages=Math.max(1,Math.ceil(alistTotal/alistPerPage));
+        if(alistPage>totalPages)alistPage=totalPages;
+
+        if(!items.length){
+          box.innerHTML='<div class="muted" style="padding:28px;text-align:center">当前目录无项目或无搜索结果</div>';
+          $('#alist-pagination').innerHTML='';
+          return;
+        }
         box.innerHTML=items.map(it=>{
           const full=it.full_path||(alistPath==='/'?'/'+it.name:alistPath+'/'+it.name);
           return `
@@ -1070,13 +1150,36 @@
               </div>
             </div>`;
         }).join('');
-      }catch(e){box.innerHTML=`<div class="muted" style="padding:28px;text-align:center;color:var(--danger)">AList 读取失败：${esc(e.message)}</div>`}
+        renderAListPagination(totalPages);
+      }catch(e){
+        box.innerHTML=`<div class="muted" style="padding:28px;text-align:center;color:var(--danger)">AList 读取失败：${esc(e.message)}</div>`;
+        $('#alist-pagination').innerHTML='';
+      }
     }
-    function enterAListDir(p){alistPath=p;alistSearch='';$('#alist-kw').value='';loadAListItems()}
+    function renderAListPagination(totalPages){
+      const pbox=$('#alist-pagination');if(!pbox)return;
+      pbox.innerHTML=`
+        <div class="bar" style="justify-content:space-between;align-items:center;padding:12px 4px;font-size:13px;flex-wrap:wrap;gap:10px">
+          <span class="muted">共 <strong>${alistTotal}</strong> 项 · 每页 ${alistPerPage} 项</span>
+          <div class="bar" style="margin:0;gap:8px">
+            <button class="secondary" style="height:32px;padding:0 12px" ${alistPage<=1?'disabled':''} onclick="changeAListPage(${alistPage-1})">‹ 上一页</button>
+            <span style="font-weight:600;padding:0 4px">第 ${alistPage} / ${totalPages} 页</span>
+            <button class="secondary" style="height:32px;padding:0 12px" ${alistPage>=totalPages?'disabled':''} onclick="changeAListPage(${alistPage+1})">下一页 ›</button>
+          </div>
+        </div>`;
+    }
+    function changeAListPage(p){
+      if(p<1)return;
+      alistPage=p;
+      loadAListItems();
+      $('#alist-list')?.scrollIntoView({behavior:'smooth',block:'start'});
+    }
+    function enterAListDir(p){alistPath=p;alistPage=1;alistSearch='';$('#alist-kw').value='';loadAListItems()}
     function goUpAList(){
-      if(alistPath==='/')return;
-      alistPath=alistPath.slice(0,alistPath.lastIndexOf('/'))||'/';
-      alistSearch='';$('#alist-kw').value='';loadAListItems();
+      if(alistPath==='/'||alistPath==='')return;
+      const idx=alistPath.lastIndexOf('/');
+      alistPath=idx>0?alistPath.slice(0,idx):'/';
+      alistPage=1;alistSearch='';$('#alist-kw').value='';loadAListItems();
     }
     async function doImportAList(btn,path,isDir,track){
       if(!path)return;
