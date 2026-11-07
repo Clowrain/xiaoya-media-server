@@ -59,14 +59,22 @@ export interface AdminLibrary {
 }
 
 export interface SystemOverview {
-  mode: string;
-  cache_db_path: string;
-  cache_db_size_bytes: number;
-  strm_count: number;
-  alist_host: string;
-  tmdb_available: boolean;
-  tmdb_source: string;
-  recent_logs: string[];
+  mode?: string;
+  cache_db_path?: string;
+  cache_db_size_bytes?: number;
+  strm_count?: number;
+  alist_host?: string;
+  alist_base_url?: string;
+  tmdb_available?: boolean;
+  tmdb_source?: string;
+  recent_logs?: string[];
+  status?: string;
+  resources?: {
+    active_files?: number;
+    missing_files?: number;
+    failed_files?: number;
+  };
+  [key: string]: any;
 }
 
 export interface MonitorRoot {

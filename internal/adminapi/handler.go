@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -530,18 +531,29 @@ func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWrite
 		sqlitePath = h.cfg.Xiaoya.SQLitePath
 	}
 
+	var sqliteSize int64
+	if sqlitePath != "" {
+		if fi, err := os.Stat(sqlitePath); err == nil {
+			sqliteSize = fi.Size()
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":           "ok",
-		"service":          "xiaoya-media-server",
-		"nfo_policy":       "prefer",
-		"deletion_policy":  "keep",
-		"sqlite_path":      sqlitePath,
-		"sqlite_read_only": true,
-		"sqlite_connected": sqliteOK,
-		"sqlite_error":     sqliteErr,
-		"strm_output_root": outRoot,
-		"alist_base_url":   alistBase,
-		"monitor_roots":    len(roots),
+		"status":              "ok",
+		"service":             "xiaoya-media-server",
+		"nfo_policy":          "prefer",
+		"deletion_policy":     "keep",
+		"sqlite_path":         sqlitePath,
+		"sqlite_read_only":    true,
+		"sqlite_connected":    sqliteOK,
+		"sqlite_error":        sqliteErr,
+		"strm_output_root":    outRoot,
+		"alist_base_url":      alistBase,
+		"alist_host":          alistBase,
+		"strm_count":          activeCount,
+		"cache_db_path":       sqlitePath,
+		"cache_db_size_bytes": sqliteSize,
+		"monitor_roots":       len(roots),
 		"resources": map[string]int{
 			"active_files":  activeCount,
 			"missing_files": missingCount,

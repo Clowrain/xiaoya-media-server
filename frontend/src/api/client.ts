@@ -203,7 +203,7 @@ export async function scanAllLibraries(): Promise<void> {
   await request('/admin/scan-all', 'POST', {});
 }
 
-export async function fetchDirectories(basePath: string = '/'): Promise<{ Path: string; Directories: string[] }> {
+export async function fetchDirectories(basePath: string = '/media'): Promise<{ Path: string; Directories: any[] }> {
   return request(`/admin/directories?${new URLSearchParams({ Path: basePath })}`);
 }
 
@@ -222,7 +222,10 @@ export async function fetchSystemOverview(): Promise<SystemOverview> {
 
 export async function fetchMonitorRoots(): Promise<MonitorRoot[]> {
   const data = await request('/api/monitor/roots');
-  return Array.isArray(data) ? data : (data.roots || []);
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.items)) return data.items;
+  if (data && Array.isArray(data.roots)) return data.roots;
+  return [];
 }
 
 export async function addMonitorRoot(rootPath: string, intervalSec: number, enabled: boolean): Promise<void> {

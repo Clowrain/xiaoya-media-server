@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"xiaoya-media-server/web"
 )
 
 func testApp(t *testing.T) *App {
@@ -135,30 +137,50 @@ func TestStaticWebAssets(t *testing.T) {
 		t.Fatalf("expected text/html for /index.html, got %s", rec.Header().Get("Content-Type"))
 	}
 
+	// Dynamically locate embedded assets
+	entries, err := web.Assets.ReadDir("assets")
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no assets embedded in web.Assets: %v", err)
+	}
+
+	var jsName, cssName string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".js") && jsName == "" {
+			jsName = entry.Name()
+		}
+		if strings.HasSuffix(entry.Name(), ".css") && cssName == "" {
+			cssName = entry.Name()
+		}
+	}
+
+	if jsName == "" || cssName == "" {
+		t.Fatalf("expected both .js and .css in assets, found js=%q css=%q", jsName, cssName)
+	}
+
 	// Test JS asset (exact case)
-	reqJS := httptest.NewRequest("GET", "/assets/index-OJAEotM7.js", nil)
+	reqJS := httptest.NewRequest("GET", "/assets/"+jsName, nil)
 	recJS := httptest.NewRecorder()
 	a.serve(recJS, reqJS)
 	if recJS.Code != 200 {
-		t.Fatalf("expected 200 for JS asset, got %d (body: %s)", recJS.Code, recJS.Body.String())
+		t.Fatalf("expected 200 for JS asset %s, got %d (body: %s)", jsName, recJS.Code, recJS.Body.String())
 	}
 	if !strings.Contains(recJS.Header().Get("Content-Type"), "application/javascript") {
 		t.Fatalf("expected application/javascript, got %s", recJS.Header().Get("Content-Type"))
 	}
 
 	// Test CSS asset
-	reqCSS := httptest.NewRequest("GET", "/assets/index-Cp0LXop1.css", nil)
+	reqCSS := httptest.NewRequest("GET", "/assets/"+cssName, nil)
 	recCSS := httptest.NewRecorder()
 	a.serve(recCSS, reqCSS)
 	if recCSS.Code != 200 {
-		t.Fatalf("expected 200 for CSS asset, got %d (body: %s)", recCSS.Code, recCSS.Body.String())
+		t.Fatalf("expected 200 for CSS asset %s, got %d (body: %s)", cssName, recCSS.Code, recCSS.Body.String())
 	}
 	if !strings.Contains(recCSS.Header().Get("Content-Type"), "text/css") {
 		t.Fatalf("expected text/css, got %s", recCSS.Header().Get("Content-Type"))
 	}
 
 	// Test JS asset (lowercase fallback)
-	reqJSLower := httptest.NewRequest("GET", "/assets/index-ojaeotm7.js", nil)
+	reqJSLower := httptest.NewRequest("GET", "/assets/"+strings.ToLower(jsName), nil)
 	recJSLower := httptest.NewRecorder()
 	a.serve(recJSLower, reqJSLower)
 	if recJSLower.Code != 200 {
@@ -169,7 +191,7 @@ func TestStaticWebAssets(t *testing.T) {
 	}
 
 	// Test /web/assets/ prefix
-	reqWebJS := httptest.NewRequest("GET", "/web/assets/index-OJAEotM7.js", nil)
+	reqWebJS := httptest.NewRequest("GET", "/web/assets/"+jsName, nil)
 	recWebJS := httptest.NewRecorder()
 	a.serve(recWebJS, reqWebJS)
 	if recWebJS.Code != 200 {

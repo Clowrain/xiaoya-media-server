@@ -5,6 +5,7 @@ import { AdminLibraries } from './AdminLibraries';
 import { AdminXiaoyaSync } from './AdminXiaoyaSync';
 import { AdminTmdb } from './AdminTmdb';
 import { AdminSystemUsers } from './AdminSystemUsers';
+import { ErrorBoundary } from '../../components/ErrorBoundary';
 
 interface AdminLayoutProps {
   initialTab?: 'libraries' | 'sync' | 'tmdb' | 'users';
@@ -32,8 +33,9 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
       {/* Sub-navigation Tabs */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1 border-b border-zinc-800">
         <button
+          type="button"
           onClick={() => setActiveTab('libraries')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition shrink-0 ${
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition shrink-0 cursor-pointer ${
             activeTab === 'libraries'
               ? 'bg-zinc-800 text-emerald-400 border border-zinc-700 shadow-sm'
               : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
@@ -44,8 +46,9 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveTab('sync')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition shrink-0 ${
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition shrink-0 cursor-pointer ${
             activeTab === 'sync'
               ? 'bg-zinc-800 text-emerald-400 border border-zinc-700 shadow-sm'
               : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
@@ -56,8 +59,9 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveTab('tmdb')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition shrink-0 ${
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition shrink-0 cursor-pointer ${
             activeTab === 'tmdb'
               ? 'bg-zinc-800 text-emerald-400 border border-zinc-700 shadow-sm'
               : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
@@ -68,8 +72,9 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveTab('users')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition shrink-0 ${
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition shrink-0 cursor-pointer ${
             activeTab === 'users'
               ? 'bg-zinc-800 text-emerald-400 border border-zinc-700 shadow-sm'
               : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
@@ -81,17 +86,19 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
       </div>
 
       {/* Tab Panels */}
-      <div>
-        {activeTab === 'libraries' && <AdminLibraries onOpenLogs={onOpenLogs} />}
-        {activeTab === 'sync' && <AdminXiaoyaSync onOpenLogs={onOpenLogs} />}
-        {activeTab === 'tmdb' && (
-          <AdminTmdb
-            initialMatchItem={initialMatchItem}
-            onClearInitialMatchItem={onClearInitialMatchItem}
-          />
-        )}
-        {activeTab === 'users' && <AdminSystemUsers />}
-      </div>
+      <ErrorBoundary fallbackTitle="管理面板加载异常">
+        <div>
+          {activeTab === 'libraries' && <AdminLibraries onOpenLogs={onOpenLogs} />}
+          {activeTab === 'sync' && <AdminXiaoyaSync onOpenLogs={onOpenLogs} />}
+          {activeTab === 'tmdb' && (
+            <AdminTmdb
+              initialMatchItem={initialMatchItem}
+              onClearInitialMatchItem={onClearInitialMatchItem}
+            />
+          )}
+          {activeTab === 'users' && <AdminSystemUsers />}
+        </div>
+      </ErrorBoundary>
     </div>
   );
 };

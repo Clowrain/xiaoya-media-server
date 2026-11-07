@@ -44,10 +44,13 @@ func (a *App) extraAdmin(w http.ResponseWriter, r *http.Request, p string) {
 			return
 		}
 		path := q(r, "Path")
-		if path == "" {
+		if path == "" || path == "/" || path == "." {
 			path = "/media"
 		}
 		path = mediaPath(path)
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) && (path == "/media" || strings.HasPrefix(path, "/media/")) {
+			_ = os.MkdirAll(path, 0755)
+		}
 		real, e := filepath.EvalSymlinks(path)
 		if e != nil || !allowedMediaPath(real) {
 			fail(w, 400, "目录必须位于已配置的媒体挂载目录")

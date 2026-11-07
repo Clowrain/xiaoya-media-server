@@ -151,10 +151,17 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
     }
   };
 
-  const totalPages = Math.ceil(alistTotal / alistPerPage) || 1;
+  const totalPages = Math.max(1, Math.ceil(alistTotal / alistPerPage));
 
   // Breadcrumb items
-  const breadcrumbs = alistPath.split('/').filter(Boolean);
+  const breadcrumbs = (alistPath || '/').split('/').filter(Boolean);
+
+  const strmCount = overview?.strm_count ?? overview?.resources?.active_files ?? 0;
+  const cacheSizeBytes = overview?.cache_db_size_bytes ?? 0;
+  const cacheSizeMb = cacheSizeBytes > 0 ? (cacheSizeBytes / 1024 / 1024).toFixed(2) : '0.00';
+  const alistHost = overview?.alist_host || overview?.alist_base_url || '—';
+  const rootsList = Array.isArray(roots) ? roots : [];
+  const alistList = Array.isArray(alistItems) ? alistItems : [];
 
   return (
     <div className="space-y-6">
@@ -167,7 +174,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
           <div>
             <div className="text-xs text-zinc-400">STRM 文件总数</div>
             <div className="text-xl font-bold font-mono text-zinc-100">
-              {overview ? overview.strm_count.toLocaleString() : '—'}
+              {strmCount.toLocaleString()}
             </div>
           </div>
         </div>
@@ -179,9 +186,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
           <div>
             <div className="text-xs text-zinc-400">缓存 DB 体积</div>
             <div className="text-sm font-semibold font-mono text-zinc-200">
-              {overview
-                ? `${(overview.cache_db_size_bytes / 1024 / 1024).toFixed(2)} MB`
-                : '—'}
+              {cacheSizeMb} MB
             </div>
             <div className="text-[10px] text-zinc-500">SQLite 只读加速</div>
           </div>
@@ -193,8 +198,8 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
           </div>
           <div>
             <div className="text-xs text-zinc-400">AList 宿主服务</div>
-            <div className="text-xs font-mono text-zinc-200 truncate max-w-[130px]" title={overview?.alist_host}>
-              {overview ? overview.alist_host : '—'}
+            <div className="text-xs font-mono text-zinc-200 truncate max-w-[130px]" title={alistHost}>
+              {alistHost}
             </div>
             <div className="text-[10px] text-emerald-400">302 播放直链中转</div>
           </div>
@@ -206,8 +211,9 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
             <div className="text-xs text-emerald-400 font-medium mt-1">实时诊断就绪</div>
           </div>
           <button
+            type="button"
             onClick={onOpenLogs}
-            className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition"
+            className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer"
           >
             打开日志
           </button>
@@ -220,7 +226,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
           <div>
             <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
               <FolderSync className="w-4 h-4 text-emerald-400" />
-              小雅监控目录列表 ({roots.length})
+              小雅监控目录列表 ({rootsList.length})
             </h3>
             <p className="text-xs text-zinc-400 mt-0.5">
               配置定时自动同步的小雅网盘目录，自动跟踪并转换为 Emby 适用的 STRM 资源
@@ -228,21 +234,22 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
           </div>
 
           <button
+            type="button"
             onClick={() => setShowAddRoot(true)}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-md shadow-emerald-600/30 transition"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-md shadow-emerald-600/30 transition cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             添加监控目录
           </button>
         </div>
 
-        {roots.length === 0 ? (
+        {rootsList.length === 0 ? (
           <div className="py-8 text-center text-zinc-500 text-xs">
             暂无监控目录。点击右上角「添加监控目录」配置定时追更路径。
           </div>
         ) : (
           <div className="divide-y divide-zinc-800/80 border border-zinc-800 rounded-xl overflow-hidden bg-zinc-950/40">
-            {roots.map((r) => (
+            {rootsList.map((r) => (
               <div
                 key={r.id}
                 className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
@@ -266,30 +273,34 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
 
                 <div className="flex items-center gap-2">
                   <button
+                    type="button"
                     onClick={() => handleToggleRoot(r.id, r.enabled, r.interval_sec)}
-                    className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium"
+                    className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium cursor-pointer"
                   >
                     {r.enabled ? '停用' : '启用'}
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleTriggerSync(r.id, false)}
-                    className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium flex items-center gap-1"
+                    className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium flex items-center gap-1 cursor-pointer"
                     title="增量同步"
                   >
                     <RefreshCw className="w-3 h-3 text-emerald-400" />
                     增量
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleTriggerSync(r.id, true)}
-                    className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium flex items-center gap-1"
+                    className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium flex items-center gap-1 cursor-pointer"
                     title="全量同步"
                   >
                     <Play className="w-3 h-3 text-sky-400" />
                     全量
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleDeleteRoot(r.id, r.root_path)}
-                    className="p-1 rounded-lg hover:bg-rose-950/60 text-zinc-500 hover:text-rose-400"
+                    className="p-1 rounded-lg hover:bg-rose-950/60 text-zinc-500 hover:text-rose-400 cursor-pointer"
                     title="删除监控"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -336,7 +347,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
               <button
                 type="button"
                 onClick={handleClearSearch}
-                className="px-2 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs"
+                className="px-2 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs cursor-pointer"
               >
                 清空
               </button>
@@ -347,11 +358,12 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
         {/* Path Breadcrumbs */}
         <div className="flex items-center gap-1.5 p-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs overflow-x-auto">
           <button
+            type="button"
             onClick={() => {
               setAlistPath('/');
               setAlistPage(1);
             }}
-            className={`px-2 py-0.5 rounded font-mono ${
+            className={`px-2 py-0.5 rounded font-mono cursor-pointer ${
               alistPath === '/' ? 'bg-emerald-950 text-emerald-400 font-bold' : 'text-zinc-400 hover:text-white'
             }`}
           >
@@ -364,11 +376,12 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
               <React.Fragment key={seg}>
                 <ChevronRight className="w-3.5 h-3.5 text-zinc-600 shrink-0" />
                 <button
+                  type="button"
                   onClick={() => {
                     setAlistPath(currentSubPath);
                     setAlistPage(1);
                   }}
-                  className={`px-2 py-0.5 rounded font-mono shrink-0 ${
+                  className={`px-2 py-0.5 rounded font-mono shrink-0 cursor-pointer ${
                     isLast
                       ? 'bg-emerald-950 text-emerald-400 font-bold'
                       : 'text-zinc-400 hover:text-white'
@@ -400,14 +413,14 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                     正在读取 AList 目录...
                   </td>
                 </tr>
-              ) : alistItems.length === 0 ? (
+              ) : alistList.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="py-12 text-center text-zinc-500">
                     当前目录下无文件或匹配结果
                   </td>
                 </tr>
               ) : (
-                alistItems.map((item) => (
+                alistList.map((item) => (
                   <tr
                     key={item.name}
                     className="hover:bg-zinc-900/50 transition group"
@@ -421,12 +434,13 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                         )}
                         {item.is_dir ? (
                           <button
+                            type="button"
                             onClick={() => {
                               const next = alistPath === '/' ? `/${item.name}` : `${alistPath}/${item.name}`;
                               setAlistPath(next);
                               setAlistPage(1);
                             }}
-                            className="text-left font-mono hover:text-emerald-400 transition truncate max-w-md"
+                            className="text-left font-mono hover:text-emerald-400 transition truncate max-w-md cursor-pointer"
                           >
                             {item.name}
                           </button>
@@ -445,8 +459,9 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                       <div className="flex items-center justify-end gap-1.5">
                         {item.is_dir && (
                           <button
+                            type="button"
                             onClick={() => handleImport(item, true)}
-                            className="px-2.5 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-300 text-[11px] font-medium flex items-center gap-1 transition"
+                            className="px-2.5 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-300 text-[11px] font-medium flex items-center gap-1 transition cursor-pointer"
                             title="自动将此目录下剧集生成 STRM 并保持追更"
                           >
                             <BookmarkPlus className="w-3 h-3" />
@@ -454,8 +469,9 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                           </button>
                         )}
                         <button
+                          type="button"
                           onClick={() => handleImport(item, false)}
-                          className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-medium flex items-center gap-1 transition"
+                          className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-medium flex items-center gap-1 transition cursor-pointer"
                           title="单次生成 STRM 入库"
                         >
                           <CheckCircle2 className="w-3 h-3 text-sky-400" />
@@ -479,16 +495,18 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
 
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={() => setAlistPage((p) => Math.max(1, p - 1))}
               disabled={alistPage <= 1 || alistLoading}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-40 transition"
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-40 transition cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" /> 上一页
             </button>
             <button
+              type="button"
               onClick={() => setAlistPage((p) => Math.min(totalPages, p + 1))}
               disabled={alistPage >= totalPages || alistLoading}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-40 transition"
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-40 transition cursor-pointer"
             >
               下一页 <ArrowRight className="w-3.5 h-3.5" />
             </button>
