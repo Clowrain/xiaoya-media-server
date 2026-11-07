@@ -84,7 +84,7 @@ go test ./...
 | `v0.4.0-m3` | M3：外挂字幕链路、过期 `sign` 直链恢复、本地流式播放与 `/Shows/NextUp` |
 | `v0.5.0-m5` | M4 & M5：小雅 SQLite 只读访问层、快照增量差异引擎与 `keep` 缺失保护 |
 | `v0.6.0-m6` | M6：Go 原生 STRM 与附件引擎及 `python3` 逐字节黄金对比验证 |
-| `v0.7.0-m7` | M7：一体化流水线闭环与《折月亮》真实样本 14 步端到端测试通过 |
+| `v0.7.0-m7` | M7：一体化流水线闭环与《折月亮》构造样本 14 步流程测试通过 |
 | `v1.0.0` | M8 & M9：AList 浏览搜索入库、周期调度、统一后台控制台与生产容器化交付 |
 
 ---
@@ -97,3 +97,4 @@ go test ./...
 - [《折月亮》14 步端到端测试报告](docs/ZHEYUELIANG-E2E-REPORT.md)
 - [生产部署与运维指南](docs/DEPLOYMENT.md)
 - [V1.0 验收清单与已知边界](docs/ACCEPTANCE-CHECKLIST.md)
+- [Xiaoya 播放链路修复方案与阿里 / 115 实机验证](docs/XIAOYA-PLAYBACK-FIX.md)

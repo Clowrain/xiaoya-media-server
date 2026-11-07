@@ -54,7 +54,7 @@ cd deployments
 cp .env.example .env
 ```
 
-编辑 `.env`，重点确认以下必填项：
+编辑 `.env`，确认以下关键配置：
 
 | 变量名 | 说明 | 示例 |
 |---|---|---|
@@ -63,6 +63,8 @@ cp .env.example .env
 | `XIAOYA_DB_DIR` | 宿主机上 `strm_internal.db` 所在**父目录** | `/vol1/1000/xiaoya/data` |
 | `ALIST_BASE_URL` | 客户端与服务端可访问的小雅地址 | `http://192.168.1.10:5678` |
 | `STRM_TARGET_BASE_URL` | 写入 `.strm` 文件的目标地址（默认保留 `http://xiaoya.host:5678`） | `http://192.168.1.10:5678` |
+| `XIAOYA_USERNAME` / `XIAOYA_PASSWORD` | AList 登录账号；小雅关闭游客 API 时用于资源查询及直链恢复，登录令牌自动续期 | 填写到本地 `.env` |
+| `ALIST_TOKEN` | 可替代账号密码的固定令牌；使用账号密码方式时留空 | 留空 |
 | `TMDB_API_KEY` | TMDB v3 API Key（无本地 NFO 时自动刮削） | `your_tmdb_v3_key` |
 | `MONITOR_ROOTS` | 初始精确监控根目录（可留空，多个用逗号分隔） | `/每日更新/电视剧/国产剧（115）,/每日更新/电视剧/国产剧` |
 
@@ -88,6 +90,8 @@ curl -fsS http://127.0.0.1:8096/api/system/health
 4. 按需从 AList 浏览或搜索，选择 **单次入库** 或 **整剧追更**。可指定导入的媒体库和其中一个输出目录。「已生成，未收录」表示已有 STRM，但其路径尚未加入媒体库。
 5. 在 **资源与任务** 查看资源状态、变更、扫描批次和定时任务。取消管理需先预览并确认；本地文件、媒体条目和观看记录会保留。
 6. 观看时，在 VidHub、SenPlayer 或 Infuse 中添加 Emby 服务器，使用同一服务地址和账号登录。网页用于浏览和管理，不提供播放。
+
+若小雅 `/d/` 跳转指向容器内部地址并形成循环，服务会通过已认证 AList `/api/fs/get` 重新解析直链。请确认 `.env` 中配置了可用的 AList 账号或令牌。直接出流地址还需要播放器可达。解析行为及实机结果见 [播放链路修复方案](XIAOYA-PLAYBACK-FIX.md)。
 
 ### 3.4 通过 API 提交后台任务
 

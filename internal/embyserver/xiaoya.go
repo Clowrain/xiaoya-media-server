@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +21,8 @@ var xiaoyaClient = &http.Client{
 		return http.ErrUseLastResponse
 	},
 }
+
+var errXiaoyaRedirectLoop = errors.New("resolver redirect loop detected")
 
 // Resolve the original STRM, never the viewer-facing authenticated playback URL.
 func xiaoyaSource(raw string) bool {
@@ -136,7 +139,12 @@ func tryXiaoyaDirectGet(r *http.Request, target *url.URL) (string, bool, error) 
 	ctx := r.Context()
 
 	const maxHops = 10
+	visited := make(map[string]bool, maxHops)
 	for hop := 0; hop < maxHops; hop++ {
+		if visited[currentURL] {
+			return "", false, errXiaoyaRedirectLoop
+		}
+		visited[currentURL] = true
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
 		if err != nil {
 			return "", false, err
@@ -174,9 +182,6 @@ func tryXiaoyaDirectGet(r *http.Request, target *url.URL) (string, bool, error) 
 
 			// If it's still an internal Xiaoya URL (e.g. /p/..., internal token refresh, or local proxy),
 			// continue following the next redirect hop.
-			if validated == currentURL {
-				return validated, false, nil
-			}
 			currentURL = validated
 
 		case http.StatusUnauthorized, http.StatusForbidden:
@@ -184,13 +189,10 @@ func tryXiaoyaDirectGet(r *http.Request, target *url.URL) (string, bool, error) 
 			return "", true, fmt.Errorf("resolver HTTP %d", res.StatusCode)
 
 		case http.StatusOK:
-			// If response is media stream directly (e.g. video/mp4 from AList proxy)
+			// 小雅直接出流时交由客户端访问；解析阶段关闭响应，不搬运视频数据。
 			ct := strings.ToLower(res.Header.Get("Content-Type"))
 			if strings.Contains(ct, "video/") || strings.Contains(ct, "audio/") {
 				res.Body.Close()
-				if hop == 0 {
-					return "", false, fmt.Errorf("resolver returned media body directly on initial URL")
-				}
 				return currentURL, false, nil
 			}
 
@@ -239,9 +241,6 @@ func tryXiaoyaDirectGet(r *http.Request, target *url.URL) (string, bool, error) 
 				if !isInternalXiaoya(parsedCand, target) {
 					return validated, false, nil
 				}
-				if validated == currentURL {
-					return validated, false, nil
-				}
 				currentURL = validated
 				continue
 			}
@@ -254,9 +253,6 @@ func tryXiaoyaDirectGet(r *http.Request, target *url.URL) (string, bool, error) 
 				}
 				parsedText, _ := url.Parse(validated)
 				if !isInternalXiaoya(parsedText, target) {
-					return validated, false, nil
-				}
-				if validated == currentURL {
 					return validated, false, nil
 				}
 				currentURL = validated
@@ -277,7 +273,7 @@ func tryXiaoyaDirectGet(r *http.Request, target *url.URL) (string, bool, error) 
 		}
 	}
 
-	return currentURL, false, nil
+	return "", false, fmt.Errorf("resolver redirect limit exceeded (%d requests)", maxHops)
 }
 
 func refreshAListSignOrLink(r *http.Request, baseEndpoint, alistPath, alistToken string, target *url.URL) (rawURL string, newSign string, err error) {
@@ -330,22 +326,20 @@ func refreshAListSignOrLink(r *http.Request, baseEndpoint, alistPath, alistToken
 }
 
 func validateAListFile(r *http.Request, target *url.URL, raw, sign string) (string, string, error) {
-	if raw != "" {
-		if validated, vErr := validateResolvedLink(raw, target); vErr == nil {
-			parsedURL, _ := url.Parse(validated)
-			if !isInternalXiaoya(parsedURL, target) {
-				return validated, sign, nil
-			}
-			// If RawURL points to an internal redirect, follow it to get final CDN link
-			if targetURL, tErr := url.Parse(validated); tErr == nil {
-				if finalLink, _, dErr := tryXiaoyaDirectGet(r, targetURL); dErr == nil && finalLink != "" {
-					return finalLink, sign, nil
-				}
-			}
-			return validated, sign, nil
-		}
+	if raw == "" {
+		return "", sign, nil
 	}
-	return "", sign, nil
+	validated, err := validateResolvedLink(raw, target)
+	if err != nil {
+		return "", sign, err
+	}
+	parsedURL, _ := url.Parse(validated)
+	if !isInternalXiaoya(parsedURL, target) {
+		return validated, sign, nil
+	}
+	// 内部地址必须解析成功；保留新签名供调用方在 raw_url 失败时重试。
+	finalLink, _, err := tryXiaoyaDirectGet(r, parsedURL)
+	return finalLink, sign, err
 }
 
 func xiaoyaLink(r *http.Request, raw, endpoint string) (string, error) {
@@ -397,12 +391,13 @@ func xiaoyaLinkWithRefresh(r *http.Request, raw, endpoint, alistToken string, ge
 	if err == nil {
 		return link, nil
 	}
-	if !signRejected {
+	// 容器内部地址改写后可能回到入口；使用同一小雅服务的已认证 AList 接口解析。
+	if !signRejected && !errors.Is(err, errXiaoyaRedirectLoop) {
 		return "", err
 	}
 
 	// Fallback 1: If the STRM carried an expired ?sign=..., retry clean /d/... without sign.
-	if hadRealSign {
+	if signRejected && hadRealSign {
 		cleanTarget := *target
 		cleanQuery := source.Query()
 		cleanQuery.Del("sign")
@@ -428,14 +423,19 @@ func xiaoyaLinkWithRefresh(r *http.Request, raw, endpoint, alistToken string, ge
 		if fErr == nil && rawURL != "" {
 			return rawURL, nil
 		}
-		if fErr == nil && newSign != "" && newSign != origSign {
+		if newSign != "" && newSign != origSign {
 			refreshedTarget := *target
 			refreshedQuery := source.Query()
 			refreshedQuery.Set("sign", newSign)
 			refreshedTarget.RawQuery = refreshedQuery.Encode()
 			if refreshedLink, _, rErr := tryXiaoyaDirectGet(r, &refreshedTarget); rErr == nil {
 				return refreshedLink, nil
+			} else {
+				return "", rErr
 			}
+		}
+		if fErr != nil {
+			return "", errors.Join(err, fErr)
 		}
 	}
 

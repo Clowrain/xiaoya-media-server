@@ -12,6 +12,7 @@
 - [x] 302 直链播放、本地 `file://` Range 流式播放、播放进度回传、继续观看（`Resume`）与真实下一集（`/Shows/NextUp`）：`internal/embyserver/direct_strm.go`、`internal/embyserver/subtitles.go`、`internal/embyserver/nextup.go`
 - [x] 外挂字幕自动发现（同目录及 `Subs/` 子目录 `.srt/.ass/.ssa/.vtt/.sub/.idx`）、`MediaStreams` 注入与 `.srt -> WebVTT` 动态转换：`internal/embyserver/subtitles.go`
 - [x] STRM 内含过期 `?sign=...` 签名时自动回退无签名 `/d/...` 并联动 AList `/api/fs/get` 刷新直链，且保留 SSRF 防护校验：`internal/embyserver/xiaoya.go`
+- [x] 首次音视频直接出流、循环检测、10 次请求上限、内部回环转 AList 解析，以及刷新失败不返回失效地址；阿里和 115 实机样本均取得 CDN 地址并通过两处 Range 读取：[修复方案与验证](XIAOYA-PLAYBACK-FIX.md)。
 - [x] 移除上游 `licensesdk` 联网授权校验与平台强耦合调用，跨平台纯 Go 编译：`internal/embyserver/rename_{linux,darwin,other}.go`
 
 ### 15.2 元数据与 NFO `prefer` 策略
@@ -55,7 +56,7 @@
 
 ## 2. `折月亮` 14 步端到端样本验收结果（对应方案第 14 章）
 
-详见专项报告 [ZHEYUELIANG-E2E-REPORT.md](ZHEYUELIANG-E2E-REPORT.md) 及自动化测试 [`TestZheYueLiang14StepEndToEnd`](../internal/embyserver/zheyueliang_e2e_test.go)：
+详见专项报告 [ZHEYUELIANG-E2E-REPORT.md](ZHEYUELIANG-E2E-REPORT.md) 及自动化测试 [`TestZheYueLiang14StepEndToEnd`](../internal/embyserver/zheyueliang_e2e_test.go)。该用例使用临时 SQLite 样本树及模拟 Xiaoya、TMDB、附件响应；真实网盘检查见 [播放链路修复记录](XIAOYA-PLAYBACK-FIX.md)：
 - 样本链路 `568922 -> 617762 -> 639780 -> 641716 (折月亮 (2026)) -> 641717 ({tmdb-270431}) -> 641718 (Season 1) -> 641719..641745 (E01..E27)` 全部 **14/14 步通过**，涵盖基线入库、幂等二次扫描、`E28` 增量追更、TMDB `270431` 刮削、本地 NFO `prefer` 覆盖、302 播放与 `NextUp` 推进、外挂字幕 WebVTT 转换、`E28 -> MISSING (keep)` 保护；恢复由资源生命周期用例单独覆盖。
 
 ---

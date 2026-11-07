@@ -52,7 +52,7 @@ func TestDirectSTRMCacheIsolation(t *testing.T) {
 		}
 	}
 }
-func TestDirectSTRMRejectsMediaBody(t *testing.T) {
+func TestDirectSTRMRedirectsMediaBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "video/mp4")
 		w.Write([]byte("video-body"))
@@ -61,7 +61,7 @@ func TestDirectSTRMRejectsMediaBody(t *testing.T) {
 	a := &App{}
 	w := httptest.NewRecorder()
 	a.resolveSTRM(w, httptest.NewRequest("GET", "/Videos/abc/stream", nil), Item{URL: "http://xiaoya.host:5678/movie"}, srv.URL)
-	if w.Code != 502 {
-		t.Fatalf("media body accepted: %d", w.Code)
+	if w.Code != 302 || w.Header().Get("Location") != srv.URL+"/movie" || w.Body.Len() != 0 {
+		t.Fatalf("媒体地址重定向失败: status=%d location=%q", w.Code, w.Header().Get("Location"))
 	}
 }
