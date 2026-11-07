@@ -210,6 +210,7 @@ func (a *App) enrichMedia(x Item, n sidecar, m M) {
 		m["RunTimeTicks"] = int64(duration * 1e7)
 	}
 	mergeCachedMedia(m, a.cachedMedia(x))
+	appendExternalSubtitles(x, m, "")
 }
 func (a *App) playURL(x Item, t string) string {
 	// The STRM filename usually preserves the original container; opaque URLs do not.
@@ -238,6 +239,7 @@ func (a *App) viewerSource(x Item, r *http.Request, u User) M {
 		m["RunTimeTicks"] = v
 	}
 	mergeCachedMedia(m, a.cachedMedia(x))
+	appendExternalSubtitles(x, m, token(r))
 	if !u.API {
 		p := a.playURL(x, token(r))
 		m["DirectStreamUrl"] = strings.TrimPrefix(p, "/emby")

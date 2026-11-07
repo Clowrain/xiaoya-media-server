@@ -42,7 +42,7 @@ func (a *App) resolveSTRM(w http.ResponseWriter, r *http.Request, x Item, endpoi
 		w.WriteHeader(http.StatusFound)
 		return
 	}
-	link, err := xiaoyaLink(r, x.URL, endpoint)
+	link, err := xiaoyaLinkWithToken(r, x.URL, endpoint, a.alistTokenForPlayback())
 	if err != nil {
 		fail(w, http.StatusBadGateway, "STRM 直链解析失败: "+err.Error())
 		return
