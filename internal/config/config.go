@@ -104,10 +104,7 @@ func Default() *Config {
 		Monitor: MonitorConfig{
 			Enabled:  true,
 			Interval: 10 * time.Minute,
-			Roots: []string{
-				"/每日更新/电视剧/国产剧（115）",
-				"/每日更新/电视剧/国产剧",
-			},
+			Roots:    []string{},
 		},
 		STRM: STRMConfig{
 			OutputRoot:              "/media/strm",

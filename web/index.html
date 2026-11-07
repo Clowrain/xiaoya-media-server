@@ -1017,10 +1017,10 @@
                 <small>扫描周期: ${r.interval_sec}s · 上次: ${r.last_scanned_at?new Date(r.last_scanned_at*1000).toLocaleString():'从未'}${r.last_error?` · 错误: ${esc(r.last_error)}`:''}</small>
               </div>
               <div class="bar" style="margin:0">
-                <button class="secondary" onclick="run(()=>triggerSync('${r.id}',false))()">增量</button>
-                <button class="secondary" onclick="run(()=>triggerSync('${r.id}',true))()">全量</button>
-                <button class="secondary" onclick="toggleMonitorRoot('${r.id}',${!r.enabled},${r.interval_sec})">${r.enabled?'停用':'启用'}</button>
-                <button class="danger" onclick="deleteMonitorRoot('${r.id}','${esc(r.root_path)}')">移除</button>
+                <button class="secondary" data-id="${esc(r.id)}" onclick="triggerSync(this.dataset.id,false)">增量</button>
+                <button class="secondary" data-id="${esc(r.id)}" onclick="triggerSync(this.dataset.id,true)">全量</button>
+                <button class="secondary" data-id="${esc(r.id)}" data-enabled="${!r.enabled}" data-interval="${r.interval_sec}" onclick="toggleMonitorRoot(this.dataset.id,this.dataset.enabled==='true',Number(this.dataset.interval))">${r.enabled?'停用':'启用'}</button>
+                <button class="danger" data-id="${esc(r.id)}" data-path="${esc(r.root_path)}" onclick="deleteMonitorRoot(this.dataset.id,this.dataset.path)">移除</button>
               </div>
             </div>`).join('')||'<div class="muted" style="padding:28px;text-align:center">暂无监控目录，请点击上方添加（如 /每日更新/电视剧/国产剧）</div>'}
         </div>
@@ -1060,13 +1060,13 @@
             <div class="item-row">
               <span style="font-size:20px">${it.is_dir?'📁':'🎬'}</span>
               <div class="item-info">
-                ${it.is_dir?`<button style="background:none;border:0;padding:0;color:inherit;font-weight:700;cursor:pointer" onclick="enterAListDir('${esc(full)}')">${esc(it.name)}</button>`:`<strong>${esc(it.name)}</strong>`}
+                ${it.is_dir?`<button style="background:none;border:0;padding:0;color:inherit;font-weight:700;cursor:pointer" data-path="${esc(full)}" onclick="enterAListDir(this.dataset.path)">${esc(it.name)}</button>`:`<strong>${esc(it.name)}</strong>`}
                 <small>${esc(full)} ${it.size?`· ${(it.size/1048576).toFixed(1)} MB`:''}</small>
               </div>
               <div class="bar" style="margin:0">
                 ${it.is_dir
-                  ?`<button onclick="run(()=>importAList('${esc(full)}',true,true))()">整剧追更入库</button><button class="secondary" onclick="run(()=>importAList('${esc(full)}',true,false))()">单次入库</button>`
-                  :`<button onclick="run(()=>importAList('${esc(full)}',false,false))()">入库</button>`}
+                  ?`<button data-path="${esc(full)}" onclick="doImportAList(this,this.dataset.path,true,true)">整剧追更入库</button><button class="secondary" data-path="${esc(full)}" onclick="doImportAList(this,this.dataset.path,true,false)">单次入库</button>`
+                  :`<button data-path="${esc(full)}" onclick="doImportAList(this,this.dataset.path,false,false)">入库</button>`}
               </div>
             </div>`;
         }).join('');
@@ -1078,11 +1078,25 @@
       alistPath=alistPath.slice(0,alistPath.lastIndexOf('/'))||'/';
       alistSearch='';$('#alist-kw').value='';loadAListItems();
     }
-    async function importAList(path,isDir,track){
-      toast(`正在入库 ${path}…`);
-      const s=await api('/api/resources/import','POST',{path,is_dir:isDir,track_updates:track});
-      toast(`入库完成：已生成 ${s.imported_files} 个媒体 STRM${s.tracking_enabled?'（已开启追更）':''}`);
+    async function doImportAList(btn,path,isDir,track){
+      if(!path)return;
+      const oldText=btn?btn.textContent:'入库';
+      if(btn){btn.disabled=true;btn.textContent='入库中…'}
+      toast(`正在入库：${path}（媒体较多时可能需数秒）…`);
+      try{
+        const s=await api('/api/resources/import','POST',{path,is_dir:isDir,track_updates:track});
+        const cnt=s.imported_files??(s.ImportedFiles??0);
+        if(btn){btn.disabled=false;btn.textContent='已入库';btn.style.borderColor='var(--success)'}
+        toast(`🎉 入库完成：已生成 ${cnt} 个媒体 STRM${s.tracking_enabled?'（已开启追更）':''}`);
+        if(track){
+          setTimeout(renderTabXiaoyaSync,800);
+        }
+      }catch(e){
+        if(btn){btn.disabled=false;btn.textContent=oldText}
+        toast('入库失败：'+e.message);
+      }
     }
+    const importAList=(p,d,t)=>doImportAList(null,p,d,t);
     function dialogAddMonitorRoot(){
       const d=$('#modal');d.className='';
       d.innerHTML=`

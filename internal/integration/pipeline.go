@@ -60,6 +60,9 @@ func NewPipeline(ctx context.Context, cfg *config.Config, app *embyserver.App, s
 	_ = p.EnsureSQLiteReader(ctx)
 	p.discovery = discovery.NewService(store, p.reader, p.strmEng)
 
+	// Clean up legacy erroneous default roots if user has not customized them
+	_, _ = store.DB().ExecContext(ctx, "DELETE FROM monitor_roots WHERE root_path IN ('/每日更新/电视剧/国产剧（115）', '/每日更新/电视剧/国产剧') AND (last_error LIKE '%not found%' OR last_error LIKE '%no such table%')")
+
 	if cfg.Monitor.Enabled && len(cfg.Monitor.Roots) > 0 {
 		if _, err := p.discovery.RegisterMonitorRoots(ctx, cfg.Monitor.Roots, cfg.Monitor.Interval); err != nil {
 			log.Printf("register initial monitor roots warning: %v", err)

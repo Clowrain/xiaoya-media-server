@@ -160,17 +160,21 @@ func (e *Engine) downloadAttachmentBytes(ctx context.Context, sourcePath, source
 			case <-time.After(e.cfg.RetryDelay):
 			}
 		}
-		req, rErr := http.NewRequestWithContext(ctx, http.MethodGet, dlURL, nil)
+		reqCtx, reqCancel := context.WithTimeout(ctx, 4*time.Second)
+		req, rErr := http.NewRequestWithContext(reqCtx, http.MethodGet, dlURL, nil)
 		if rErr != nil {
+			reqCancel()
 			return dlURL, nil, rErr
 		}
 		resp, doErr := e.client.Do(req)
 		if doErr != nil {
+			reqCancel()
 			lastErr = doErr
 			continue
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 		resp.Body.Close()
+		reqCancel()
 		if readErr != nil {
 			lastErr = readErr
 			continue

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -233,11 +234,14 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			writeErr(w, http.StatusBadRequest, "入库路径 path 不能为空")
 			return true
 		}
+		embyserver.RecordGlobalLog("INFO", "scan", "开始 AList 入库", fmt.Sprintf("请求路径: %s · 追更模式: %v", req.Path, req.TrackUpdates), "", "")
 		sum, err := h.importer.Import(ctx, req)
 		if err != nil {
+			embyserver.RecordGlobalLog("ERROR", "scan", "AList 入库失败", fmt.Sprintf("路径: %s · 错误: %v", req.Path, err), "", err.Error())
 			writeErr(w, http.StatusBadGateway, err.Error())
 			return true
 		}
+		embyserver.RecordGlobalLog("INFO", "scan", "AList 入库完成", fmt.Sprintf("路径: %s · 成功生成 STRM: %d 个 · 目录: %d 个 · 失败: %d 个", sum.SourcePath, sum.ImportedFiles, sum.ImportedDirs, sum.FailedFiles), "", "")
 		writeJSON(w, http.StatusOK, sum)
 		return true
 
