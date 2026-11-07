@@ -103,51 +103,177 @@ func validateResolvedLink(link string, target *url.URL) (string, error) {
 	return u.String(), nil
 }
 
-func tryXiaoyaDirectGet(r *http.Request, target *url.URL) (string, bool, error) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target.String(), nil)
-	if err != nil {
-		return "", false, err
+func isInternalXiaoya(u *url.URL, target *url.URL) bool {
+	if u == nil {
+		return false
 	}
-	req.Header.Set("User-Agent", r.UserAgent())
-	req.Header.Set("X-Alist-OriUA", r.UserAgent())
-	res, err := xiaoyaClient.Do(req)
-	if err != nil {
-		return "", false, fmt.Errorf("resolver request failed")
+	h := strings.ToLower(u.Hostname())
+	if h == "localhost" || h == "xiaoya.host" || h == "xiaoya" {
+		return true
 	}
-	defer res.Body.Close()
+	ip := net.ParseIP(h)
+	if ip != nil {
+		if ip.IsLoopback() {
+			return true
+		}
+		// Docker default bridge (172.16.0.0/12)
+		if v4 := ip.To4(); v4 != nil && v4[0] == 172 && (v4[1] >= 16 && v4[1] <= 31) {
+			return true
+		}
+	}
+	if target != nil && target.Hostname() != "" {
+		if strings.EqualFold(h, target.Hostname()) {
+			return true
+		}
+	}
+	return false
+}
 
-	link := ""
-	switch res.StatusCode {
-	case 301, 302, 303, 307, 308:
-		link = res.Header.Get("Location")
-	case 401, 403:
-		return "", true, fmt.Errorf("resolver HTTP %d", res.StatusCode)
-	case 200:
-		b, rErr := io.ReadAll(io.LimitReader(res.Body, 65537))
-		if rErr != nil || len(b) > 65536 {
-			return "", false, fmt.Errorf("invalid resolver response")
+func tryXiaoyaDirectGet(r *http.Request, target *url.URL) (string, bool, error) {
+	currentURL := target.String()
+	userAgent := r.UserAgent()
+	ctx := r.Context()
+
+	const maxHops = 10
+	for hop := 0; hop < maxHops; hop++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
+		if err != nil {
+			return "", false, err
 		}
-		link = strings.TrimSpace(string(b))
-		if strings.HasPrefix(link, "{") {
-			var v struct {
-				URL     string `json:"url"`
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-			}
-			if json.Unmarshal(b, &v) != nil {
-				return "", false, fmt.Errorf("invalid resolver JSON")
-			}
-			msgLower := strings.ToLower(v.Message)
-			if v.URL == "" && (v.Code == 401 || v.Code == 403 || strings.Contains(msgLower, "sign") || strings.Contains(msgLower, "expired")) {
-				return "", true, fmt.Errorf("resolver sign rejected: %s", v.Message)
-			}
-			link = v.URL
+		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("X-Alist-OriUA", userAgent)
+		res, err := xiaoyaClient.Do(req)
+		if err != nil {
+			return "", false, fmt.Errorf("resolver request failed: %w", err)
 		}
-	default:
-		return "", false, fmt.Errorf("resolver HTTP %d", res.StatusCode)
+
+		switch res.StatusCode {
+		case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+			loc := strings.TrimSpace(res.Header.Get("Location"))
+			res.Body.Close()
+			if loc == "" {
+				return "", false, fmt.Errorf("resolver returned redirect without Location")
+			}
+
+			// Validate and resolve relative/internal URLs
+			validated, vErr := validateResolvedLink(loc, target)
+			if vErr != nil {
+				return "", false, vErr
+			}
+
+			parsedLoc, pErr := url.Parse(validated)
+			if pErr != nil {
+				return "", false, fmt.Errorf("invalid redirected link: %w", pErr)
+			}
+
+			// If parsedLoc is an external CDN or playable link (not internal Xiaoya), we found the final direct link!
+			if !isInternalXiaoya(parsedLoc, target) {
+				return validated, false, nil
+			}
+
+			// If it's still an internal Xiaoya URL (e.g. /p/..., internal token refresh, or local proxy),
+			// continue following the next redirect hop.
+			if validated == currentURL {
+				return validated, false, nil
+			}
+			currentURL = validated
+
+		case http.StatusUnauthorized, http.StatusForbidden:
+			res.Body.Close()
+			return "", true, fmt.Errorf("resolver HTTP %d", res.StatusCode)
+
+		case http.StatusOK:
+			// If response is media stream directly (e.g. video/mp4 from AList proxy)
+			ct := strings.ToLower(res.Header.Get("Content-Type"))
+			if strings.Contains(ct, "video/") || strings.Contains(ct, "audio/") {
+				res.Body.Close()
+				return currentURL, false, nil
+			}
+
+			b, rErr := io.ReadAll(io.LimitReader(res.Body, 65537))
+			res.Body.Close()
+			if rErr != nil || len(b) > 65536 {
+				return "", false, fmt.Errorf("invalid resolver response")
+			}
+			bodyStr := strings.TrimSpace(string(b))
+
+			// Handle JSON response
+			if strings.HasPrefix(bodyStr, "{") {
+				var v struct {
+					URL     string `json:"url"`
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+					Data    struct {
+						RawURL string `json:"raw_url"`
+						URL    string `json:"url"`
+					} `json:"data"`
+				}
+				if json.Unmarshal(b, &v) != nil {
+					return "", false, fmt.Errorf("invalid resolver JSON")
+				}
+				candURL := v.URL
+				if candURL == "" {
+					candURL = v.Data.RawURL
+				}
+				if candURL == "" {
+					candURL = v.Data.URL
+				}
+
+				msgLower := strings.ToLower(v.Message)
+				if candURL == "" && (v.Code == 401 || v.Code == 403 || strings.Contains(msgLower, "sign") || strings.Contains(msgLower, "expired")) {
+					return "", true, fmt.Errorf("resolver sign rejected: %s", v.Message)
+				}
+				if candURL == "" {
+					return "", false, fmt.Errorf("resolver JSON missing url: %s", v.Message)
+				}
+
+				validated, vErr := validateResolvedLink(candURL, target)
+				if vErr != nil {
+					return "", false, vErr
+				}
+				parsedCand, _ := url.Parse(validated)
+				if !isInternalXiaoya(parsedCand, target) {
+					return validated, false, nil
+				}
+				if validated == currentURL {
+					return validated, false, nil
+				}
+				currentURL = validated
+				continue
+			}
+
+			// Handle plain text URL
+			if strings.HasPrefix(bodyStr, "http://") || strings.HasPrefix(bodyStr, "https://") {
+				validated, vErr := validateResolvedLink(bodyStr, target)
+				if vErr != nil {
+					return "", false, vErr
+				}
+				parsedText, _ := url.Parse(validated)
+				if !isInternalXiaoya(parsedText, target) {
+					return validated, false, nil
+				}
+				if validated == currentURL {
+					return validated, false, nil
+				}
+				currentURL = validated
+				continue
+			}
+
+			// Handle HTML error responses
+			if strings.HasPrefix(strings.ToLower(bodyStr), "<html") || strings.HasPrefix(strings.ToLower(bodyStr), "<!doctype") || strings.Contains(ct, "text/html") {
+				return "", false, fmt.Errorf("resolver returned HTML error page")
+			}
+
+			// Other 200 OK content
+			return currentURL, false, nil
+
+		default:
+			res.Body.Close()
+			return "", false, fmt.Errorf("resolver HTTP %d", res.StatusCode)
+		}
 	}
-	validated, vErr := validateResolvedLink(link, target)
-	return validated, false, vErr
+
+	return currentURL, false, nil
 }
 
 func refreshAListSignOrLink(r *http.Request, baseEndpoint, alistPath, alistToken string, target *url.URL) (rawURL string, newSign string, err error) {
@@ -198,6 +324,16 @@ func refreshAListSignOrLink(r *http.Request, baseEndpoint, alistPath, alistToken
 	}
 	if resp.Data.RawURL != "" {
 		if validated, vErr := validateResolvedLink(resp.Data.RawURL, target); vErr == nil {
+			parsedURL, _ := url.Parse(validated)
+			if !isInternalXiaoya(parsedURL, target) {
+				return validated, resp.Data.Sign, nil
+			}
+			// If RawURL points to an internal redirect, follow it to get final CDN link
+			if targetURL, tErr := url.Parse(validated); tErr == nil {
+				if finalLink, _, dErr := tryXiaoyaDirectGet(r, targetURL); dErr == nil && finalLink != "" {
+					return finalLink, resp.Data.Sign, nil
+				}
+			}
 			return validated, resp.Data.Sign, nil
 		}
 	}

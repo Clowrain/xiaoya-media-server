@@ -213,8 +213,6 @@ func (c *Config) applyEnv() {
 	}
 	if v := strings.TrimSpace(os.Getenv("STRM_TARGET_BASE_URL")); v != "" {
 		c.STRM.TargetBaseURL = v
-	} else if c.AList.BaseURL != "" && (c.STRM.TargetBaseURL == "" || c.STRM.TargetBaseURL == "http://xiaoya.host:5678") {
-		c.STRM.TargetBaseURL = c.AList.BaseURL
 	}
 	if v := strings.TrimSpace(os.Getenv("XIAOYA_USERNAME")); v != "" {
 		c.AList.Username = v

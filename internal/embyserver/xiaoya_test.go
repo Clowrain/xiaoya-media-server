@@ -137,9 +137,6 @@ func TestXiaoyaResolver(t *testing.T) {
 		{"redirect", "", "https://cdn.example/video?sig=abc", 302, true},
 		{"text", "https://cdn.example/video", "", 200, true},
 		{"json", `{"url":"https://cdn.example/video"}`, "", 200, true},
-		{"lan_redirect", "", "http://192.168.110.172:5678/p/stream.mp4", 302, true},
-		{"relative", "", "/p/stream.mp4", 302, true},
-		{"docker_bridge_redirect", "", "http://172.17.0.2:80/stream.mp4", 302, true},
 		{"metadata_ssrf", "", "http://169.254.169.254/meta-data", 302, false},
 		{"error", `{"code":500,"message":"error"}`, "", 200, false},
 		{"html", "<html>failure</html>", "", 200, false},
@@ -171,4 +168,126 @@ func TestXiaoyaResolver(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestXiaoyaMultiHopRedirect(t *testing.T) {
+	origTransport := xiaoyaClient.Transport
+	defer func() {
+		xiaoyaClient.Transport = origTransport
+	}()
+
+	t.Run("multi-hop 302 resolves to public CDN", func(t *testing.T) {
+		step := 0
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			step++
+			if step == 1 {
+				// Hop 1: Xiaoya internal redirect to /p/
+				if r.URL.Path != "/d/test.mp4" {
+					t.Errorf("step 1 unexpected path: %s", r.URL.Path)
+				}
+				w.Header().Set("Location", "http://192.168.110.172:5678/p/intermediate.mp4")
+				w.WriteHeader(http.StatusFound)
+				return
+			}
+			if step == 2 {
+				// Hop 2: /p/ redirects to final Alibaba Cloud CDN
+				if r.URL.Path != "/p/intermediate.mp4" {
+					t.Errorf("step 2 unexpected path: %s", r.URL.Path)
+				}
+				w.Header().Set("Location", "https://cn-hangzhou-data.alicloudccp.com/real_video.mp4?token=xyz")
+				w.WriteHeader(http.StatusFound)
+				return
+			}
+			t.Errorf("unexpected step %d", step)
+		})
+		xiaoyaClient.Transport = &localRoundTripper{handler: handler}
+
+		r := httptest.NewRequest("GET", "http://emby/Videos/123/stream.mp4", nil)
+		r.Header.Set("User-Agent", "SenPlayer/6.1.8")
+		got, err := xiaoyaLink(r, "http://xiaoya.host:5678/d/test.mp4", "http://192.168.110.172:5678")
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		want := "https://cn-hangzhou-data.alicloudccp.com/real_video.mp4?token=xyz"
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+		if step != 2 {
+			t.Fatalf("expected 2 hops, got %d", step)
+		}
+	})
+
+	t.Run("docker bridge intermediate rewritten and followed", func(t *testing.T) {
+		step := 0
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			step++
+			if step == 1 {
+				// Hop 1: returns docker bridge 172.17.0.2:80
+				w.Header().Set("Location", "http://172.17.0.2:80/p/movie.mp4")
+				w.WriteHeader(http.StatusFound)
+				return
+			}
+			if step == 2 {
+				// Hop 2: rewrote to target 192.168.110.172:5678 and redirected to 115 CDN
+				if r.URL.Path != "/p/movie.mp4" {
+					t.Errorf("step 2 unexpected path: %s", r.URL.Path)
+				}
+				w.Header().Set("Location", "https://cdn.115.com/final_115.mp4")
+				w.WriteHeader(http.StatusFound)
+				return
+			}
+			t.Errorf("unexpected step %d", step)
+		})
+		xiaoyaClient.Transport = &localRoundTripper{handler: handler}
+
+		r := httptest.NewRequest("GET", "http://emby/Videos/123/stream.mp4", nil)
+		r.Header.Set("User-Agent", "SenPlayer/6.1.8")
+		got, err := xiaoyaLink(r, "http://xiaoya.host:5678/d/movie.mp4", "http://192.168.110.172:5678")
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		want := "https://cdn.115.com/final_115.mp4"
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+		if step != 2 {
+			t.Fatalf("expected 2 hops, got %d", step)
+		}
+	})
+
+	t.Run("local streaming 200 media terminates and returns local URL", func(t *testing.T) {
+		step := 0
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			step++
+			if step == 1 {
+				// Hop 1: redirects to /p/local.mp4
+				w.Header().Set("Location", "/p/local.mp4")
+				w.WriteHeader(http.StatusFound)
+				return
+			}
+			if step == 2 {
+				// Hop 2: /p/local.mp4 serves video/mp4 stream directly
+				w.Header().Set("Content-Type", "video/mp4")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("fake video payload"))
+				return
+			}
+			t.Errorf("unexpected step %d", step)
+		})
+		xiaoyaClient.Transport = &localRoundTripper{handler: handler}
+
+		r := httptest.NewRequest("GET", "http://emby/Videos/123/stream.mp4", nil)
+		r.Header.Set("User-Agent", "SenPlayer/6.1.8")
+		got, err := xiaoyaLink(r, "http://xiaoya.host:5678/d/local.mp4", "http://192.168.110.172:5678")
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		want := "http://192.168.110.172:5678/p/local.mp4"
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+		if step != 2 {
+			t.Fatalf("expected 2 hops, got %d", step)
+		}
+	})
 }
