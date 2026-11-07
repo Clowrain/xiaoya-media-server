@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"golang.org/x/crypto/bcrypt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -727,40 +728,52 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u User, p string) {
 	case "/admin/library-folders":
 		a.libraryFolders(w, r)
 	case "/admin/libraries":
-		if r.Method == "GET" {
+		if r.Method == http.MethodGet {
 			respond(w, a.libraries())
 			return
 		}
-		var b struct {
-			ID, Name, Path, Kind string
-			Paths                []string
-		}
-		if !body(w, r, &b) {
-			return
-		}
-		if r.Method == "DELETE" {
-			if !a.scan.TryLock() {
-				fail(w, 409, "扫描中，请完成后再删除")
+		if r.Method == http.MethodDelete {
+			targetID := strings.TrimSpace(r.URL.Query().Get("id"))
+			if targetID == "" {
+				targetID = strings.TrimSpace(r.URL.Query().Get("ID"))
+			}
+			if targetID == "" {
+				var b struct {
+					ID string `json:"ID"`
+				}
+				_ = json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&b)
+				targetID = strings.TrimSpace(b.ID)
+			}
+			if targetID == "" {
+				fail(w, 400, "缺少媒体库 ID 参数")
 				return
 			}
-			defer a.scan.Unlock()
-			_, e := a.db.Exec("DELETE FROM libraries WHERE id=?", b.ID)
-			if e != nil {
-				fail(w, 500, "删除失败")
-				return
-			}
-			if e := a.cleanupMedia(); e != nil {
-				fail(w, 500, "索引已删除，媒体信息清理失败")
-				return
-			}
-			respond(w, M{"ok": true})
+			a.deleteLibrary(w, targetID)
 			return
 		}
-		if r.Method != "POST" {
-			fail(w, 405, "method")
+		if r.Method == http.MethodPut {
+			var b struct {
+				ID, Name, Kind string
+				Paths          []string
+			}
+			if !body(w, r, &b) {
+				return
+			}
+			a.updateLibrary(w, b.ID, b.Name, b.Kind, b.Paths)
 			return
 		}
-		a.createLibrary(w, b.Name, b.Kind, b.Path, b.Paths)
+		if r.Method == http.MethodPost {
+			var b struct {
+				Name, Path, Kind string
+				Paths            []string
+			}
+			if !body(w, r, &b) {
+				return
+			}
+			a.createLibrary(w, b.Name, b.Kind, b.Path, b.Paths)
+			return
+		}
+		fail(w, 405, "Method not allowed")
 
 	case "/admin/scan-control":
 		a.scanControlAPI(w, r)

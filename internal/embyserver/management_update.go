@@ -73,6 +73,127 @@ func (a *App) createLibrary(w http.ResponseWriter, name, kind, path string, path
 	respond(w, M{"Id": key, "queued": true, "Message": "已加入队列，请在实时日志中查看"})
 }
 
+func (a *App) deleteLibrary(w http.ResponseWriter, libID string) {
+	a.libraryConfig.Lock()
+	defer a.libraryConfig.Unlock()
+
+	libID = strings.TrimSpace(libID)
+	if libID == "" {
+		fail(w, 400, "缺少媒体库 ID 参数")
+		return
+	}
+
+	var exists int
+	if err := a.db.QueryRow("SELECT count(*) FROM libraries WHERE id=?", libID).Scan(&exists); err != nil || exists == 0 {
+		fail(w, 404, "媒体库不存在或已被删除")
+		return
+	}
+
+	tx, err := a.db.Begin()
+	if err != nil {
+		fail(w, 500, "启动数据库事务失败: "+err.Error())
+		return
+	}
+	defer tx.Rollback()
+
+	// 彻底级联清理从属表，杜绝孤儿数据
+	_, _ = tx.Exec("DELETE FROM library_order WHERE library_id=?", libID)
+	_, _ = tx.Exec("DELETE FROM scan_snapshots WHERE lib=?", libID)
+	_, _ = tx.Exec("DELETE FROM settings WHERE k=?", "library-paths:"+libID)
+	_, _ = tx.Exec("DELETE FROM items WHERE lib=?", libID)
+	res, err := tx.Exec("DELETE FROM libraries WHERE id=?", libID)
+	if err != nil {
+		fail(w, 500, "删除媒体库失败: "+err.Error())
+		return
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		fail(w, 404, "媒体库不存在或已被删除")
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		fail(w, 500, "提交删除事务失败: "+err.Error())
+		return
+	}
+
+	// 异步清理关联孤儿元数据，不阻塞当前响应
+	go func() {
+		_ = a.cleanupMedia()
+	}()
+
+	respond(w, M{"ok": true, "message": "媒体库已成功删除"})
+}
+
+func (a *App) updateLibrary(w http.ResponseWriter, libID, name, kind string, paths []string) {
+	a.libraryConfig.Lock()
+	defer a.libraryConfig.Unlock()
+
+	libID = strings.TrimSpace(libID)
+	if libID == "" {
+		fail(w, 400, "媒体库 ID 不能为空")
+		return
+	}
+
+	var curName, curKind, curPath string
+	if err := a.db.QueryRow("SELECT name, kind, path FROM libraries WHERE id=?", libID).Scan(&curName, &curKind, &curPath); err != nil {
+		fail(w, 404, "媒体库不存在")
+		return
+	}
+
+	newName := strings.TrimSpace(name)
+	if newName == "" {
+		newName = curName
+	}
+	newKind := strings.TrimSpace(kind)
+	if newKind == "" {
+		newKind = curKind
+	}
+	if newKind != "tvshows" && newKind != "movies" {
+		newKind = "movies"
+	}
+
+	tx, err := a.db.Begin()
+	if err != nil {
+		fail(w, 500, "启动数据库事务失败: "+err.Error())
+		return
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("UPDATE libraries SET name=?, kind=? WHERE id=?", newName, newKind, libID); err != nil {
+		fail(w, 500, "更新媒体库失败: "+err.Error())
+		return
+	}
+
+	if len(paths) > 0 {
+		validated := []string{}
+		for _, p := range paths {
+			real, e := filepath.EvalSymlinks(mediaPath(p))
+			if e != nil || !allowedMediaPath(real) {
+				fail(w, 400, "请选择已挂载媒体目录下的现有目录: "+p)
+				return
+			}
+			fi, e := os.Stat(real)
+			if e != nil || !fi.IsDir() {
+				fail(w, 400, "无效目录: "+p)
+				return
+			}
+			validated = append(validated, real)
+		}
+		raw, _ := json.Marshal(validated)
+		if _, err := tx.Exec("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", "library-paths:"+libID, string(raw)); err != nil {
+			fail(w, 500, "更新媒体库目录失败: "+err.Error())
+			return
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		fail(w, 500, "提交更新事务失败: "+err.Error())
+		return
+	}
+
+	respond(w, M{"ok": true, "message": "媒体库已成功更新"})
+}
+
 type scanSchedule struct {
 	Enabled   bool
 	Frequency string

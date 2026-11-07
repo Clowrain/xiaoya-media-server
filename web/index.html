@@ -771,12 +771,13 @@
         <div class="bar" style="margin-bottom:20px;justify-content:space-between">
           <div>
             <h2>媒体库管理</h2>
-            <p class="muted" style="margin:0">配置 Emby 逻辑分类、挂载本地 STRM 目录与扫描更新。</p>
+            <p class="muted" style="margin:0">配置 Emby 逻辑分类、挂载本地 STRM 目录、排序与扫描更新。</p>
           </div>
           <div class="bar">
             <button onclick="dialogNewLibrary()">＋ 新建媒体库</button>
             <button class="secondary" onclick="run(scanAllLibs)()">全量更新全部</button>
             <button class="secondary" onclick="dialogSchedule()">定时扫描</button>
+            ${adminLibs.length?`<button class="danger" style="background:transparent;border:1px solid rgba(239,68,68,.3)" onclick="run(resetAllLibraries)()">清空全部</button>`:''}
             <div class="scan-circle" id="admin-scan-ring" title="扫描进度"><span>0%</span></div>
           </div>
         </div>
@@ -785,16 +786,17 @@
             <div class="item-row" data-id="${esc(lib.Id)}">
               <span class="badge ${lib.Status==='idle'?'ok':lib.Status==='error'?'err':'warn'}">●</span>
               <div class="item-info">
-                <strong>${esc(lib.Name)} · <span class="muted" style="font-size:13px">${lib.Count} 部/集</span></strong>
+                <strong>${esc(lib.Name)} · <span class="muted" style="font-size:13px">${lib.CollectionType==='tvshows'?'电视剧':'电影'} · ${lib.Count} 部/集</span></strong>
                 <small>${(lib.Locations||[lib.Path]).join('、')||'未绑定目录'}</small>
               </div>
               <div class="bar" style="margin:0">
+                <button class="secondary" title="编辑名称" onclick="dialogEditLibrary('${lib.Id}')">编辑</button>
                 <button class="secondary" title="增量刷新" onclick="run(()=>scanLib('${lib.Id}','update'))()">刷新</button>
                 <button class="secondary" title="全量扫描" onclick="run(()=>scanLib('${lib.Id}','scan'))()">全量</button>
                 <button class="secondary" title="管理目录" onclick="dialogManageFolders('${lib.Id}')">目录</button>
                 <button class="secondary" title="上移" ${idx===0?'disabled':''} onclick="moveLibOrder(${idx},-1)">↑</button>
                 <button class="secondary" title="下移" ${idx===adminLibs.length-1?'disabled':''} onclick="moveLibOrder(${idx},1)">↓</button>
-                <button class="danger" title="删除" onclick="deleteLib('${lib.Id}')">✕</button>
+                <button class="danger" title="删除" onclick="run(()=>deleteLib('${lib.Id}','${esc(lib.Name)}'))()">✕</button>
               </div>
             </div>`).join('')||'<div class="muted" style="text-align:center;padding:40px">暂无媒体库，点击上方新建</div>'}
         </div>`;
@@ -808,7 +810,49 @@
       await api('/admin/order','PUT',{IDs:adminLibs.map(x=>x.Id)});
       renderTabLibraries();toast('排序已保存');
     }
-    async function deleteLib(id){if(confirm('确定删除此媒体库及其索引？磁盘源文件将保留。')){await api('/admin/libraries','DELETE',{ID:id});renderTabLibraries();toast('已删除')}}
+    async function deleteLib(id,name){
+      if(!confirm(`确定彻底删除媒体库“${name||id}”？\n此操作将清空该媒体库的所有影视索引（磁盘上的源视频和 STRM 文件会安全保留）。`))return;
+      toast('正在删除媒体库…');
+      await api('/admin/libraries?id='+encodeURIComponent(id),'DELETE',{ID:id});
+      toast('媒体库已成功删除');
+      await renderTabLibraries();
+    }
+    async function resetAllLibraries(){
+      if(!adminLibs.length){toast('当前没有媒体库');return}
+      if(!confirm(`⚠️ 危险操作：确认清空并删除全部 ${adminLibs.length} 个媒体库？\n所有库的影视索引将被彻底删除，源视频与 STRM 磁盘文件安全保留。您随后可以完全重新开始配置。`))return;
+      toast('正在清空媒体库…');
+      for(const lib of adminLibs){
+        await api('/admin/libraries?id='+encodeURIComponent(lib.Id),'DELETE',{ID:lib.Id});
+      }
+      toast('全部媒体库已清空，可重新开始配置');
+      await renderTabLibraries();
+    }
+
+    function dialogEditLibrary(id){
+      const lib=adminLibs.find(x=>x.Id===id);if(!lib)return;
+      const d=$('#modal');d.className='';
+      d.innerHTML=`
+        <h2>编辑媒体库</h2>
+        <form id="f-editlib" class="form-grid single" style="margin-top:14px">
+          <label>媒体类型
+            <select name="kind">
+              <option value="movies" ${lib.CollectionType==='movies'?'selected':''}>电影 (Movies)</option>
+              <option value="tvshows" ${lib.CollectionType==='tvshows'?'selected':''}>电视剧 (TV Shows)</option>
+            </select>
+          </label>
+          <label>媒体库名称<input name="name" required value="${esc(lib.Name)}"></label>
+          <div class="bar" style="justify-content:flex-end;margin-top:10px">
+            <button type="button" class="secondary" onclick="closeModal()">取消</button>
+            <button type="submit">保存更改</button>
+          </div>
+        </form>`;
+      d.showModal();
+      $('#f-editlib').onsubmit=run(async e=>{
+        e.preventDefault();const f=new FormData(e.target);
+        await api('/admin/libraries','PUT',{ID:id,Name:f.get('name').trim(),Kind:f.get('kind')});
+        closeModal();toast('媒体库已更新');renderTabLibraries();
+      });
+    }
 
     function dialogNewLibrary(){
       const d=$('#modal');d.className='';
