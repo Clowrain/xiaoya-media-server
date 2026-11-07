@@ -47,7 +47,7 @@ services:
       XIAOYA_SQLITE_PATH: /xiaoya-db/${XIAOYA_SQLITE_FILENAME:-strm_internal.db}
       MONITOR_ENABLED: ${MONITOR_ENABLED:-true}
       MONITOR_INTERVAL: ${MONITOR_INTERVAL:-10m}
-      MONITOR_ROOTS: ${MONITOR_ROOTS:-/每日更新/电视剧/国产剧（115）,/每日更新/电视剧/国产剧}
+      MONITOR_ROOTS: ${MONITOR_ROOTS:-}
       ALIST_BASE_URL: ${ALIST_BASE_URL:-http://xiaoya.host:5678}
       STRM_TARGET_BASE_URL: ${STRM_TARGET_BASE_URL:-}
       XIAOYA_USERNAME: ${XIAOYA_USERNAME:-}

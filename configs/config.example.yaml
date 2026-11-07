@@ -12,9 +12,7 @@ xiaoya:
 monitor:
   enabled: true
   interval: 10m
-  roots:
-    - /每日更新/电视剧/国产剧（115）
-    - /每日更新/电视剧/国产剧
+  roots: []
 
 strm:
   output_root: /media/strm
