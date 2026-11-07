@@ -19,10 +19,11 @@ services:
       retries: 6
 
   xiaoya-media-server:
-    build:
-      context: ..
-      dockerfile: deployments/Dockerfile
-    image: xiaoya-media-server:v1.0.0
+    image: ${IMAGE_NAME:-ghcr.io/clowrain/xiaoya-media-server:latest}
+    # 如需在本地自行编译，可取消以下 build 配置注释：
+    # build:
+    #   context: ..
+    #   dockerfile: deployments/Dockerfile
     container_name: xiaoya-media-server
     restart: unless-stopped
     depends_on:
@@ -61,5 +62,5 @@ services:
       - ${MEDIA_DIR:-./data/media}:/media
       # 应用持久化数据目录（封面缓存、媒体探测缓存、PostgreSQL 自动备份）
       - ${APP_DATA_DIR:-./data/appdata}:/data
-      # 统一 YAML 配置文件（环境变量可覆盖敏感字段）
-      - ${CONFIG_FILE_HOST:-../configs/config.example.yaml}:/etc/xiaoya-media-server/config.yaml:ro
+      # 可选：自定义 YAML 配置文件（镜像内已内置默认配置并由上述环境变量覆盖；如需外部挂载可取消注释）
+      # - ${CONFIG_FILE_HOST:-./config.yaml}:/etc/xiaoya-media-server/config.yaml:ro

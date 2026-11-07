@@ -92,7 +92,34 @@ curl -fsS http://127.0.0.1:8096/api/system/health
 
 ---
 
-## 4. 本地源码编译与运行
+## 4. 飞牛 OS (fnOS) NAS 专属部署指南
+
+飞牛 OS 内置 Docker 与 Compose 应用管理器，无需在 NAS 上安装 Go 开发环境即可一键拉取镜像部署：
+
+### 4.1 在飞牛 OS 中创建项目
+1. 打开飞牛 OS 网页控制台，进入 **Docker** -> **Compose**（项目）。
+2. 点击 **创建项目**，输入项目名称（如 `xiaoya-media-server`）。
+3. 项目路径选择你希望存放数据的存储卷（例如 `/vol1/1000/docker/xiaoya-media-server`）。
+
+### 4.2 配置 Compose 与环境变量
+直接粘贴项目 [deployments/compose.yaml](file:///Users/oneal/data/dev/projects/nas/xiaoya-media-server/deployments/compose.yaml) 内容。
+
+根据飞牛 OS 上的小雅容器路径填写环境变量（或在同级创建 `.env`）：
+- `XIAOYA_DB_DIR`: 飞牛上小雅容器挂载的宿主机配置目录（必须包含 `strm_internal.db` 的父目录，例如 `/vol1/1000/docker/xiaoya/data`）。
+- `MEDIA_DIR`: 飞牛上存放 STRM 文件的存储空间（例如 `/vol1/1000/media`）。
+- `APP_DATA_DIR`: 持久化缓存与自动备份目录（例如 `/vol1/1000/docker/xiaoya-media-server/appdata`）。
+- `POSTGRES_DATA_DIR`: 数据库存储目录（例如 `/vol1/1000/docker/xiaoya-media-server/pgdata`）。
+- `POSTGRES_PASSWORD`: 设置 PostgreSQL 数据库强密码。
+- `ADMIN_PASSWORD`: 初始管理员登录密码（至少 12 位）。
+- `ALIST_BASE_URL`: 小雅 AList 访问地址（例如 `http://192.168.x.x:5678` 或 `http://xiaoya:5678` 如果在同一 Docker 网络）。
+
+### 4.3 启动与访问
+点击 **立即构建/启动**，飞牛 OS 将自动从 `ghcr.io/clowrain/xiaoya-media-server:latest` 拉取对应平台（AMD64 / ARM64）的多架构镜像并运行。
+服务启动后通过 `http://<飞牛NAS_IP>:8096` 即可进入 Web 控制台或在 Infuse / VidHub 客户端中添加 Emby 连接。
+
+---
+
+## 5. 本地源码编译与运行
 
 ```bash
 # 1. 纯静态编译（无 CGo 依赖）
