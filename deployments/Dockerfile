@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+
+FROM golang:1.25-alpine AS builder
+WORKDIR /src
+
+RUN apk add --no-cache git ca-certificates tzdata
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
+    go build -trimpath -ldflags="-s -w" -o /out/xiaoya-media-server ./cmd/server
+
+FROM alpine:3.21
+LABEL org.opencontainers.image.title="xiaoya-media-server" \
+      org.opencontainers.image.description="Unified Emby-compatible media server, Xiaoya SQLite read-only discovery, Python-compatible STRM engine, and AList/TMDB console"
+
+RUN apk add --no-cache \
+      ca-certificates \
+      tzdata \
+      ffmpeg \
+      postgresql16-client \
+      wget \
+    && mkdir -p /data /media/strm /xiaoya-db /etc/xiaoya-media-server
+
+ENV TZ=Asia/Shanghai \
+    DATA_DIR=/data \
+    MEDIA_ROOTS=/media \
+    STRM_OUTPUT_ROOT=/media/strm \
+    XIAOYA_SQLITE_PATH=/xiaoya-db/strm_internal.db \
+    LISTEN=0.0.0.0:8096
+
+COPY --from=builder /out/xiaoya-media-server /usr/local/bin/xiaoya-media-server
+COPY configs/config.example.yaml /etc/xiaoya-media-server/config.yaml
+
+WORKDIR /data
+EXPOSE 8096
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8096/api/system/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/xiaoya-media-server"]
+CMD ["-config", "/etc/xiaoya-media-server/config.yaml"]
