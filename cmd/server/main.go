@@ -6,10 +6,16 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
+	"xiaoya-media-server/internal/adminapi"
 	"xiaoya-media-server/internal/config"
 	"xiaoya-media-server/internal/embyserver"
+	"xiaoya-media-server/internal/integration"
+	"xiaoya-media-server/internal/resource/alist"
+	"xiaoya-media-server/internal/resource/discovery"
+	"xiaoya-media-server/internal/scheduler"
 )
 
 func main() {
@@ -33,7 +39,48 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := embyserver.Run(ctx, cfg, nil, nil); err != nil {
+	var pipe *integration.Pipeline
+	defer func() {
+		if pipe != nil {
+			_ = pipe.Close()
+		}
+	}()
+
+	setup := func(app *embyserver.App) error {
+		store := discovery.NewSQLStore(app.SQLDB(), "postgres")
+		var pErr error
+		pipe, pErr = integration.NewPipeline(ctx, cfg, app, store)
+		if pErr != nil {
+			return pErr
+		}
+
+		alistCli := alist.NewClient(alist.Options{
+			BaseURL:  cfg.AList.BaseURL,
+			Username: cfg.AList.Username,
+			Password: cfg.AList.Password,
+			Token:    cfg.AList.Token,
+		})
+
+		imp := alist.NewImporter(alistCli, pipe.Discovery(), pipe.STRMEngine(), func(paths []string) {
+			seen := make(map[string]bool, len(paths))
+			for _, p := range paths {
+				dir := filepath.Clean(filepath.Dir(p))
+				if dir != "" && dir != "." && !seen[dir] {
+					seen[dir] = true
+					app.TriggerScopedPathScan(dir)
+				}
+			}
+		})
+
+		sched := scheduler.New(store, pipe, imp, cfg.Monitor.Interval, cfg.Monitor.Enabled)
+		sched.Start(ctx)
+
+		adminHandler := adminapi.NewHandler(cfg, store, pipe, imp, sched)
+		app.SetExtensionHandler(adminHandler.ServeExtension)
+		return nil
+	}
+
+	if err := embyserver.Run(ctx, cfg, setup, nil); err != nil {
 		log.Fatalf("server exited with error: %v", err)
 	}
 }
