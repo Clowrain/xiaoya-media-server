@@ -38,11 +38,18 @@ func TestResumeIsolationAndDownloadPolicy(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"TotalRecordCount":0`) {
 		t.Fatal(w.Body.String())
 	}
-	for _, p := range []string{"/Items/i/Download", "/emby/Videos/i/x/Subtitles/0/Stream.srt", "/Sync/Jobs"} {
+	for _, p := range []string{"/Items/i/Download", "/Sync/Jobs"} {
 		w := httptest.NewRecorder()
 		a.serve(w, httptest.NewRequest("GET", p, nil))
 		if w.Code != 403 {
 			t.Fatal(p, w.Code)
+		}
+	}
+	{
+		w := httptest.NewRecorder()
+		a.serve(w, httptest.NewRequest("GET", "/emby/Videos/i/x/Subtitles/0/Stream.srt", nil))
+		if w.Code != 401 {
+			t.Fatal("/emby/Videos/i/x/Subtitles/0/Stream.srt", w.Code)
 		}
 	}
 	p := a.userDTO(User{ID: uid})["Policy"].(M)

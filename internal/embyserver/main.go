@@ -327,8 +327,8 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	p := embyPath(r.URL.Path)
 	l := strings.ToLower(p)
-	if strings.Contains(l, "/download") || strings.Contains(l, "/subtitles") || strings.HasPrefix(l, "/sync") {
-		fail(w, 403, "下载媒体与字幕已禁用")
+	if strings.Contains(l, "/download") || strings.HasPrefix(l, "/sync") {
+		fail(w, 403, "下载媒体已禁用")
 		return
 	}
 	if l == "/health" || l == "/api/system/health" {
@@ -599,6 +599,9 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 			case "images":
 				a.poster(w, r, s[2])
 				return
+			case "remotesearch":
+				respond(w, []any{})
+				return
 			case "refresh":
 				if !u.API && !u.Admin {
 					fail(w, 403, "无权限")
@@ -616,6 +619,10 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(l, "/videos/") {
 		s := strings.Split(p, "/")
+		if strings.Contains(l, "/subtitles/") {
+			a.serveVideoSubtitles(w, r, s)
+			return
+		}
 		if len(s) >= 4 && (strings.HasPrefix(strings.ToLower(s[3]), "stream") || strings.EqualFold(s[3], "original")) {
 			a.stream(w, r, u, s[2])
 			return
@@ -1278,6 +1285,13 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request, u User, i string) {
 		}
 	}
 	a.logPlayback(r, u, x)
+	if strings.HasPrefix(x.URL, "file://") {
+		if !u.API && r.Method == http.MethodGet {
+			defer a.scheduleNext(x, r)
+		}
+		serveLocalMediaStream(w, r, x.URL)
+		return
+	}
 	if !u.API && r.Method == http.MethodGet {
 		tracked := &clientResponse{ResponseWriter: w, status: http.StatusOK}
 		w = tracked
