@@ -61,7 +61,7 @@ func (a *App) versions(x Item) []Item {
 func (a *App) versionSources(x Item, r *http.Request, u User, display bool) []M {
 	out := []M{}
 	versions := []Item{x}
-	if !u.API {
+	if !u.API && a.db != nil {
 		versions = a.versions(x)
 	}
 	for _, v := range versions {

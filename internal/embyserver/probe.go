@@ -220,13 +220,15 @@ func (a *App) extractMedia(ctx context.Context, x Item, t, ua string) (M, error)
 func (a *App) cachedMedia(x Item) M {
 	var s string
 	m := M{}
-	if a.db.QueryRow("SELECT data FROM media_probe WHERE item=? AND source=?", x.ID, digest(x.URL)).Scan(&s) == nil {
-		json.Unmarshal([]byte(s), &m)
-		return m
-	}
-	if a.db.QueryRow("SELECT data FROM media_probe WHERE source=? ORDER BY item LIMIT 1", digest(x.URL)).Scan(&s) == nil {
-		if json.Unmarshal([]byte(s), &m) == nil && m["Partial"] != true {
+	if a.db != nil {
+		if a.db.QueryRow("SELECT data FROM media_probe WHERE item=? AND source=?", x.ID, digest(x.URL)).Scan(&s) == nil {
+			json.Unmarshal([]byte(s), &m)
 			return m
+		}
+		if a.db.QueryRow("SELECT data FROM media_probe WHERE source=? ORDER BY item LIMIT 1", digest(x.URL)).Scan(&s) == nil {
+			if json.Unmarshal([]byte(s), &m) == nil && m["Partial"] != true {
+				return m
+			}
 		}
 	}
 	cfg := a.probeSettings()

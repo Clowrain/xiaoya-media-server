@@ -39,15 +39,24 @@ func TestPlayerAuthorization(t *testing.T) {
 }
 func TestPlayerDirectPlayUsesAuthenticatedGateway(t *testing.T) {
 	a := testApp(t)
-	x := Item{ID: "movie", Kind: "Movie", URL: "http://private-origin/movie.mp4"}
+	local := Item{ID: "movie", Kind: "Movie", URL: "file:///media/movie.mp4"}
 	r := httptest.NewRequest("GET", "http://server:7799/Items/movie/PlaybackInfo?api_key=viewer", nil)
-	m := a.viewerSource(x, r, User{})
+	m := a.viewerSource(local, r, User{})
 	if m["SupportsDirectPlay"] != true || m["SupportsTranscoding"] != false {
 		t.Fatal("wrong playback capability")
 	}
 	u, err := url.Parse(m["Path"].(string))
 	if err != nil || u.Host != "server:7799" || u.Query().Get("api_key") != "viewer" {
 		t.Fatal("direct play bypasses gateway")
+	}
+
+	strm := Item{ID: "strm", Kind: "Movie", URL: "http://xiaoya.host:5678/d/movie.mp4"}
+	mStrm := a.viewerSource(strm, r, User{})
+	if mStrm["Path"] != strm.URL {
+		t.Fatalf("STRM 媒体信息应保留原始地址: got %v, want %v", mStrm["Path"], strm.URL)
+	}
+	if !strings.Contains(mStrm["DirectStreamUrl"].(string), "/Videos/strm/stream.mp4") {
+		t.Fatalf("STRM 应保留 DirectStreamUrl 网关: got %v", mStrm["DirectStreamUrl"])
 	}
 }
 

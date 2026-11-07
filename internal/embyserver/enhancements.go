@@ -8,6 +8,9 @@ import (
 )
 
 func (a *App) defaultOn(key string) bool {
+	if a.db == nil {
+		return true
+	}
 	var value string
 	return a.db.QueryRow("SELECT v FROM settings WHERE k=?", key).Scan(&value) != nil || value != "false"
 }

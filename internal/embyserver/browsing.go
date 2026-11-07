@@ -34,7 +34,7 @@ func personID(name string) string { return "person-" + digest(strings.TrimSpace(
 func (a *App) metadata(x Item) sidecar {
 	var raw string
 	var n sidecar
-	if a.db.QueryRow("SELECT data FROM item_metadata WHERE item=?", x.ID).Scan(&raw) == nil && json.Unmarshal([]byte(raw), &n) == nil {
+	if a.db != nil && a.db.QueryRow("SELECT data FROM item_metadata WHERE item=?", x.ID).Scan(&raw) == nil && json.Unmarshal([]byte(raw), &n) == nil {
 		return n
 	}
 	return readSidecar(x)
@@ -177,6 +177,9 @@ func actorImage(x Item, name, thumb string) string {
 	return ""
 }
 func (a *App) imagePath(i, kind string) string {
+	if a.db == nil {
+		return ""
+	}
 	if kind == "Primary" {
 		var n int
 		if a.db.QueryRow("SELECT 1 FROM covers WHERE id=?", i).Scan(&n) == nil {

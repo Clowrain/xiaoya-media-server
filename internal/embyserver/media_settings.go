@@ -46,7 +46,7 @@ func mediaInfoRoot() string {
 func (a *App) probeSettings() ProbeSettings {
 	c := ProbeSettings{Browse: true, PreloadNext: true, Directory: filepath.Join(mediaInfoRoot(), "media-info"), Concurrency: 1}
 	var raw string
-	if a.db.QueryRow("SELECT v FROM settings WHERE k='media_info'").Scan(&raw) == nil {
+	if a.db != nil && a.db.QueryRow("SELECT v FROM settings WHERE k='media_info'").Scan(&raw) == nil {
 		json.Unmarshal([]byte(raw), &c)
 	}
 	if c.Concurrency < 1 {

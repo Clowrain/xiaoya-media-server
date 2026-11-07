@@ -1190,6 +1190,9 @@ func readItem(s interface{ Scan(...any) error }) (Item, error) {
 	return x, e
 }
 func (a *App) item(i string) (Item, error) {
+	if a.db == nil || i == "" {
+		return Item{}, sql.ErrNoRows
+	}
 	return readItem(a.db.QueryRow("SELECT "+cols+" FROM items WHERE id=?", i))
 }
 func (a *App) dto(x Item) M {

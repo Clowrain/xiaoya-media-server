@@ -38,7 +38,7 @@ func TestForwardedPlaybackOrigin(t *testing.T) {
 	r := httptest.NewRequest("GET", "http://internal:8097/Items/movie/PlaybackInfo?api_key=viewer", nil)
 	r.Header.Set("X-Forwarded-Proto", "https")
 	r.Header.Set("X-Forwarded-Host", "media.example.com")
-	m := a.viewerSource(Item{ID: "movie", URL: "http://origin/movie.mp4"}, r, User{})
+	m := a.viewerSource(Item{ID: "movie", URL: "file:///media/movie.mp4"}, r, User{})
 	if !strings.HasPrefix(m["Path"].(string), "https://media.example.com/emby/Videos/") {
 		t.Fatal(m["Path"])
 	}

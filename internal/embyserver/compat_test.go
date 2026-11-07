@@ -57,16 +57,26 @@ func TestResumeIsolationAndDownloadPolicy(t *testing.T) {
 		t.Fatal(p)
 	}
 }
-func TestViewerSourceDoesNotExposeSTRM(t *testing.T) {
+func TestViewerSourcePreservesSTRMContent(t *testing.T) {
 	a := testApp(t)
-	x := Item{ID: "i", Name: "Movie", URL: "http://private-source/video.mkv", Kind: "Movie"}
+	x := Item{ID: "i", Name: "Movie", URL: "http://xiaoya.host:5678/d/movie.mp4", Kind: "Movie"}
 	r := httptest.NewRequest("GET", "http://server:7799/Items/i?api_key=viewer", nil)
 	m := a.viewerSource(x, r, User{})
-	if strings.Contains(m["Path"].(string), "private-source") || !strings.Contains(m["Path"].(string), "server:7799/emby/Videos/i/") {
-		t.Fatal(m)
+	if m["Path"] != x.URL {
+		t.Fatalf("STRM 原始地址应保留在 Path 中供播放器媒体信息展示: got %v, want %v", m["Path"], x.URL)
+	}
+	if !strings.Contains(m["DirectStreamUrl"].(string), "/Videos/i/stream.mp4") {
+		t.Fatalf("应同时保留 DirectStreamUrl 网关兜底: got %v", m["DirectStreamUrl"])
 	}
 	if a.viewerSource(x, r, User{API: true})["Path"] != x.URL {
 		t.Fatal("resolver lost source")
+	}
+
+	// 本地非远程媒体应使用服务器网关流地址
+	local := Item{ID: "local", Name: "Local", URL: "file:///media/local.mp4", Kind: "Movie"}
+	mLocal := a.viewerSource(local, r, User{})
+	if !strings.Contains(mLocal["Path"].(string), "server:7799/emby/Videos/local/") {
+		t.Fatalf("本地媒体应通过服务网关出流: got %v", mLocal["Path"])
 	}
 }
 func TestAuthenticatedResumeRoute(t *testing.T) {

@@ -36,8 +36,8 @@ func TestVersionGroupingAndDisplay(t *testing.T) {
 	}
 	r := httptest.NewRequest("GET", "http://server:7799/Items/a1", nil)
 	for _, m := range a.versionSources(x, r, User{}, true) {
-		if !strings.HasPrefix(m["Path"].(string), "http://server:7799/emby/Videos/") || m["DirectStreamUrl"] == nil {
-			t.Fatal("missing authenticated display playback URL")
+		if m["Path"] != "http://origin/test.mkv" || m["DirectStreamUrl"] == nil {
+			t.Fatal("missing original STRM path or direct stream fallback", m)
 		}
 	}
 	if a.versionSources(x, r, User{}, false)[0]["Path"] == nil {

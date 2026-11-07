@@ -171,7 +171,7 @@ func (a *App) enrich(x Item, m M) {
 	a.enrichMedia(x, n, m)
 	a.decorateImages(x, m)
 	var cover int
-	if a.db.QueryRow("SELECT 1 FROM covers WHERE id=?", x.ID).Scan(&cover) == nil {
+	if a.db != nil && a.db.QueryRow("SELECT 1 FROM covers WHERE id=?", x.ID).Scan(&cover) == nil {
 		m["ImageTags"].(M)["Primary"] = a.imageTag(x.ID, "Primary", "cover")
 	}
 	if x.Kind == "Episode" {
@@ -230,6 +230,10 @@ func (a *App) playURL(x Item, t string) string {
 	}
 	return "/emby/Videos/" + x.ID + "/stream." + ext + "?Static=true&api_key=" + url.QueryEscape(t)
 }
+func isRemoteURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
 func (a *App) viewerSource(x Item, r *http.Request, u User) M {
 	m := a.source(x, token(r))
 	meta := M{}
@@ -255,19 +259,30 @@ func (a *App) viewerSource(x Item, r *http.Request, u User) M {
 		if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0]); forwarded != "" && !strings.ContainsAny(forwarded, "/\\?#@ \t\r\n") {
 			host = forwarded
 		}
-		m["Path"] = scheme + "://" + host + p
+		if isRemoteURL(x.URL) {
+			m["Path"] = x.URL
+		} else {
+			m["Path"] = scheme + "://" + host + p
+		}
 		m["Container"] = strings.TrimPrefix(filepath.Ext(strings.Split(p, "?")[0]), ".")
 		m["SupportsDirectPlay"] = true
+		m["SupportsDirectStream"] = true
 	}
 	return m
 }
 func (a *App) viewerDTO(x Item, r *http.Request, u User) M {
 	m := a.dto(x)
 	if !u.API {
-		delete(m, "Path")
+		if isRemoteURL(x.URL) {
+			m["Path"] = x.URL
+		} else {
+			delete(m, "Path")
+		}
 		var pos int64
 		var played bool
-		a.db.QueryRow("SELECT position,played FROM userdata WHERE user_id=? AND item=?", u.ID, x.ID).Scan(&pos, &played)
+		if a.db != nil {
+			a.db.QueryRow("SELECT position,played FROM userdata WHERE user_id=? AND item=?", u.ID, x.ID).Scan(&pos, &played)
+		}
 		m["UserData"] = M{"PlaybackPositionTicks": pos, "Played": played, "IsFavorite": false, "Key": x.ID}
 	}
 	if x.URL != "" {
