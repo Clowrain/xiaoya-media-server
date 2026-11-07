@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"xiaoya-media-server/internal/adminapi"
@@ -62,20 +61,18 @@ func main() {
 		})
 
 		imp := alist.NewImporter(alistCli, pipe.Discovery(), pipe.STRMEngine(), func(paths []string) {
-			seen := make(map[string]bool, len(paths))
-			for _, p := range paths {
-				dir := filepath.Clean(filepath.Dir(p))
-				if dir != "" && dir != "." && !seen[dir] {
-					seen[dir] = true
-					app.TriggerScopedPathScan(dir)
-				}
-			}
+			pipe.FlushScopedLibraryScans(paths...)
 		})
+		imp.SetLibraryTarget(app.ResolveImportTarget, app.UnmatchedLibraryPaths)
+		app.SetAListPlayback(alistCli.BaseURL(), alistCli.PlaybackFile)
 
 		sched := scheduler.New(store, pipe, imp, cfg.Monitor.Interval, cfg.Monitor.Enabled)
-		sched.Start(ctx)
 
 		adminHandler := adminapi.NewHandler(cfg, store, pipe, imp, sched)
+		if err := adminHandler.Start(ctx); err != nil {
+			return err
+		}
+		sched.Start(ctx)
 		app.SetExtensionHandler(adminHandler.ServeExtension)
 		return nil
 	}

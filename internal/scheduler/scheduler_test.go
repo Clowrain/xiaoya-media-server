@@ -3,8 +3,11 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -90,5 +93,110 @@ func TestSchedulerInitAndSTRMConsistencySelfHeal(t *testing.T) {
 
 	if _, err := os.Stat(reprocessed.LocalSTRMPath); err != nil {
 		t.Fatalf("expected strm_consistency_check to self-heal missing STRM, stat err: %v", err)
+	}
+	if err := os.WriteFile(reprocessed.LocalSTRMPath, []byte("corrupt"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := sched.RunTaskNow(ctx, "strm_consistency_check"); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(reprocessed.LocalSTRMPath); err != nil || string(b) != res.SourceContent {
+		t.Fatalf("corrupt STRM not repaired: %q %v", b, err)
+	}
+
+}
+
+func TestAttachmentTaskRefreshesSameURLWithoutNewSourceMetadata(t *testing.T) {
+	ctx := context.Background()
+	d := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(d, "business.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := discovery.NewSQLStore(db, "sqlite")
+	if err = store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var changed atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/d/Show/tvshow.nfo" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		body := "<tvshow><plot>First</plot></tvshow>"
+		if changed.Load() {
+			body = "<tvshow><plot>Updated</plot></tvshow>"
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	defer upstream.Close()
+	cfg := config.Default()
+	cfg.AList.BaseURL = upstream.URL
+	cfg.STRM.OutputRoot = filepath.Join(d, "strm")
+	cfg.Xiaoya.SQLitePath = filepath.Join(d, "no-source.db")
+	p, err := integration.NewPipeline(ctx, cfg, nil, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	r, err := p.Discovery().RegisterManualResource(ctx, "/Show/tvshow.nfo", "Show/tvshow.nfo", "tvshow.nfo", false, upstream.URL+"/d/Show/tvshow.nfo", discovery.ManageManualFile, "", "")
+	if err != nil || r.LocalSTRMPath == "" {
+		t.Fatalf("attachment not created: %+v %v", r, err)
+	}
+	changed.Store(true)
+	s := New(store, p, nil, time.Minute, true)
+	if err = s.RunTaskNow(ctx, "attachment_diff_sync"); err != nil {
+		t.Fatal(err)
+	}
+	if data, e := os.ReadFile(r.LocalSTRMPath); e != nil || string(data) != "<tvshow><plot>Updated</plot></tvshow>" {
+		t.Fatalf("same URL update not synced: %s %v", data, e)
+	}
+}
+
+func TestConfiguredRootDoesNotOverrideStoredMonitorSettings(t *testing.T) {
+	ctx := context.Background()
+	d := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(d, "business.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := discovery.NewSQLStore(db, "sqlite")
+	if err = store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a, err := store.UpsertMonitorRoot(ctx, "/Paused", false, 33)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.UpsertMonitorRoot(ctx, "/Slow", true, 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := store.UpsertMonitorRoot(ctx, "/Fast", true, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{b.ID, c.ID} {
+		if err = store.UpdateMonitorRootStatus(ctx, id, 0, "", "SUCCESS", "", time.Now().Unix()-10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.Default()
+	cfg.Monitor.Roots = []string{"/Paused"}
+	cfg.Xiaoya.SQLitePath = filepath.Join(d, "no-source.db")
+	p, err := integration.NewPipeline(ctx, cfg, nil, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	s := New(store, p, nil, time.Minute, true)
+	paused, err := store.GetMonitorRoot(ctx, a.ID)
+	if err != nil || paused.Enabled || paused.IntervalSec != 33 {
+		t.Fatalf("seed overwrote stored settings: %+v %v", paused, err)
+	}
+	due, err := s.dueMonitorRoots(ctx)
+	if err != nil || len(due) != 1 || due[0].ID != c.ID {
+		t.Fatalf("scheduler ignored individual interval: %+v %v", due, err)
 	}
 }

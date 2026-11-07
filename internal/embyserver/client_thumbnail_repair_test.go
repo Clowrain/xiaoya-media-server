@@ -41,8 +41,12 @@ func TestPublicClientStrings(t *testing.T) {
 }
 func TestEpisodeSidecarThumb(t *testing.T) {
 	a := testApp(t)
-	os.MkdirAll("/media", 0755)
-	dir, e := os.MkdirTemp("/media", "episode-thumb-")
+	fixtureRoot, e := filepath.EvalSymlinks(t.TempDir())
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Setenv("MEDIA_ROOTS", fixtureRoot)
+	dir, e := os.MkdirTemp(fixtureRoot, "episode-thumb-")
 	if e != nil {
 		t.Fatal(e)
 	}

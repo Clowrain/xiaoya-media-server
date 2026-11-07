@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"xiaoya-media-server/internal/config"
 	"xiaoya-media-server/internal/embyserver"
@@ -27,6 +27,7 @@ type Handler struct {
 	pipeline *integration.Pipeline
 	importer *alist.Importer
 	sched    *scheduler.Scheduler
+	jobs     *jobRunner
 }
 
 func NewHandler(cfg *config.Config, store *discovery.SQLStore, pipeline *integration.Pipeline, importer *alist.Importer, sched *scheduler.Scheduler) *Handler {
@@ -36,6 +37,7 @@ func NewHandler(cfg *config.Config, store *discovery.SQLStore, pipeline *integra
 		pipeline: pipeline,
 		importer: importer,
 		sched:    sched,
+		jobs:     &jobRunner{ctx: context.Background(), db: store, active: map[string]bool{}},
 	}
 }
 
@@ -69,6 +71,33 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 	ctx := r.Context()
 
 	switch {
+	case p == "/api/jobs":
+		if r.Method != http.MethodGet {
+			writeErr(w, 405, "GET required")
+			return true
+		}
+		items, err := h.store.ListAdminJobs(ctx)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return true
+		}
+		writeJSON(w, 200, map[string]any{"items": items})
+		return true
+	case p == "/api/alist/tracking-review":
+		if r.Method != http.MethodGet {
+			writeErr(w, 405, "GET required")
+			return true
+		}
+		items, err := h.store.TrackedAListRoots(ctx, true)
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return true
+		}
+		writeJSON(w, 200, map[string]any{"items": items})
+		return true
+	case strings.HasPrefix(p, "/api/jobs/"):
+		h.serveJob(w, r, strings.TrimPrefix(p, "/api/jobs/"))
+		return true
 	case p == "/api/system/overview" || p == "/api/system/health":
 		if r.Method != http.MethodGet {
 			writeErr(w, http.StatusMethodNotAllowed, "GET required")
@@ -235,15 +264,43 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			writeErr(w, http.StatusBadRequest, "入库路径 path 不能为空")
 			return true
 		}
-		embyserver.RecordGlobalLog("INFO", "scan", "开始 AList 入库", fmt.Sprintf("请求路径: %s · 追更模式: %v", req.Path, req.TrackUpdates), "", "")
-		sum, err := h.importer.Import(ctx, req)
+		scope := "import:" + alist.NormalizePath(req.Path)
+		if h.importer.Busy(req.Path) {
+			writeErr(w, 409, alist.ErrImportInProgress.Error())
+			return true
+		}
+		run := func(ctx context.Context) (string, any, error) {
+			sum, err := h.importer.Import(ctx, req)
+			if err != nil || sum.FailedFiles > 0 {
+				embyserver.RecordGlobalLog("WARN", "scan", "AList 入库有失败项", fmt.Sprintf("%s · %d 个文件失败", sum.SourcePath, sum.FailedFiles), "", "")
+			}
+			if err != nil || sum.FailedFiles > 0 {
+				if sum.ImportedFiles > 0 {
+					return "PARTIAL", sum, err
+				}
+				return "FAILED", sum, err
+			}
+			if sum.ImportedFiles == 0 && sum.ImportedDirs == 0 {
+				return "FAILED", sum, errors.New("未找到可入库的资源")
+			}
+			return "SUCCESS", sum, nil
+		}
+		if r.URL.Query().Get("async") == "true" {
+			h.jobs.submit(w, r, "import", scope, run)
+			return true
+		}
+		release, ok := h.jobs.acquire(scope)
+		if !ok {
+			writeErr(w, 409, "同一范围已有任务在运行")
+			return true
+		}
+		defer release()
+		_, result, err := run(ctx)
 		if err != nil {
-			embyserver.RecordGlobalLog("ERROR", "scan", "AList 入库失败", fmt.Sprintf("路径: %s · 错误: %v", req.Path, err), "", err.Error())
 			writeErr(w, http.StatusBadGateway, err.Error())
 			return true
 		}
-		embyserver.RecordGlobalLog("INFO", "scan", "AList 入库完成", fmt.Sprintf("路径: %s · 成功生成 STRM: %d 个 · 目录: %d 个 · 失败: %d 个", sum.SourcePath, sum.ImportedFiles, sum.ImportedDirs, sum.FailedFiles), "", "")
-		writeJSON(w, http.StatusOK, sum)
+		writeJSON(w, http.StatusOK, result)
 		return true
 
 	case strings.HasPrefix(p, "/api/resources/"):
@@ -262,32 +319,23 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 					writeErr(w, http.StatusInternalServerError, err.Error())
 					return true
 				}
-				atts, _ := h.store.ListAttachments(ctx, resID)
-				preview, _ := h.store.PreviewCleanup(ctx, resID)
+				atts, err := h.store.ListAttachments(ctx, resID)
+				if err != nil {
+					writeErr(w, 500, err.Error())
+					return true
+				}
+				preview, err := h.store.PreviewCleanup(ctx, resID)
+				if err != nil {
+					writeErr(w, 500, err.Error())
+					return true
+				}
 				writeJSON(w, http.StatusOK, map[string]any{
 					"resource":        res,
 					"attachments":     atts,
 					"cleanup_preview": preview,
 				})
 			case http.MethodDelete:
-				confirmed := r.URL.Query().Get("confirm") == "true" || r.URL.Query().Get("confirm") == "1"
-				preview, err := h.store.ConfirmDeleteResource(ctx, resID, confirmed)
-				if errors.Is(err, discovery.ErrConfirmationRequired) {
-					writeJSON(w, http.StatusConflict, map[string]any{
-						"error":   "删除受 keep 策略保护，请确认影响范围后附带 ?confirm=true 重试",
-						"preview": preview,
-					})
-					return true
-				}
-				if err == sql.ErrNoRows {
-					writeErr(w, http.StatusNotFound, "资源不存在")
-					return true
-				}
-				if err != nil {
-					writeErr(w, http.StatusInternalServerError, err.Error())
-					return true
-				}
-				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": preview})
+				h.unmanage(w, r, resID)
 			default:
 				writeErr(w, http.StatusMethodNotAllowed, "GET or DELETE required")
 			}
@@ -310,18 +358,29 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 				writeJSON(w, http.StatusOK, updated)
 				return true
 			case "unmanage":
-				res, err := h.store.GetResource(ctx, resID)
-				if err != nil {
-					writeErr(w, http.StatusNotFound, "资源不存在")
+				h.unmanage(w, r, resID)
+				return true
+			case "restore-management":
+				if h.pipeline == nil {
+					writeErr(w, 503, "流水线未初始化")
 					return true
 				}
-				_ = h.store.UpsertManagedResource(ctx, h.store.DB(), discovery.ManagedResource{
-					ResourceID:     res.ID,
-					ManageMode:     discovery.ManageManualFile,
-					Enabled:        false,
-					DeletionPolicy: "keep",
-				})
-				writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+				if err := h.pipeline.Discovery().RestoreManagement(ctx, resID); err != nil {
+					code := 500
+					if errors.Is(err, sql.ErrNoRows) {
+						code = 404
+					}
+					writeErr(w, code, err.Error())
+					return true
+				}
+				writeJSON(w, 200, map[string]any{"ok": true, "message": "已恢复管理"})
+				return true
+			case "track":
+				if err := h.store.SetAListTracking(ctx, resID, true); err != nil {
+					writeErr(w, 400, err.Error())
+					return true
+				}
+				writeJSON(w, 200, map[string]any{"ok": true})
 				return true
 			}
 		}
@@ -358,10 +417,48 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			RootID string `json:"root_id"`
 		}
 		if r.Body != nil {
-			_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req)
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil && err != io.EOF {
+				writeErr(w, 400, "无效 JSON 请求")
+				return true
+			}
 		}
+		rootID := strings.TrimSpace(req.RootID)
+		scope := "scan:*"
 		full := p == "/api/sync/full"
-		h.handleTriggerSync(ctx, w, strings.TrimSpace(req.RootID), full)
+		roots, err := h.syncRoots(ctx, rootID)
+		if err != nil {
+			code := 500
+			if errors.Is(err, sql.ErrNoRows) {
+				code = 404
+			}
+			writeErr(w, code, err.Error())
+			return true
+		}
+		if rootID != "" {
+			scope = "scan:" + roots[0].RootPath
+		}
+		run := func(ctx context.Context) (string, any, error) {
+			status, res := h.runSync(ctx, roots, full)
+			return status, res, nil
+		}
+		for _, root := range roots {
+			if h.pipeline.Discovery().RootPathBusy(root.RootPath) {
+				writeErr(w, 409, "同一范围已有任务在运行")
+				return true
+			}
+		}
+		if r.URL.Query().Get("async") == "true" {
+			h.jobs.submit(w, r, "sync", scope, run)
+		} else {
+			release, ok := h.jobs.acquire(scope)
+			if !ok {
+				writeErr(w, 409, "同一范围已有任务在运行")
+				return true
+			}
+			defer release()
+			_, res := h.runSync(ctx, roots, full)
+			writeJSON(w, 200, res)
+		}
 		return true
 
 	case p == "/api/alist/browse":
@@ -454,63 +551,88 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			return true
 		}
 		key := strings.TrimSuffix(strings.TrimPrefix(p, "/api/tasks/"), "/run")
-		go func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer cancel()
-			_ = h.sched.RunTaskNow(bgCtx, key)
-		}()
-		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "task_key": key})
+		if !h.sched.HasTask(key) {
+			writeErr(w, 404, "任务不存在")
+			return true
+		}
+		h.jobs.submit(w, r, "task", "task:"+key, func(ctx context.Context) (string, any, error) {
+			if err := h.sched.RunTaskNow(ctx, key); err != nil {
+				return "FAILED", nil, err
+			}
+			return "SUCCESS", map[string]string{"task_key": key}, nil
+		})
 		return true
 	}
 
 	return false
 }
 
-func (h *Handler) handleTriggerSync(ctx context.Context, w http.ResponseWriter, rootID string, full bool) {
-	var targetRoots []discovery.MonitorRoot
-	if rootID != "" {
-		r, err := h.store.GetMonitorRoot(ctx, rootID)
+func (h *Handler) syncRoots(ctx context.Context, id string) ([]discovery.MonitorRoot, error) {
+	if id != "" {
+		r, err := h.store.GetMonitorRoot(ctx, id)
 		if err != nil {
-			writeErr(w, http.StatusNotFound, "监控目录不存在")
-			return
+			return nil, err
 		}
-		targetRoots = []discovery.MonitorRoot{r}
-	} else {
-		all, err := h.store.ListMonitorRoots(ctx)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		for _, r := range all {
-			if r.Enabled {
-				targetRoots = append(targetRoots, r)
-			}
+		return []discovery.MonitorRoot{r}, nil
+	}
+	all, err := h.store.ListMonitorRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var enabled []discovery.MonitorRoot
+	for _, r := range all {
+		if r.Enabled {
+			enabled = append(enabled, r)
 		}
 	}
+	return enabled, nil
+}
 
-	var batches []discovery.SyncBatch
-	var errs []string
-	for _, r := range targetRoots {
-		var b discovery.SyncBatch
+type syncResult struct {
+	Batches []discovery.SyncBatch `json:"batches"`
+	Errors  []string              `json:"errors"`
+	Outcome string                `json:"outcome"`
+}
+
+func (h *Handler) runSync(ctx context.Context, roots []discovery.MonitorRoot, full bool) (string, syncResult) {
+	res := syncResult{Batches: []discovery.SyncBatch{}, Errors: []string{}}
+	ok := 0
+	for _, root := range roots {
+		var batch discovery.SyncBatch
 		var err error
 		if full {
-			b, err = h.pipeline.RunFullSyncRoot(ctx, r.ID)
+			batch, err = h.pipeline.RunFullSyncRoot(ctx, root.ID)
 		} else {
-			b, err = h.pipeline.RunIncrementalSyncRoot(ctx, r.ID)
+			batch, err = h.pipeline.RunIncrementalSyncRoot(ctx, root.ID)
 		}
-		batches = append(batches, b)
+		if batch.ID != "" {
+			res.Batches = append(res.Batches, batch)
+		}
 		if err != nil {
-			errs = append(errs, r.RootPath+": "+err.Error())
+			res.Errors = append(res.Errors, root.RootPath+": "+err.Error())
+			continue
+		}
+		ok++
+		if batch.FailedCount > 0 {
+			detail := fmt.Sprintf("%s：%d 个资源处理失败", root.RootPath, batch.FailedCount)
+			if batch.ErrorMessage != "" {
+				detail += "；" + batch.ErrorMessage
+			}
+			res.Errors = append(res.Errors, detail)
 		}
 	}
-	status := http.StatusOK
-	if len(errs) > 0 && len(batches) == 0 {
-		status = http.StatusBadGateway
+	if len(roots) == 0 {
+		res.Errors = append(res.Errors, "没有已启用的监控目录")
 	}
-	writeJSON(w, status, map[string]any{
-		"batches": batches,
-		"errors":  errs,
-	})
+	switch {
+	case ok == 0:
+		res.Outcome = "FAILED"
+	case len(res.Errors) > 0:
+		res.Outcome = "PARTIAL"
+	default:
+		res.Outcome = "SUCCESS"
+	}
+	return res.Outcome, res
 }
 
 func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWriter) {
@@ -544,6 +666,11 @@ func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWrite
 		}
 	}
 
+	strmCount, countErr := h.store.CountSTRMPaths(ctx)
+	if countErr != nil {
+		writeErr(w, 500, countErr.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":              "ok",
 		"service":             "xiaoya-media-server",
@@ -556,7 +683,7 @@ func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWrite
 		"strm_output_root":    outRoot,
 		"alist_base_url":      alistBase,
 		"alist_host":          alistBase,
-		"strm_count":          activeCount,
+		"strm_count":          strmCount,
 		"cache_db_path":       sqlitePath,
 		"cache_db_size_bytes": sqliteSize,
 		"monitor_roots":       len(roots),
@@ -566,4 +693,26 @@ func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWrite
 			"failed_files":  failedCount,
 		},
 	})
+}
+
+func (h *Handler) unmanage(w http.ResponseWriter, r *http.Request, id string) {
+	flag := r.URL.Query().Get("confirm")
+	confirm := flag == "true" || flag == "1"
+	var preview discovery.CleanupImpactPreview
+	var err error
+	if h.pipeline != nil {
+		preview, err = h.pipeline.Discovery().SetUnmanaged(r.Context(), id, confirm)
+	} else {
+		preview, err = h.store.ConfirmDeleteResource(r.Context(), id, confirm)
+	}
+	switch {
+	case errors.Is(err, discovery.ErrConfirmationRequired):
+		writeJSON(w, 409, map[string]any{"error": "确认影响范围后附带 ?confirm=true 取消管理", "preview": preview})
+	case errors.Is(err, sql.ErrNoRows):
+		writeErr(w, 404, "资源不存在")
+	case err != nil:
+		writeErr(w, 500, err.Error())
+	default:
+		writeJSON(w, 200, map[string]any{"ok": true, "unmanaged": true, "preview": preview, "message": "已取消管理"})
+	}
 }

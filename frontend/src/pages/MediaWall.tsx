@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Film, Search, ArrowUpDown, Play, RefreshCw, Star, Clapperboard } from 'lucide-react';
+import { Film, Search, ArrowUpDown, RefreshCw, Star, Clapperboard } from 'lucide-react';
 import { User, LibraryView, MediaItem } from '../types';
 import { fetchLibraryViews, fetchMediaItems, notifyToast } from '../api/client';
 import { MediaDetailModal } from '../components/MediaDetailModal';
-import { PlayerModal } from '../components/PlayerModal';
 
 interface MediaWallProps {
   user: User;
@@ -22,7 +21,6 @@ export const MediaWall: React.FC<MediaWallProps> = ({ user, onRematchTmdb }) => 
 
   // Modals state
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
-  const [playingItem, setPlayingItem] = useState<MediaItem | null>(null);
 
   const isAdmin = user.Policy?.IsAdministrator ?? false;
 
@@ -198,19 +196,6 @@ export const MediaWall: React.FC<MediaWallProps> = ({ user, onRematchTmdb }) => 
                     </div>
                   )}
 
-                  {/* Gradient Overlay */}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setPlayingItem(item);
-                      }}
-                      className="w-12 h-12 rounded-full bg-emerald-600/90 text-white flex items-center justify-center shadow-lg shadow-emerald-500/40 hover:bg-emerald-500 hover:scale-110 transition transform"
-                    >
-                      <Play className="w-5 h-5 fill-white ml-0.5" />
-                    </button>
-                  </div>
-
                   {/* Type Badge */}
                   <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-md text-[10px] font-mono text-zinc-300 border border-white/10">
                     {item.Type === 'Movie' ? '电影' : item.Type === 'Series' ? '剧集' : item.Type}
@@ -247,18 +232,11 @@ export const MediaWall: React.FC<MediaWallProps> = ({ user, onRematchTmdb }) => 
         isOpen={!!selectedItem}
         isAdmin={isAdmin}
         onClose={() => setSelectedItem(null)}
-        onPlay={(it) => setPlayingItem(it)}
         onRematchTmdb={(it) => onRematchTmdb(it)}
         onItemUpdated={() => loadItems()}
       />
 
-      {playingItem && (
-        <PlayerModal
-          item={playingItem}
-          isOpen={!!playingItem}
-          onClose={() => setPlayingItem(null)}
-        />
-      )}
+
     </div>
   );
 };

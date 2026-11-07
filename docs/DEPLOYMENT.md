@@ -62,14 +62,15 @@ cp .env.example .env
 | `ADMIN_PASSWORD` | 初始 `admin` 管理员密码（**不少于 12 位**） | `AdminPass_2026!` |
 | `XIAOYA_DB_DIR` | 宿主机上 `strm_internal.db` 所在**父目录** | `/vol1/1000/xiaoya/data` |
 | `ALIST_BASE_URL` | 客户端与服务端可访问的小雅地址 | `http://192.168.1.10:5678` |
-| `STRM_TARGET_BASE_URL` | 写入 `.strm` 文件的目标地址（默认同 `ALIST_BASE_URL`） | `http://192.168.1.10:5678` |
+| `STRM_TARGET_BASE_URL` | 写入 `.strm` 文件的目标地址（默认保留 `http://xiaoya.host:5678`） | `http://192.168.1.10:5678` |
 | `TMDB_API_KEY` | TMDB v3 API Key（无本地 NFO 时自动刮削） | `your_tmdb_v3_key` |
-| `MONITOR_ROOTS` | 初始精确监控根目录（逗号分隔） | `/每日更新/电视剧/国产剧（115）,/每日更新/电视剧/国产剧` |
+| `MONITOR_ROOTS` | 初始精确监控根目录（可留空，多个用逗号分隔） | `/每日更新/电视剧/国产剧（115）,/每日更新/电视剧/国产剧` |
 
 ### 3.2 启动服务栈
 
 ```bash
-docker compose -f deployments/compose.yaml --env-file deployments/.env up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 检查健康状态：
@@ -81,14 +82,16 @@ curl -fsS http://127.0.0.1:8096/api/system/health
 
 ### 3.3 首次进入后台完成媒体库关联
 
-1. 浏览器访问 `http://<NAS_IP>:8096`，使用用户名 `admin` 与 `.env` 中的 `ADMIN_PASSWORD` 登录。
-2. 点击右上角用户图标 → **后台管理**。
-3. 在 **媒体库** 面板新建电视剧媒体库（例如名称 `国产剧`，目录选择 `/media/strm/每日更新/电视剧` 或 `/media/strm`）。
-4. 切换到 **资源与监控** 面板：
-   - 确认“Xiaoya SQLite 只读数据源”状态为 `🟢 已连接 (RO)`；
-   - 点击 **全量同步全部** 完成首次基线快照与 `.strm` / 附件落地，系统会自动触发对应目录的局部媒体库扫描；
-   - 后续每 `10m`（可配）由后台调度器自动执行增量同步，每日自动执行全量树差异校验。
-5. 如需在指定监控目录之外按需追剧或入库单部电影，切换到 **AList 入库** 面板浏览或搜索小雅目录，点击 **整剧入库+追更** 或 **单文件入库** 即可。
+1. 浏览器访问 `http://<NAS_IP>:8096`，用 `admin` 和首次启动时设置的密码登录，打开 **管理控制台**。
+2. 在 **媒体库管理** 创建电影或电视剧媒体库，把需要入库的 STRM 输出目录加入媒体库。
+3. 在 **小雅同步入库 & AList** 添加要监控的精确路径，设置各目录的增量同步间隔。点目录旁的 **全量** 建立基线。结果区会显示实际新增、缺失、恢复和失败数量。
+4. 按需从 AList 浏览或搜索，选择 **单次入库** 或 **整剧追更**。可指定导入的媒体库和其中一个输出目录。「已生成，未收录」表示已有 STRM，但其路径尚未加入媒体库。
+5. 在 **资源与任务** 查看资源状态、变更、扫描批次和定时任务。取消管理需先预览并确认；本地文件、媒体条目和观看记录会保留。
+6. 观看时，在 VidHub、SenPlayer 或 Infuse 中添加 Emby 服务器，使用同一服务地址和账号登录。网页用于浏览和管理，不提供播放。
+
+### 3.4 通过 API 提交后台任务
+
+同步和入库接口仍接受原来的同步请求。需要后台运行时，为 `POST /api/sync/full`、`POST /api/sync/incremental` 或 `POST /api/resources/import` 加上 `?async=true`。接口返回 `202` 与任务 `id`，用 `GET /api/jobs/{id}` 查询结果。任务状态为 `RUNNING`、`SUCCESS`、`PARTIAL`、`FAILED` 或 `INTERRUPTED`。同一范围已有任务时返回 `409`；服务重启后可重新提交已中断的任务。
 
 ---
 
@@ -123,7 +126,7 @@ curl -fsS http://127.0.0.1:8096/api/system/health
 
 ```bash
 # 1. 纯静态编译（无 CGo 依赖）
-CGO_ENABLED=0 go build -mod=vendor -o bin/xiaoya-media-server ./cmd/server
+CGO_ENABLED=0 go build -o bin/xiaoya-media-server ./cmd/server
 
 # 2. 仅初始化/迁移 PostgreSQL 表结构并退出（可选）
 ./bin/xiaoya-media-server -config configs/config.example.yaml -prepare-schema
@@ -134,18 +137,9 @@ CGO_ENABLED=0 go build -mod=vendor -o bin/xiaoya-media-server ./cmd/server
 
 ---
 
-## 5. 备份、恢复与升级说明
+## 6. 备份、恢复与升级说明
 
-1. **自动备份**：
-   - 服务内置每 24 小时执行一次 `pg_dump`，备份文件保存在 `/data/backups/`（对应宿主机 `${APP_DATA_DIR}/backups/`），自动保留最近 14 份快照。
-2. **手动备份与恢复**：
-   ```bash
-   # 手动导出
-   docker exec xiaoya-media-postgres pg_dump -U emby emby > backup_$(date +%F).sql
-
-   # 恢复到新库
-   cat backup_2026-11-07.sql | docker exec -i xiaoya-media-postgres psql -U emby -d emby
-   ```
-3. **平滑升级**：
-   - 所有数据库表结构迁移均具备幂等性（`CREATE TABLE IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`）。
-   - 拉取新版本源码或镜像后执行 `docker compose up -d --build`，服务启动时会自动完成增量迁移，保留全部用户、媒体库、`userdata` 观看记录、监控游标与人工入库台账。
+1. **备份**：服务每 24 小时使用当前 PostgreSQL 连接配置执行 `pg_dump`，也可由管理员调用 `POST /admin/backup`。标准部署写入容器的 `/data/backups/`，对应宿主机 `${APP_DATA_DIR}/backups/`。仅发布完整备份，保留最近 14 份。STRM、字幕和图片位于媒体挂载目录，应另行备份。
+2. **恢复检查**：先创建空的独立恢复库，用 `pg_restore --exit-on-error --no-owner --dbname=<恢复库>` 恢复选中的 `.dump`，核对账号、媒体库、观看记录和监控配置后再安排切换。生产库仍在使用时，不要直接把备份导入同名库。
+3. **升级**：先备份 PostgreSQL 和媒体目录，再拉取新镜像并执行 `docker compose up -d`。启动时自动应用资源生命周期迁移，保留原有账号、媒体 ID、观看记录、监控设置及 STRM 映射。升级后到 **资源与任务** 检查「需要确认的旧追更目录」，仅为确实需要自动更新的目录重新启用追更。已中断的同步或入库可在原入口重新提交。
+4. **发布验收**：用实际 NAS 与小雅/AList 数据验证首次全量、增量、缺失保护和备份恢复；在目标客户端验收登录、季/集、直链、外挂字幕、进度和继续观看。

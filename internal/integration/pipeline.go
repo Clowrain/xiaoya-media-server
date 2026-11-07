@@ -52,6 +52,7 @@ func NewPipeline(ctx context.Context, cfg *config.Config, app *embyserver.App, s
 		TargetBaseURL:           cfg.STRM.TargetBaseURL,
 		DownloadBaseURL:         downloadBase,
 		AttachmentStore:         store,
+		PathStore:               store,
 		OnMediaMaterialized: func(localPath string) {
 			p.markDirtyDir(filepath.Dir(localPath))
 		},
@@ -78,7 +79,10 @@ func (p *Pipeline) markDirtyDir(dir string) {
 }
 
 // FlushScopedLibraryScans triggers scoped Emby library scans for any directories touched during STRM/attachment sync.
-func (p *Pipeline) FlushScopedLibraryScans() []string {
+func (p *Pipeline) FlushScopedLibraryScans(files ...string) []string {
+	for _, file := range files {
+		p.markDirtyDir(filepath.Dir(file))
+	}
 	p.dirtyDirsMu.Lock()
 	dirs := make([]string, 0, len(p.dirtyDirs))
 	for d := range p.dirtyDirs {
@@ -88,9 +92,7 @@ func (p *Pipeline) FlushScopedLibraryScans() []string {
 	p.dirtyDirsMu.Unlock()
 
 	if p.app != nil {
-		for _, d := range dirs {
-			p.app.TriggerScopedPathScan(d)
-		}
+		p.app.TriggerScopedPathScans(dirs)
 	}
 	return dirs
 }
@@ -104,6 +106,12 @@ func (p *Pipeline) EnsureSQLiteReader(ctx context.Context) error {
 	if p.reader != nil {
 		if err := p.reader.VerifyReadOnly(ctx); err == nil {
 			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if p.discovery != nil {
+			p.discovery.SetReader(nil)
 		}
 		_ = p.reader.Close()
 		p.reader = nil
@@ -146,15 +154,22 @@ func (p *Pipeline) Store() *discovery.SQLStore {
 func (p *Pipeline) RunFullSyncRoot(ctx context.Context, rootID string) (discovery.SyncBatch, error) {
 	_ = p.EnsureSQLiteReader(ctx)
 	batch, err := p.discovery.ScanRootFull(ctx, rootID)
-	p.FlushScopedLibraryScans()
-	return batch, err
+	return p.finishSync(batch), err
 }
 
 func (p *Pipeline) RunIncrementalSyncRoot(ctx context.Context, rootID string) (discovery.SyncBatch, error) {
 	_ = p.EnsureSQLiteReader(ctx)
 	batch, err := p.discovery.ScanRootIncremental(ctx, rootID)
+	return p.finishSync(batch), err
+}
+
+func (p *Pipeline) finishSync(batch discovery.SyncBatch) discovery.SyncBatch {
+	if p.app != nil && len(batch.MaterializedSTRMs) > 0 {
+		batch.UnindexedSTRMCount = len(p.app.UnmatchedLibraryPaths(batch.MaterializedSTRMs))
+	}
+	batch.MaterializedSTRMs = nil
 	p.FlushScopedLibraryScans()
-	return batch, err
+	return batch
 }
 
 func (p *Pipeline) Close() error {

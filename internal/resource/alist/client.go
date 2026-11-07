@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,10 +54,11 @@ type FileDetail struct {
 }
 
 type Client struct {
-	baseURL  string
-	username string
-	password string
-	httpCli  *http.Client
+	baseURL       string
+	username      string
+	password      string
+	httpCli       *http.Client
+	explicitToken bool
 
 	mu    sync.RWMutex
 	token string
@@ -72,17 +74,20 @@ func NewClient(opts Options) *Client {
 		cli = &http.Client{Timeout: 25 * time.Second}
 	}
 	return &Client{
-		baseURL:  base,
-		username: strings.TrimSpace(opts.Username),
-		password: opts.Password,
-		token:    strings.TrimSpace(opts.Token),
-		httpCli:  cli,
+		baseURL:       base,
+		username:      strings.TrimSpace(opts.Username),
+		password:      opts.Password,
+		token:         strings.TrimSpace(opts.Token),
+		httpCli:       cli,
+		explicitToken: strings.TrimSpace(opts.Token) != "",
 	}
 }
 
 func (c *Client) BaseURL() string {
 	return c.baseURL
 }
+
+func NormalizePath(p string) string { return normalizeAListPath(p) }
 
 func normalizeAListPath(p string) string {
 	trimmed := strings.TrimSpace(p)
@@ -155,11 +160,40 @@ func (c *Client) ensureToken(ctx context.Context) (string, error) {
 	return c.token, nil
 }
 
-func (c *Client) postJSON(ctx context.Context, apiPath string, reqBody any, outData any) error {
+type apiError struct {
+	message string
+	auth    bool
+}
+
+func (e *apiError) Error() string { return e.message }
+
+func (c *Client) postJSON(ctx context.Context, apiPath string, reqBody, outData any) error {
+	return c.postWithUserAgent(ctx, apiPath, reqBody, outData, "")
+}
+
+func (c *Client) postWithUserAgent(ctx context.Context, apiPath string, reqBody, outData any, ua string) error {
 	tok, err := c.ensureToken(ctx)
 	if err != nil {
 		return err
 	}
+	err = c.postOnce(ctx, apiPath, reqBody, outData, ua, tok)
+	var rejected *apiError
+	if errors.As(err, &rejected) && rejected.auth && tok != "" && c.username != "" && !c.explicitToken {
+		c.mu.Lock()
+		if c.token == tok {
+			c.token = ""
+		}
+		c.mu.Unlock()
+		tok, err = c.ensureToken(ctx)
+		if err != nil {
+			return err
+		}
+		return c.postOnce(ctx, apiPath, reqBody, outData, ua, tok)
+	}
+	return err
+}
+
+func (c *Client) postOnce(ctx context.Context, apiPath string, reqBody, outData any, ua, tok string) error {
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		return err
@@ -169,6 +203,10 @@ func (c *Client) postJSON(ctx context.Context, apiPath string, reqBody any, outD
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if ua != "" {
+		req.Header.Set("User-Agent", ua)
+		req.Header.Set("X-Alist-OriUA", ua)
+	}
 	if tok != "" {
 		req.Header.Set("Authorization", tok)
 	}
@@ -183,7 +221,7 @@ func (c *Client) postJSON(ctx context.Context, apiPath string, reqBody any, outD
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("alist %s HTTP %d", apiPath, resp.StatusCode)
+		return &apiError{fmt.Sprintf("alist %s HTTP %d", apiPath, resp.StatusCode), resp.StatusCode == 401 || resp.StatusCode == 403}
 	}
 	var envelope struct {
 		Code    int             `json:"code"`
@@ -194,7 +232,7 @@ func (c *Client) postJSON(ctx context.Context, apiPath string, reqBody any, outD
 		return fmt.Errorf("alist %s decode: %w", apiPath, err)
 	}
 	if envelope.Code != 200 {
-		return fmt.Errorf("alist %s error (code=%d): %s", apiPath, envelope.Code, envelope.Message)
+		return &apiError{fmt.Sprintf("alist %s error (code=%d): %s", apiPath, envelope.Code, envelope.Message), envelope.Code == 401 || envelope.Code == 403}
 	}
 	if outData != nil && len(envelope.Data) > 0 && string(envelope.Data) != "null" {
 		if err := json.Unmarshal(envelope.Data, outData); err != nil {
@@ -206,6 +244,10 @@ func (c *Client) postJSON(ctx context.Context, apiPath string, reqBody any, outD
 
 // List browses an AList directory via POST /api/fs/list.
 func (c *Client) List(ctx context.Context, dirPath string, page, perPage int, refresh bool) ([]Entry, int, error) {
+	return c.list(ctx, dirPath, page, perPage, refresh, false)
+}
+
+func (c *Client) list(ctx context.Context, dirPath string, page, perPage int, refresh, requireTotal bool) ([]Entry, int, error) {
 	normDir := normalizeAListPath(dirPath)
 	if page <= 0 {
 		page = 1
@@ -215,7 +257,7 @@ func (c *Client) List(ctx context.Context, dirPath string, page, perPage int, re
 	}
 	var data struct {
 		Content []Entry `json:"content"`
-		Total   int     `json:"total"`
+		Total   *int    `json:"total"`
 	}
 	err := c.postJSON(ctx, "/api/fs/list", map[string]any{
 		"path":     normDir,
@@ -230,7 +272,12 @@ func (c *Client) List(ctx context.Context, dirPath string, page, perPage int, re
 	for i := range data.Content {
 		data.Content[i].FullPath = joinAListPath(normDir, data.Content[i].Name)
 	}
-	total := data.Total
+	total := len(data.Content)
+	if data.Total != nil && *data.Total >= 0 {
+		total = *data.Total
+	} else if requireTotal {
+		return nil, 0, fmt.Errorf("AList 目录 %s 未返回有效的条目总数", normDir)
+	}
 	if total < len(data.Content) {
 		total = len(data.Content)
 	}
@@ -317,4 +364,10 @@ func (c *Client) Get(ctx context.Context, targetPath string) (*FileDetail, error
 	}
 	detail.FullPath = norm
 	return &detail, nil
+}
+
+func (c *Client) PlaybackFile(ctx context.Context, path, userAgent string) (string, string, error) {
+	var d FileDetail
+	err := c.postWithUserAgent(ctx, "/api/fs/get", map[string]string{"path": normalizeAListPath(path), "password": ""}, &d, userAgent)
+	return d.RawURL, d.Sign, err
 }

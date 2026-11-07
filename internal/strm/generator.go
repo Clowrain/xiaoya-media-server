@@ -18,7 +18,13 @@ import (
 	"xiaoya-media-server/internal/resource/discovery"
 )
 
+type PathStore interface {
+	ClaimMaterializedPath(context.Context, string, string) (string, error)
+	ReleaseUnusedPath(context.Context, string, string) error
+}
+
 type Config struct {
+	PathStore               PathStore
 	OutputRoot              string
 	PreserveSourceStructure bool
 	MaxPathLength           int
@@ -77,57 +83,62 @@ func randSuffix() string {
 // If `targetPath` already exists with identical SHA-256 bytes, it skips writing to preserve mtime.
 // If OS path creation fails due to special characters, it falls back to ApplyFallbackTranslation.
 func WriteAtomicIdempotent(outputRoot, targetPath string, data []byte) (actualPath string, changed bool, err error) {
-	writeAttempt := func(dest string) (bool, error) {
-		if existing, rErr := os.ReadFile(dest); rErr == nil {
-			if bytes.Equal(existing, data) {
-				return false, nil
-			}
-		}
-		dir := filepath.Dir(dest)
-		if mErr := os.MkdirAll(dir, 0o755); mErr != nil {
-			return false, mErr
-		}
-		tmpName := filepath.Join(dir, fmt.Sprintf(".tmp-%s-%s", filepath.Base(dest), randSuffix()))
-		f, oErr := os.OpenFile(tmpName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-		if oErr != nil {
-			return false, oErr
-		}
-		if _, wErr := f.Write(data); wErr != nil {
-			f.Close()
-			_ = os.Remove(tmpName)
-			return false, wErr
-		}
-		if sErr := f.Sync(); sErr != nil {
-			f.Close()
-			_ = os.Remove(tmpName)
-			return false, sErr
-		}
-		if cErr := f.Close(); cErr != nil {
-			_ = os.Remove(tmpName)
-			return false, cErr
-		}
-		if rnErr := os.Rename(tmpName, dest); rnErr != nil {
-			_ = os.Remove(tmpName)
-			return false, rnErr
-		}
-		return true, nil
-	}
-
-	changed, err = writeAttempt(targetPath)
+	changed, err = writeAtomicAt(outputRoot, targetPath, data)
 	if err == nil {
 		return targetPath, changed, nil
 	}
-
-	// Fallback character translation from strm.py L159-180
 	fallbackPath := ApplyFallbackTranslation(outputRoot, targetPath)
 	if fallbackPath == targetPath {
 		return targetPath, false, err
 	}
-	changed, fbErr := writeAttempt(fallbackPath)
+	changed, fbErr := writeAtomicAt(outputRoot, fallbackPath, data)
 	if fbErr != nil {
 		return targetPath, false, fmt.Errorf("write %q failed (%v); fallback %q also failed (%w)", targetPath, err, fallbackPath, fbErr)
 	}
 	return fallbackPath, changed, nil
+}
+
+func writeAtomicAt(root, path string, data []byte) (bool, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false, err
+	}
+	if !filepath.IsLocal(rel) || rel == "." {
+		return false, fmt.Errorf("目标超出输出目录：%s", path)
+	}
+	if err = os.MkdirAll(root, 0755); err != nil {
+		return false, err
+	}
+	fs, err := os.OpenRoot(root)
+	if err != nil {
+		return false, err
+	}
+	defer fs.Close()
+	if old, e := fs.ReadFile(rel); e == nil && bytes.Equal(old, data) {
+		return false, nil
+	}
+	dir := filepath.Dir(rel)
+	if err = fs.MkdirAll(dir, 0755); err != nil {
+		return false, err
+	}
+	tmp := filepath.Join(dir, ".strm-"+randSuffix())
+	f, err := fs.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		return false, err
+	}
+	defer fs.Remove(tmp)
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	err = errors.Join(err, f.Close())
+	if err != nil {
+		return false, err
+	}
+	if err = fs.Rename(tmp, rel); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // isValidNFOPayload enforces V1.0 `prefer` NFO rules: non-empty, not HTML error page, not AList JSON error.
@@ -264,23 +275,114 @@ func (e *Engine) SyncAttachment(ctx context.Context, resID, outputRoot, sourcePa
 	return actualPath, nil
 }
 
+func (e *Engine) writeOwnedSTRM(ctx context.Context, root string, res discovery.MediaResource) (string, error) {
+	data, err := BuildSTRMURL(res.SourcePath, res.SourceContent, e.cfg.TargetBaseURL, e.cfg.ForceReplaceHost)
+	if err != nil {
+		return "", err
+	}
+	store := e.cfg.PathStore
+	p, err := store.ClaimMaterializedPath(ctx, res.ID, res.LocalSTRMPath)
+	if err != nil {
+		return "", err
+	}
+	if res.LocalSTRMPath != "" && p != res.LocalSTRMPath {
+		return "", fmt.Errorf("旧 STRM 路径归属不明：%s", res.LocalSTRMPath)
+	}
+	fresh := p == ""
+	if fresh {
+		base, err := MapLocalSTRMPath(root, res.SourcePath, res.RelPath, e.cfg.PreserveSourceStructure, e.cfg.MaxPathLength, nil)
+		if err != nil {
+			return "", err
+		}
+		ext := filepath.Ext(base)
+		stem := strings.TrimSuffix(filepath.Base(base), ext)
+		for attempt := 0; p == "" && attempt < 32; attempt++ {
+			candidate := base
+			if attempt > 0 {
+				suffix := "_" + shortSHA1(fmt.Sprintf("%s:%d", res.ID, attempt))
+				candidate = filepath.Join(filepath.Dir(base), truncateUTF8BaseBytes(stem, 255-len(suffix)-len(ext))+suffix+ext)
+			}
+			if _, err = os.Lstat(candidate); err == nil {
+				continue
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				return "", err
+			}
+			p, err = store.ClaimMaterializedPath(ctx, res.ID, candidate)
+			if err != nil {
+				return "", err
+			}
+		}
+		if p == "" {
+			return "", fmt.Errorf("无可用 STRM 路径：%s", base)
+		}
+	}
+	_, err = writeAtomicAt(root, p, []byte(data))
+	if err != nil && fresh {
+		fallback := ApplyFallbackTranslation(root, p)
+		// Never fall back to a pre-existing file, even if it has no recorded owner.
+		if _, statErr := os.Lstat(fallback); fallback != p && errors.Is(statErr, os.ErrNotExist) {
+			if e := store.ReleaseUnusedPath(ctx, res.ID, p); e != nil {
+				return "", errors.Join(err, e)
+			}
+			if claimed, e := store.ClaimMaterializedPath(ctx, res.ID, fallback); e != nil {
+				return "", errors.Join(err, e)
+			} else if claimed == fallback {
+				p = claimed
+				_, err = writeAtomicAt(root, p, []byte(data))
+			}
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+	if e.cfg.OnMediaMaterialized != nil {
+		e.cfg.OnMediaMaterialized(p)
+	}
+	return p, nil
+}
+
 // ProcessResource implements discovery.ResourceProcessor, routing discovered file nodes
 // to STRM generation or companion attachment sync while ensuring attachment failures never block STRM ingestion.
 func (e *Engine) ProcessResource(ctx context.Context, _ discovery.MonitorRoot, res discovery.MediaResource, _ string) (string, error) {
 	if res.IsDir {
 		return "", nil
 	}
+	root := e.cfg.OutputRoot
+	if res.OutputDir != "" {
+		root = res.OutputDir
+	}
 	cat := ClassifyFile(res.Name, res.SourceContent, e.cfg.AttachmentsMode)
 	switch cat {
 	case CategoryMedia:
-		actualPath, _, _, err := e.GenerateSTRM(e.cfg.OutputRoot, res.SourcePath, res.RelPath, res.SourceContent)
+		if e.cfg.PathStore != nil {
+			return e.writeOwnedSTRM(ctx, root, res)
+		}
+		actualPath, _, _, err := e.GenerateSTRM(root, res.SourcePath, res.RelPath, res.SourceContent)
 		return actualPath, err
 	case CategorySubtitle, CategoryImage, CategoryNFO:
-		actualPath, err := e.SyncAttachment(ctx, res.ID, e.cfg.OutputRoot, res.SourcePath, res.RelPath, res.SourceContent, cat)
+		actualPath, err := e.SyncAttachment(ctx, res.ID, root, res.SourcePath, res.RelPath, res.SourceContent, cat)
 		// Per Spec Section 5.4 & 5.7: attachment download failure is recorded in media_attachments
 		// if needed, and returned so retry queue can retry without blocking sibling STRM files.
 		return actualPath, err
 	default:
 		return "", nil
 	}
+}
+
+func (e *Engine) IsAttachment(r discovery.MediaResource) bool {
+	switch ClassifyFile(r.Name, r.SourceContent, e.cfg.AttachmentsMode) {
+	case CategoryImage, CategorySubtitle, CategoryNFO:
+		return true
+	}
+	return false
+}
+
+func (e *Engine) RequiresSTRMRepair(r discovery.MediaResource) bool {
+	expected, err := BuildSTRMURL(r.SourcePath, r.SourceContent, e.cfg.TargetBaseURL, e.cfg.ForceReplaceHost)
+	if err != nil {
+		return true
+	}
+	actual, err := os.ReadFile(r.LocalSTRMPath)
+	return err != nil || !bytes.Equal(actual, []byte(expected))
 }

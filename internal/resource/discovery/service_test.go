@@ -218,3 +218,127 @@ func TestDiscoveryLifecycleBaselineIncrementalDiffMissingRestore(t *testing.T) {
 		t.Fatalf("expected restored E28 Status=ACTIVE, got %+v", ep28Restored)
 	}
 }
+
+func TestReconciliationRollsBackChangesWhenCursorCannotCommit(t *testing.T) {
+	_, source, reader, store := setupTestXiaoyaAndStore(t)
+	ctx := context.Background()
+	s := NewService(store, reader, &mockSTRMProcessor{})
+	roots, err := s.RegisterMonitorRoots(ctx, []string{"/每日更新/电视剧/国产剧"}, 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := roots[0].ID
+	if _, err = s.ScanRootFull(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	previous, _, _ := store.GetCursor(ctx, id)
+	if _, err = source.Exec("DELETE FROM nodes WHERE id=641745"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().Exec(`CREATE TRIGGER fail_cursor BEFORE UPDATE ON sync_cursors BEGIN SELECT RAISE(ABORT,'cursor write failed');END;`); err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.ScanRootFull(ctx, id)
+	if err == nil || b.Status != BatchFailed {
+		t.Fatalf("expected failed batch: %+v %v", b, err)
+	}
+	got, _, _ := store.GetCursor(ctx, id)
+	r, _, _ := store.GetResourceBySourceKey(ctx, "sqlite:641745")
+	missing, e := store.ListChanges(ctx, "", ChangeMissing, 0, 50)
+	if e != nil || got != previous || r.Status != StatusActive || len(missing) != 0 {
+		t.Fatalf("partial snapshot escaped failed transaction: %+v %+v %+v %v", got, r, missing, e)
+	}
+}
+
+func TestCancelDirectoryManagementPreservesRecordsAndSkipsFutureDescendants(t *testing.T) {
+	_, source, reader, store := setupTestXiaoyaAndStore(t)
+	ctx := context.Background()
+	s := NewService(store, reader, &mockSTRMProcessor{})
+	root, err := store.UpsertMonitorRoot(ctx, "/每日更新/电视剧/国产剧", true, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ScanRootFull(ctx, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	dir, _, _ := store.GetResourceBySourceKey(ctx, "sqlite:641716")
+	file, _, _ := store.GetResourceBySourceKey(ctx, "sqlite:641719")
+	if p, e := s.SetUnmanaged(ctx, dir.ID, true); e != nil || !p.Unmanaged || p.AffectedResources != 30 {
+		t.Fatalf("preview=%+v error=%v", p, e)
+	}
+	if _, err = source.Exec("INSERT INTO nodes VALUES(641746,'E28',641718,0,'http://xiaoya.host:5678/d/E28.mp4')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ScanRootIncremental(ctx, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := store.GetResourceBySourceKey(ctx, "sqlite:641746"); ok {
+		t.Fatal("cancelled subtree accepted new episode")
+	}
+	kept, err := store.GetResource(ctx, file.ID)
+	if err != nil || kept.LocalSTRMPath != file.LocalSTRMPath {
+		t.Fatalf("existing file mapping lost: %+v %v", kept, err)
+	}
+	if err = s.RestoreManagement(ctx, dir.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ScanRootIncremental(ctx, root.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := store.GetResourceBySourceKey(ctx, "sqlite:641746"); !ok {
+		t.Fatal("restored subtree did not catch up")
+	}
+}
+
+func TestLegacyTrackingMigrationKeepsOnlyConfirmedRoots(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "legacy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = db.Exec(resourceEngineDDL); err != nil {
+		t.Fatal(err)
+	}
+	store := NewSQLStore(db, "sqlite")
+	for _, v := range []struct {
+		id, path string
+		enabled  bool
+	}{
+		{"once", "/Once", false}, {"ambiguous", "/Once/Season 1", true},
+		{"tracked", "/Tracked", true}, {"implicit", "/Tracked/Season 1", true},
+	} {
+		if err = store.UpsertResource(ctx, db, MediaResource{ID: v.id, SourceKey: "alist:" + v.path, OriginType: OriginAListManual, SourcePath: v.path, Name: v.path, IsDir: true, Status: StatusActive}); err != nil {
+			t.Fatal(err)
+		}
+		if err = store.UpsertManagedResource(ctx, db, ManagedResource{ResourceID: v.id, ManageMode: ManageManualSeriesDir, Enabled: v.enabled}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check := func(review bool, want string) {
+		t.Helper()
+		rs, e := store.TrackedAListRoots(ctx, review)
+		if e != nil || len(rs) != 1 || rs[0].ResourceID != want {
+			t.Fatalf("review=%t roots=%+v err=%v", review, rs, e)
+		}
+	}
+	check(false, "tracked")
+	check(true, "ambiguous")
+	if err = store.SetAListTracking(ctx, "ambiguous", true); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	review, e := store.TrackedAListRoots(ctx, true)
+	if e != nil || len(review) != 0 {
+		t.Fatalf("restart reintroduced resolved review: %+v %v", review, e)
+	}
+	active, e := store.TrackedAListRoots(ctx, false)
+	if e != nil || len(active) != 2 {
+		t.Fatalf("restart lost tracking settings: %+v %v", active, e)
+	}
+}

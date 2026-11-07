@@ -114,7 +114,11 @@ func (a *App) commitSnapshot(lib string, current fileSnapshot, allowEmpty bool, 
 	}
 	// Under the V1.0 `keep` policy, items backed by managed_resources(deletion_policy='keep')
 	// are marked availability='MISSING' instead of deleted, preserving items and userdata.
-	if _, e = tx.Exec("UPDATE items SET availability='AVAILABLE' WHERE lib=? AND kind IN ('Movie','Episode') AND EXISTS (SELECT 1 FROM present_media p WHERE p.path=items.path)", lib); e != nil {
+	if _, e = tx.Exec(`UPDATE items SET availability=CASE
+WHEN EXISTS (SELECT 1 FROM media_resources mr WHERE mr.local_strm_path=items.path AND mr.status='MISSING')
+ AND NOT EXISTS (SELECT 1 FROM media_resources mr WHERE mr.local_strm_path=items.path AND mr.status<>'MISSING')
+THEN 'MISSING' ELSE 'AVAILABLE' END
+WHERE lib=? AND kind IN ('Movie','Episode') AND EXISTS (SELECT 1 FROM present_media p WHERE p.path=items.path)`, lib); e != nil {
 		return e
 	}
 	if _, e = tx.Exec("UPDATE items SET availability='MISSING' WHERE lib=? AND kind IN ('Movie','Episode') AND NOT EXISTS (SELECT 1 FROM present_media p WHERE p.path=items.path) AND EXISTS (SELECT 1 FROM media_resources mr JOIN managed_resources mg ON mg.resource_id=mr.id WHERE mr.local_strm_path=items.path AND mg.deletion_policy='keep')"+filter, args...); e != nil {

@@ -4,11 +4,11 @@ import {
   Trash2, Play, ChevronRight, Folder, FileVideo, 
   Search, ArrowLeft, ArrowRight, CheckCircle2, BookmarkPlus 
 } from 'lucide-react';
-import { SystemOverview, MonitorRoot, AListFileItem } from '../../types';
+import { SystemOverview, MonitorRoot, AListFileItem, AdminJob, AdminLibrary } from '../../types';
 import { 
   fetchSystemOverview, fetchMonitorRoots, addMonitorRoot, 
   updateMonitorRoot, deleteMonitorRoot, triggerSync, 
-  importResource, browseAList, searchAList, notifyToast 
+  importResource, browseAList, searchAList, notifyToast, fetchAdminJobs, fetchAdminLibraries, request
 } from '../../api/client';
 
 interface AdminXiaoyaSyncProps {
@@ -36,6 +36,18 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
   const [searchInput, setSearchInput] = useState<string>('');
   const [activeSearch, setActiveSearch] = useState<string>('');
   const [alistLoading, setAlistLoading] = useState<boolean>(false);
+  const [jobs, setJobs] = useState<AdminJob[]>([]);
+  const [jobsError, setJobsError] = useState('');
+  const [libraries, setLibraries] = useState<AdminLibrary[]>([]);
+  const [libraryID, setLibraryID] = useState('');
+  const [outputDir, setOutputDir] = useState('');
+  const hasRunningJob = jobs.some(j => j.status === 'RUNNING');
+
+  const loadJobs = async () => {
+    try { setJobs(await fetchAdminJobs()); setJobsError(''); }
+    catch (err: any) { setJobsError(err.message || '无法读取任务结果'); }
+  };
+
 
   // Load Overview & Roots
   const loadSystemInfo = async () => {
@@ -99,7 +111,28 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
   useEffect(() => {
     loadSystemInfo();
     loadDirectory('/', 1);
+    loadJobs();
+    fetchAdminLibraries().then(setLibraries).catch(err => notifyToast(err.message, 'error'));
   }, []);
+
+  useEffect(() => {
+    if (!hasRunningJob) return;
+    const timer = setInterval(async () => {
+      try {
+        const running = jobs.filter(j => j.status === 'RUNNING');
+        const updated = await Promise.all(running.map(j => request<AdminJob>(`/api/jobs/${encodeURIComponent(j.id)}`)));
+        const byID = new Map(updated.map(j => [j.id, j]));
+        setJobs(current => current.map(j => byID.get(j.id) ?? j));
+        setJobsError('');
+      } catch (err: any) { setJobsError(err.message || '无法读取任务进度'); }
+    }, 1250);
+    return () => clearInterval(timer);
+  }, [hasRunningJob, jobs]);
+
+  useEffect(() => {
+    if (!hasRunningJob && jobs.length > 0) loadSystemInfo();
+  }, [hasRunningJob]);
+
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -150,13 +183,11 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
   };
 
   const handleTriggerSync = async (id: string, full: boolean) => {
-    notifyToast(full ? '全量同步已触发…' : '增量同步已触发…', 'info');
     try {
-      const res = await triggerSync(id, full);
-      notifyToast(`同步完成：处理 ${(res.batches || []).length} 个批次`, 'success');
-      loadSystemInfo();
+      const job = await triggerSync(id, full);
+      setJobs(current => [job, ...current.filter(j => j.id !== job.id)]);
     } catch (err: any) {
-      notifyToast(err.message || '触发同步失败', 'error');
+      notifyToast(err.message || '提交同步失败', 'error');
     }
   };
 
@@ -177,11 +208,9 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
   // AList Import Resource
   const handleImport = async (item: AListFileItem, track: boolean) => {
     const itemPath = item.full_path || (item.parent ? `${item.parent.replace(/\/$/, '')}/${item.name}` : (alistPath === '/' ? `/${item.name}` : `${alistPath}/${item.name}`));
-    notifyToast(track ? `正在整剧追更入库「${item.name}」…` : `正在单次入库「${item.name}」…`, 'info');
     try {
-      const res = await importResource(itemPath, item.is_dir, track);
-      notifyToast(`导入成功：新增/变更 ${res.created_or_updated || 1} 个资源`, 'success');
-      loadSystemInfo();
+      const job = await importResource(itemPath, item.is_dir, track, libraryID, outputDir);
+      setJobs(current => [job, ...current.filter(j => j.id !== job.id)]);
     } catch (err: any) {
       notifyToast(err.message || '导入资源失败', 'error');
     }
@@ -208,7 +237,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
             <HardDrive className="w-5 h-5" />
           </div>
           <div>
-            <div className="text-xs text-zinc-400">STRM 文件总数</div>
+            <div className="text-xs text-zinc-400">已登记 STRM</div>
             <div className="text-xl font-bold font-mono text-zinc-100">
               {strmCount.toLocaleString()}
             </div>
@@ -255,6 +284,35 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
           </button>
         </div>
       </div>
+
+      <section aria-live="polite" aria-label="同步与入库任务" className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold">同步与入库任务</h3>
+          <button type="button" onClick={loadJobs} className="rounded-lg px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">刷新</button>
+        </div>
+        {jobsError && <p className="mt-2 text-sm text-rose-300">{jobsError}</p>}
+        <div className="mt-2 divide-y divide-zinc-800">
+          {jobs.filter(j => j.kind !== 'task').slice(0, 8).map(job => {
+            const r = job.result;
+            const unindexed = r?.unindexed_strms?.length ?? r?.batches?.reduce((sum,b) => sum + (b.unindexed_strm_count ?? 0),0) ?? 0;
+            const status = job.status === 'SUCCESS' && unindexed > 0 ? '生成完成' : {RUNNING: '运行中', SUCCESS: '全部成功', PARTIAL: '部分失败', FAILED: '全部失败', INTERRUPTED: '已中断，可重新提交'}[job.status];
+            const count = (key: 'added_count' | 'modified_count' | 'renamed_count' | 'moved_count' | 'missing_count' | 'restored_count' | 'failed_count') => r?.batches?.reduce((sum, b) => sum + b[key], 0) ?? 0;
+            const changed = count('modified_count') + count('renamed_count') + count('moved_count');
+            const errors = [...new Set([job.error, ...(r?.errors?.length ? r.errors : (r?.batches?.map(b => b.error_message) ?? []))].filter(Boolean))];
+            const subject = r?.source_path || r?.batches?.map(b => b.root_path).join('、') || (job.kind === 'import' ? job.scope.slice(7) : job.scope.startsWith('scan:/') ? job.scope.slice(5) : '监控目录');
+            return <div key={job.id} className="py-3 text-sm">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className={job.status === 'SUCCESS' ? 'text-emerald-300' : job.status === 'RUNNING' ? 'text-sky-300' : 'text-amber-300'}>{status}</span>
+                <span className="min-w-0 break-all text-zinc-200">{subject}</span>
+              </div>
+              {r && job.kind === 'sync' && <p className="mt-1 text-zinc-400">新增 {count('added_count')} · 变更 {changed} · 缺失 {count('missing_count')} · 恢复 {count('restored_count')} · 处理失败 {count('failed_count')}{unindexed > 0 && <span className="ml-2 text-amber-300">已生成，未收录 {unindexed}</span>}</p>}
+              {r && job.kind === 'import' && <p className="mt-1 text-zinc-400">文件成功 {r.imported_files ?? 0} · 失败 {r.failed_files ?? 0} · STRM {r.generated_strms?.length ?? 0}{!!r.unindexed_strms?.length && <span className="ml-2 text-amber-300">已生成，未收录 {r.unindexed_strms.length}</span>}</p>}
+              {errors.map(error => <p key={error} className="mt-1 break-all text-rose-300">{error}</p>)}
+            </div>;
+          })}
+          {!jobsError && jobs.every(j => j.kind === 'task') && <p className="py-2 text-sm text-zinc-400">提交同步或入库后，结果会显示在这里。</p>}
+        </div>
+      </section>
 
       {/* Monitor Roots Management */}
       <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-4">
@@ -303,6 +361,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                       <span className={r.enabled ? 'text-emerald-400' : 'text-zinc-500'}>
                         {r.enabled ? '已启用监控' : '已暂停'}
                       </span>
+                      {r.last_error && <p className="mt-1 break-all text-amber-300">{r.last_error}</p>}
                     </div>
                   </div>
                 </div>
@@ -315,6 +374,14 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                   >
                     {r.enabled ? '停用' : '启用'}
                   </button>
+                  <button type="button" className="rounded-lg bg-zinc-800 px-2.5 py-1 text-zinc-300" onClick={async () => {
+                    const value = prompt('自动同步间隔（秒）', String(r.interval_sec));
+                    if (value === null) return;
+                    const interval = Number(value);
+                    if (!Number.isSafeInteger(interval) || interval < 1) { notifyToast('请输入正整数秒数', 'error'); return; }
+                    try { await updateMonitorRoot(r.id, r.enabled, interval); loadSystemInfo(); }
+                    catch (err: any) { notifyToast(err.message, 'error'); }
+                  }}>调整间隔</button>
                   <button
                     type="button"
                     onClick={() => handleTriggerSync(r.id, false)}
@@ -446,6 +513,23 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
         </div>
 
         {/* Table of items */}
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="grid gap-1 text-sm text-zinc-300">
+            导入媒体库
+            <select value={libraryID} onChange={e => { setLibraryID(e.target.value); setOutputDir(''); }} className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2">
+              <option value="">使用全局 STRM 目录</option>
+              {libraries.map(l => <option key={l.Id} value={l.Id}>{l.Name}</option>)}
+            </select>
+          </label>
+          {libraryID && <label className="grid gap-1 text-sm text-zinc-300">
+            输出目录
+            <select value={outputDir} onChange={e => setOutputDir(e.target.value)} className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2">
+              <option value="">媒体库首个目录</option>
+              {(libraries.find(l => l.Id === libraryID)?.Paths ?? []).map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </label>}
+        </div>
+
         <div className="border border-zinc-800 rounded-xl overflow-hidden bg-zinc-950/40">
           <table className="w-full text-left text-xs">
             <thead className="bg-zinc-900/70 border-b border-zinc-800 text-zinc-400">

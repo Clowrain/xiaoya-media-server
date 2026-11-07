@@ -2,6 +2,7 @@ package embyserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -325,22 +326,26 @@ func refreshAListSignOrLink(r *http.Request, baseEndpoint, alistPath, alistToken
 	if err := json.Unmarshal(b, &resp); err != nil || resp.Code != 200 {
 		return "", "", fmt.Errorf("alist fs/get failed: %s", resp.Message)
 	}
-	if resp.Data.RawURL != "" {
-		if validated, vErr := validateResolvedLink(resp.Data.RawURL, target); vErr == nil {
+	return validateAListFile(r, target, resp.Data.RawURL, resp.Data.Sign)
+}
+
+func validateAListFile(r *http.Request, target *url.URL, raw, sign string) (string, string, error) {
+	if raw != "" {
+		if validated, vErr := validateResolvedLink(raw, target); vErr == nil {
 			parsedURL, _ := url.Parse(validated)
 			if !isInternalXiaoya(parsedURL, target) {
-				return validated, resp.Data.Sign, nil
+				return validated, sign, nil
 			}
 			// If RawURL points to an internal redirect, follow it to get final CDN link
 			if targetURL, tErr := url.Parse(validated); tErr == nil {
 				if finalLink, _, dErr := tryXiaoyaDirectGet(r, targetURL); dErr == nil && finalLink != "" {
-					return finalLink, resp.Data.Sign, nil
+					return finalLink, sign, nil
 				}
 			}
-			return validated, resp.Data.Sign, nil
+			return validated, sign, nil
 		}
 	}
-	return "", resp.Data.Sign, nil
+	return "", sign, nil
 }
 
 func xiaoyaLink(r *http.Request, raw, endpoint string) (string, error) {
@@ -348,6 +353,26 @@ func xiaoyaLink(r *http.Request, raw, endpoint string) (string, error) {
 }
 
 func xiaoyaLinkWithToken(r *http.Request, raw, endpoint, alistToken string) (string, error) {
+	return xiaoyaLinkWithRefresh(r, raw, endpoint, alistToken, nil)
+}
+
+type alistFileLookup func(context.Context, string, string) (string, string, error)
+
+func (a *App) SetAListPlayback(base string, get alistFileLookup) {
+	a.alistPlaybackBase = strings.TrimRight(base, "/")
+	a.alistPlayback = get
+}
+
+func (a *App) resolvePlaybackLink(r *http.Request, raw, endpoint string) (string, error) {
+	var get alistFileLookup
+	if strings.TrimRight(endpoint, "/") == a.alistPlaybackBase {
+		get = a.alistPlayback
+	}
+	return xiaoyaLinkWithRefresh(r, raw, endpoint, a.alistTokenForPlayback(), get)
+}
+
+func xiaoyaLinkWithRefresh(r *http.Request, raw, endpoint, alistToken string, get alistFileLookup) (string, error) {
+
 	source, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("invalid STRM")
@@ -390,7 +415,16 @@ func xiaoyaLinkWithToken(r *http.Request, raw, endpoint, alistToken string) (str
 	// Fallback 2: Refresh raw_url or sign via AList /api/fs/get for /d/... paths.
 	if strings.HasPrefix(source.Path, "/d/") {
 		alistPath := strings.TrimPrefix(source.Path, "/d")
-		rawURL, newSign, fErr := refreshAListSignOrLink(r, baseEndpoint, alistPath, strings.TrimSpace(alistToken), target)
+		var rawURL, newSign string
+		var fErr error
+		if get != nil {
+			rawURL, newSign, fErr = get(r.Context(), alistPath, r.UserAgent())
+			if fErr == nil {
+				rawURL, newSign, fErr = validateAListFile(r, target, rawURL, newSign)
+			}
+		} else {
+			rawURL, newSign, fErr = refreshAListSignOrLink(r, baseEndpoint, alistPath, strings.TrimSpace(alistToken), target)
+		}
 		if fErr == nil && rawURL != "" {
 			return rawURL, nil
 		}
@@ -416,7 +450,7 @@ func (a *App) alistTokenForPlayback() string {
 }
 
 func (a *App) resolveXiaoya(w http.ResponseWriter, r *http.Request, x Item) {
-	link, err := xiaoyaLinkWithToken(r, x.URL, os.Getenv("XIAOYA_URL"), a.alistTokenForPlayback())
+	link, err := a.resolvePlaybackLink(r, x.URL, os.Getenv("XIAOYA_URL"))
 	if err != nil {
 		fail(w, http.StatusBadGateway, "Xiaoya 直链解析失败: "+err.Error())
 		return

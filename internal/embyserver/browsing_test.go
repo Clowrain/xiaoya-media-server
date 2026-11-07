@@ -19,10 +19,9 @@ func catalogFixture(t *testing.T) (*App, string, string) {
 	if _, e := a.db.Exec("INSERT INTO tokens VALUES(?,?,?,?)", digest("browse-test"), uid, "browse-device", time.Now().Unix()+600); e != nil {
 		t.Fatal(e)
 	}
-	if e := os.MkdirAll("/media", 0755); e != nil {
-		t.Fatal(e)
-	}
-	dir, e := os.MkdirTemp("/media", "compat-")
+	fixtureRoot := t.TempDir()
+	t.Setenv("MEDIA_ROOTS", fixtureRoot)
+	dir, e := os.MkdirTemp(fixtureRoot, "compat-")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -149,7 +148,7 @@ func TestSeriesNavigationAndLatest(t *testing.T) {
 		path  string
 		count float64
 		kind  string
-	}{{"/Shows/s/Seasons", 2, "Season"}, {"/Shows/s/Episodes", 2, "Episode"}, {"/Shows/s/Episodes?SeasonId=s2", 1, "Episode"}, {"/Items?ParentId=s&Recursive=True&IncludeItemTypes=Episode", 2, "Episode"}, {"/Shows/NextUp?SeriesId=s", 0, "Episode"}} {
+	}{{"/Shows/s/Seasons", 2, "Season"}, {"/Shows/s/Episodes", 2, "Episode"}, {"/Shows/s/Episodes?SeasonId=s2", 1, "Episode"}, {"/Items?ParentId=s&Recursive=True&IncludeItemTypes=Episode", 2, "Episode"}, {"/Shows/NextUp?SeriesId=s", 1, "Episode"}, {"/Shows/NextUp", 0, "Episode"}} {
 		m := decodeM(t, browseGet(a, v.path, true))
 		if m["TotalRecordCount"] != v.count {
 			t.Fatal(v.path, m)
@@ -162,7 +161,7 @@ func TestSeriesNavigationAndLatest(t *testing.T) {
 	}
 	a.db.Exec("INSERT INTO userdata(user_id,item,played) VALUES(?,'e1',1)", uid)
 	m := decodeM(t, browseGet(a, "/Shows/NextUp?SeriesId=s", true))
-	if len(m["Items"].([]any)) != 0 || m["TotalRecordCount"] != float64(0) {
+	if items := m["Items"].([]any); len(items) != 1 || items[0].(map[string]any)["Id"] != "e2" {
 		t.Fatal(m)
 	}
 	w := browseGet(a, "/Users/"+uid+"/Items/Latest", true)

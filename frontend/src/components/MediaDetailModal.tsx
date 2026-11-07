@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Play, RefreshCw, Edit3, Trash2, Search, X, Star, Calendar, Clock, Film } from 'lucide-react';
+import { RefreshCw, Edit3, Trash2, Search, X, Star, Calendar, Clock, Film } from 'lucide-react';
 import { MediaItem } from '../types';
 import { refreshItemMediaInfo, renameMediaItem, deleteMediaItem, notifyToast } from '../api/client';
 
@@ -8,7 +8,6 @@ interface MediaDetailModalProps {
   isOpen: boolean;
   isAdmin: boolean;
   onClose: () => void;
-  onPlay: (item: MediaItem) => void;
   onRematchTmdb: (item: MediaItem) => void;
   onItemUpdated: () => void;
 }
@@ -18,7 +17,6 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   isOpen,
   isAdmin,
   onClose,
-  onPlay,
   onRematchTmdb,
   onItemUpdated,
 }) => {
@@ -119,7 +117,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
               </h2>
 
               <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-zinc-300">
-                {item.ProductionYear && (
+                {(item.ProductionYear ?? 0) > 0 && (
                   <span className="flex items-center gap-1 font-mono">
                     <Calendar className="w-3.5 h-3.5 text-zinc-400" />
                     {item.ProductionYear}
@@ -147,19 +145,9 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-5">
+          <p className="text-sm text-zinc-400">使用 Emby 兼容客户端播放。</p>
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => {
-                onPlay(item);
-                onClose();
-              }}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm shadow-lg shadow-emerald-600/30 transition transform hover:scale-[1.02]"
-            >
-              <Play className="w-4 h-4 fill-white" />
-              立即播放
-            </button>
-
             <button
               onClick={handleRefresh}
               disabled={isRefreshing}

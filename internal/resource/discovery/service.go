@@ -2,11 +2,14 @@ package discovery
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"xiaoya-media-server/internal/resource/xiaoya"
@@ -14,679 +17,549 @@ import (
 
 var ErrRootScanInProgress = errors.New("a scan is already running for this monitor root")
 
-// ResourceProcessor materializes STRM and companion attachments for a discovered file resource.
 type ResourceProcessor interface {
 	ProcessResource(ctx context.Context, root MonitorRoot, res MediaResource, changeType string) (localSTRMPath string, err error)
 }
 
 type Service struct {
 	store     *SQLStore
-	reader    *xiaoya.Reader
+	reader    atomic.Pointer[xiaoya.Reader]
 	processor ResourceProcessor
-
-	locksMu   sync.Mutex
-	rootLocks map[string]*sync.Mutex
+	writes    sync.Mutex
+	scanMu    sync.Mutex
+	running   map[string]string
 }
 
 func NewService(store *SQLStore, reader *xiaoya.Reader, processor ResourceProcessor) *Service {
-	return &Service{
-		store:     store,
-		reader:    reader,
-		processor: processor,
-		rootLocks: make(map[string]*sync.Mutex),
-	}
+	s := &Service{store: store, processor: processor, running: map[string]string{}}
+	s.SetReader(reader)
+	return s
 }
-
 func (s *Service) SetProcessor(p ResourceProcessor) {
+	s.writes.Lock()
+	defer s.writes.Unlock()
 	s.processor = p
 }
-
-func (s *Service) SetReader(r *xiaoya.Reader) {
-	s.reader = r
-}
-
-func (s *Service) Reader() *xiaoya.Reader {
-	return s.reader
-}
-
-func (s *Service) Store() *SQLStore {
-	return s.store
-}
-
-func (s *Service) tryLockRoot(rootID string) (func(), bool) {
-	s.locksMu.Lock()
-	mu := s.rootLocks[rootID]
-	if mu == nil {
-		mu = &sync.Mutex{}
-		s.rootLocks[rootID] = mu
+func (s *Service) SetReader(r *xiaoya.Reader) { s.reader.Store(r) }
+func (s *Service) Reader() *xiaoya.Reader     { return s.reader.Load() }
+func (s *Service) Store() *SQLStore           { return s.store }
+func (s *Service) RootPathBusy(path string) bool {
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
+	for _, p := range s.running {
+		if p == path || hasPathPrefix(p, path) || hasPathPrefix(path, p) {
+			return true
+		}
 	}
-	s.locksMu.Unlock()
+	return false
+}
 
-	if !mu.TryLock() {
-		return nil, false
+func (s *Service) acquireRoot(root MonitorRoot) (func(), bool) {
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
+	for _, p := range s.running {
+		if p == root.RootPath || hasPathPrefix(p, root.RootPath) || hasPathPrefix(root.RootPath, p) {
+			return nil, false
+		}
 	}
-	return mu.Unlock, true
+	s.running[root.ID] = root.RootPath
+	return func() { s.scanMu.Lock(); delete(s.running, root.ID); s.scanMu.Unlock() }, true
 }
 
-func sqliteSourceKey(nodeID int64) string {
-	return "sqlite:" + strconv.FormatInt(nodeID, 10)
-}
-
-func alistSourceKey(sourcePath string) string {
-	return "alist:" + sourcePath
-}
-
-// RegisterMonitorRoots normalizes and registers initial or user-added monitor root paths.
 func (s *Service) RegisterMonitorRoots(ctx context.Context, paths []string, interval time.Duration) ([]MonitorRoot, error) {
 	sec := int64(interval.Seconds())
 	if sec <= 0 {
 		sec = 600
 	}
-	out := make([]MonitorRoot, 0, len(paths))
+	roots := make([]MonitorRoot, 0, len(paths))
 	for _, raw := range paths {
 		norm, _, err := xiaoya.NormalizeMonitorPath(raw)
 		if err != nil {
 			return nil, fmt.Errorf("normalize monitor root %q: %w", raw, err)
 		}
-		mr, err := s.store.UpsertMonitorRoot(ctx, norm, true, sec)
+		root, err := s.store.SeedMonitorRoot(ctx, norm, sec)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, mr)
+		roots = append(roots, root)
 	}
-	return out, nil
+	return roots, nil
 }
 
-// ScanRootFull performs a complete subtree scan (BASELINE on first run, FULL thereafter).
-// Rules enforced:
-//   - Concurrent scans on the same root are rejected.
-//   - Incomplete/failed scans NEVER mark resources MISSING and NEVER advance SyncCursor.
-//   - Disappearing resources on a complete scan transition to MISSING under the `keep` policy.
-func (s *Service) ScanRootFull(ctx context.Context, rootID string) (SyncBatch, error) {
-	unlock, ok := s.tryLockRoot(rootID)
+func (s *Service) ScanRootFull(ctx context.Context, id string) (SyncBatch, error) {
+	return s.scan(ctx, id, true)
+}
+func (s *Service) ScanRootIncremental(ctx context.Context, id string) (SyncBatch, error) {
+	return s.scan(ctx, id, false)
+}
+
+func (s *Service) failBatch(b SyncBatch, err error) (SyncBatch, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	b.Status = BatchFailed
+	b.ErrorMessage = err.Error()
+	b.FinishedAt = time.Now().Unix()
+	if e := s.store.FinishBatch(ctx, b); e != nil {
+		err = errors.Join(err, e)
+	}
+	if b.RootID != "" {
+		if e := s.store.UpdateMonitorRootStatus(ctx, b.RootID, 0, b.ID, b.Status, b.ErrorMessage, b.FinishedAt); e != nil {
+			err = errors.Join(err, e)
+		}
+	}
+	return b, err
+}
+
+func (s *Service) scan(ctx context.Context, id string, full bool) (SyncBatch, error) {
+	root, err := s.store.GetMonitorRoot(ctx, id)
+	if err != nil {
+		return SyncBatch{}, err
+	}
+	release, ok := s.acquireRoot(root)
 	if !ok {
 		return SyncBatch{}, ErrRootScanInProgress
 	}
-	defer unlock()
-
-	root, err := s.store.GetMonitorRoot(ctx, rootID)
+	defer release()
+	cursor, has, err := s.store.GetCursor(ctx, id)
 	if err != nil {
 		return SyncBatch{}, err
 	}
-	if s.reader == nil {
-		return SyncBatch{}, errors.New("xiaoya sqlite reader is not configured")
-	}
-
-	_, hasCursor, err := s.store.GetCursor(ctx, root.ID)
-	if err != nil {
-		return SyncBatch{}, err
-	}
-	isBaseline := !hasCursor
-	mode := ScanModeFull
-	if isBaseline {
+	mode := ScanModeIncremental
+	switch {
+	case !has:
 		mode = ScanModeBaseline
+		full = true
+	case full:
+		mode = ScanModeFull
 	}
-
-	batch, err := s.store.CreateBatch(ctx, root.ID, root.RootPath, mode, isBaseline)
+	batch, err := s.store.CreateBatch(ctx, id, root.RootPath, mode, !has)
 	if err != nil {
-		return SyncBatch{}, err
+		return batch, err
 	}
-	_ = s.store.UpdateMonitorRootStatus(ctx, root.ID, root.SourceNodeID, batch.ID, BatchRunning, "", 0)
-
-	failScan := func(scanErr error) (SyncBatch, error) {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		batch.Status = BatchFailed
-		batch.FinishedAt = time.Now().Unix()
-		batch.ErrorMessage = scanErr.Error()
-		_ = s.store.FinishBatch(bgCtx, batch)
-		_ = s.store.UpdateMonitorRootStatus(bgCtx, root.ID, root.SourceNodeID, batch.ID, BatchFailed, scanErr.Error(), batch.FinishedAt)
-		return batch, scanErr
+	if err = s.store.UpdateMonitorRootStatus(ctx, id, 0, batch.ID, BatchRunning, "", 0); err != nil {
+		return s.failBatch(batch, err)
+	}
+	reader := s.Reader()
+	if reader == nil {
+		return s.failBatch(batch, errors.New("小雅 SQLite 未连接"))
 	}
 
-	rootNode, err := s.reader.ResolvePath(ctx, root.RootPath)
-	if err != nil {
-		return failScan(err)
-	}
-
-	existingByKey, err := s.store.LoadRootResourcesBySourceKey(ctx, root.ID)
-	if err != nil {
-		return failScan(err)
-	}
-
-	seenKeys := make(map[string]bool, len(existingByKey)+64)
-	type pendingProcess struct {
-		res        MediaResource
-		changeType string
-	}
-	var toProcess []pendingProcess
-
-	now := time.Now().Unix()
-	stats, walkErr := s.reader.WalkSubtreeBatched(ctx, rootNode, 500, func(nodes []xiaoya.Node) error {
-		tx, txErr := s.store.DB().BeginTx(ctx, nil)
-		if txErr != nil {
-			return txErr
+	var nodes []xiaoya.Node
+	var rootNode xiaoya.Node
+	var high int64
+	err = reader.WithSnapshot(ctx, func(view *xiaoya.Reader) error {
+		var e error
+		rootNode, e = view.ResolvePath(ctx, root.RootPath)
+		if e != nil {
+			return e
 		}
-		defer tx.Rollback()
-
-		for _, n := range nodes {
-			sKey := sqliteSourceKey(n.ID)
-			seenKeys[sKey] = true
-			hashes := ComputeNodeHashes(n.Name, n.FullPath, n.ParentID, n.IsDir, n.Content)
-
-			old, existed := existingByKey[sKey]
-			if !existed {
-				changeType := ChangeAdded
-				if isBaseline {
-					changeType = ChangeBaselineAdded
-				}
-				res := MediaResource{
-					ID:               StableID(sKey),
-					SourceKey:        sKey,
-					OriginType:       OriginXiaoyaSQLite,
-					RootID:           root.ID,
-					SourceNodeID:     n.ID,
-					SourceParentID:   n.ParentID,
-					SourcePath:       n.FullPath,
-					RelPath:          n.RelPath,
-					Name:             n.Name,
-					IsDir:            n.IsDir,
-					SourceContent:    n.Content,
-					NameHash:         hashes.NameHash,
-					PathHash:         hashes.PathHash,
-					ContentHash:      hashes.ContentHash,
-					SnapshotHash:     hashes.SnapshotHash,
-					Status:           StatusActive,
-					FirstSeenBatchID: batch.ID,
-					LastSeenBatchID:  batch.ID,
-					FirstSeenAt:      now,
-					LastSeenAt:       now,
-					LastChangedAt:    now,
-				}
-				if err := s.store.UpsertResource(ctx, tx, res); err != nil {
-					return err
-				}
-				if err := s.store.UpsertManagedResource(ctx, tx, ManagedResource{
-					ResourceID:     res.ID,
-					ManageMode:     ManageAutoMonitor,
-					RootID:         root.ID,
-					Enabled:        true,
-					DeletionPolicy: "keep",
-				}); err != nil {
-					return err
-				}
-				if err := s.store.InsertChange(ctx, tx, ResourceChange{
-					BatchID:         batch.ID,
-					RootID:          root.ID,
-					ResourceID:      res.ID,
-					SourceNodeID:    n.ID,
-					ChangeType:      changeType,
-					NewPath:         n.FullPath,
-					NewContentHash:  hashes.ContentHash,
-					NewSnapshotHash: hashes.SnapshotHash,
-					DetectedAt:      now,
-				}); err != nil {
-					return err
-				}
-				batch.AddedCount++
-				existingByKey[sKey] = res
-				if !res.IsDir {
-					toProcess = append(toProcess, pendingProcess{res: res, changeType: changeType})
-				}
-				continue
-			}
-
-			// Existing resource: detect RESTORED, MOVED, RENAMED, MODIFIED, or unchanged
-			var detectedChanges []string
-			if old.Status == StatusMissing {
-				detectedChanges = append(detectedChanges, ChangeRestored)
-				batch.RestoredCount++
-			}
-			if old.SourceParentID != n.ParentID || (old.SourcePath != n.FullPath && old.Name == n.Name) {
-				detectedChanges = append(detectedChanges, ChangeMoved)
-				batch.MovedCount++
-			} else if old.Name != n.Name {
-				detectedChanges = append(detectedChanges, ChangeRenamed)
-				batch.RenamedCount++
-			}
-			if old.ContentHash != hashes.ContentHash {
-				detectedChanges = append(detectedChanges, ChangeModified)
-				batch.ModifiedCount++
-			}
-
-			updated := old
-			updated.RootID = root.ID
-			updated.SourceParentID = n.ParentID
-			updated.SourcePath = n.FullPath
-			updated.RelPath = n.RelPath
-			updated.Name = n.Name
-			updated.IsDir = n.IsDir
-			updated.SourceContent = n.Content
-			updated.NameHash = hashes.NameHash
-			updated.PathHash = hashes.PathHash
-			updated.ContentHash = hashes.ContentHash
-			updated.SnapshotHash = hashes.SnapshotHash
-			updated.LastSeenBatchID = batch.ID
-			updated.LastSeenAt = now
-			if len(detectedChanges) > 0 || old.Status == StatusFailed {
-				updated.Status = StatusActive
-				updated.LastError = ""
-				if len(detectedChanges) > 0 {
-					updated.LastChangedAt = now
-				}
-			}
-
-			if err := s.store.UpsertResource(ctx, tx, updated); err != nil {
-				return err
-			}
-			for _, ct := range detectedChanges {
-				if err := s.store.InsertChange(ctx, tx, ResourceChange{
-					BatchID:         batch.ID,
-					RootID:          root.ID,
-					ResourceID:      updated.ID,
-					SourceNodeID:    n.ID,
-					ChangeType:      ct,
-					OldPath:         old.SourcePath,
-					NewPath:         n.FullPath,
-					OldContentHash:  old.ContentHash,
-					NewContentHash:  hashes.ContentHash,
-					OldSnapshotHash: old.SnapshotHash,
-					NewSnapshotHash: hashes.SnapshotHash,
-					DetectedAt:      now,
-				}); err != nil {
-					return err
-				}
-			}
-			existingByKey[sKey] = updated
-			if !updated.IsDir && (len(detectedChanges) > 0 || old.Status == StatusFailed || updated.LocalSTRMPath == "") {
-				primaryChange := ChangeModified
-				if len(detectedChanges) > 0 {
-					primaryChange = detectedChanges[0]
-				}
-				toProcess = append(toProcess, pendingProcess{res: updated, changeType: primaryChange})
-			}
+		high, e = view.MaxNodeID(ctx)
+		if e != nil {
+			return e
 		}
-		return tx.Commit()
+		// A replaced root or source database must be reconciled before reusing its old cursor.
+		if !full && (cursor.RootNodeID != rootNode.ID || high < cursor.LastMaxNodeID) {
+			full = true
+			batch.ScanMode = ScanModeFull
+		}
+		collect := func(page []xiaoya.Node) error { nodes = append(nodes, page...); return nil }
+		if full {
+			_, e = view.WalkSubtreeBatched(ctx, rootNode, 500, collect)
+			return e
+		}
+		return view.WalkNewUnderRoot(ctx, rootNode, cursor.LastMaxNodeID, high, collect)
 	})
-	if walkErr != nil {
-		// Incomplete/failed scan: NEVER mark MISSING and NEVER advance cursor!
-		return failScan(walkErr)
-	}
-
-	batch.TotalSeen = int64(stats.TotalNodes)
-	batch.MaxSourceNodeID = stats.MaxNodeID
-	if globalMax, mErr := s.reader.MaxNodeID(ctx); mErr == nil && globalMax > batch.MaxSourceNodeID {
-		batch.MaxSourceNodeID = globalMax
-	}
-
-	// Complete scan succeeded: mark any previously ACTIVE/FAILED resource not seen in this subtree as MISSING (`keep` policy)
-	missingTx, err := s.store.DB().BeginTx(ctx, nil)
 	if err != nil {
-		return failScan(err)
+		return s.failBatch(batch, err)
 	}
-	for sKey, prev := range existingByKey {
-		if seenKeys[sKey] || prev.OriginType != OriginXiaoyaSQLite {
-			continue
-		}
-		if prev.Status == StatusMissing {
-			continue
-		}
-		prev.Status = StatusMissing
-		prev.LastChangedAt = now
-		if err := s.store.UpsertResource(ctx, missingTx, prev); err != nil {
-			missingTx.Rollback()
-			return failScan(err)
-		}
-		if err := s.store.InsertChange(ctx, missingTx, ResourceChange{
-			BatchID:         batch.ID,
-			RootID:          root.ID,
-			ResourceID:      prev.ID,
-			SourceNodeID:    prev.SourceNodeID,
-			ChangeType:      ChangeMissing,
-			OldPath:         prev.SourcePath,
-			OldContentHash:  prev.ContentHash,
-			OldSnapshotHash: prev.SnapshotHash,
-			DetectedAt:      now,
-		}); err != nil {
-			missingTx.Rollback()
-			return failScan(err)
-		}
-		batch.MissingCount++
-		if prev.LocalSTRMPath != "" {
-			s.store.SetItemAvailabilityBySTRMPath(ctx, prev.LocalSTRMPath, "MISSING")
-		}
+	batch.TotalSeen = int64(len(nodes))
+	batch.MaxSourceNodeID = high
+	pending, err := s.commitSQLite(ctx, &batch, rootNode.ID, cursor, nodes, full)
+	if err != nil {
+		return s.failBatch(batch, err)
 	}
-	if err := missingTx.Commit(); err != nil {
-		return failScan(err)
-	}
-
-	// Execute STRM & attachment materialization for newly discovered / changed / restored files
-	if s.processor != nil {
-		for _, item := range toProcess {
-			localPath, pErr := s.processor.ProcessResource(ctx, root, item.res, item.changeType)
-			if pErr != nil {
-				batch.FailedCount++
-				_ = s.store.UpdateResourceSTRMResult(ctx, item.res.ID, localPath, StatusFailed, pErr.Error())
-				continue
-			}
-			_ = s.store.UpdateResourceSTRMResult(ctx, item.res.ID, localPath, StatusActive, "")
-			if localPath != "" {
-				s.store.SetItemAvailabilityBySTRMPath(ctx, localPath, "AVAILABLE")
-			}
-		}
-	}
-
-	finishedAt := time.Now().Unix()
-	batch.Status = BatchSuccess
-	batch.FinishedAt = finishedAt
-	if err := s.store.FinishBatch(ctx, batch); err != nil {
-		return batch, err
-	}
-	if err := s.store.SaveCursor(ctx, SyncCursor{
-		RootID:             root.ID,
-		RootNodeID:         rootNode.ID,
-		LastMaxNodeID:      batch.MaxSourceNodeID,
-		LastSuccessBatchID: batch.ID,
-		LastCompleteScanAt: finishedAt,
-		UpdatedAt:          finishedAt,
-	}); err != nil {
-		return batch, err
-	}
-	_ = s.store.UpdateMonitorRootStatus(ctx, root.ID, rootNode.ID, batch.ID, BatchSuccess, "", finishedAt)
-	return batch, nil
+	return s.finishMaterialization(ctx, batch, pending, rootNode.ID)
 }
 
-// ScanRootIncremental uses the primary-key high-water mark (`nodes.id > last_max_node_id`)
-// to quickly ingest newly appended directories and files under `rootID` without full-table scans.
-// If no baseline cursor exists yet, it automatically falls back to ScanRootFull.
-func (s *Service) ScanRootIncremental(ctx context.Context, rootID string) (SyncBatch, error) {
-	cursor, hasCursor, err := s.store.GetCursor(ctx, rootID)
+func (s *Service) commitSQLite(ctx context.Context, batch *SyncBatch, rootNode int64, cursor SyncCursor, nodes []xiaoya.Node, full bool) ([]string, error) {
+	s.writes.Lock()
+	defer s.writes.Unlock()
+	tx, err := s.store.db.BeginTx(ctx, nil)
 	if err != nil {
-		return SyncBatch{}, err
+		return nil, err
 	}
-	if !hasCursor {
-		return s.ScanRootFull(ctx, rootID)
-	}
-
-	unlock, ok := s.tryLockRoot(rootID)
-	if !ok {
-		return SyncBatch{}, ErrRootScanInProgress
-	}
-	defer unlock()
-
-	root, err := s.store.GetMonitorRoot(ctx, rootID)
+	defer tx.Rollback()
+	existing, err := s.store.loadRootResources(ctx, tx, batch.RootID)
 	if err != nil {
-		return SyncBatch{}, err
+		return nil, err
 	}
-	if s.reader == nil {
-		return SyncBatch{}, errors.New("xiaoya sqlite reader is not configured")
-	}
-
-	batch, err := s.store.CreateBatch(ctx, root.ID, root.RootPath, ScanModeIncremental, false)
+	exclusions, err := s.store.suppressions(ctx, tx, OriginXiaoyaSQLite)
 	if err != nil {
-		return SyncBatch{}, err
+		return nil, err
 	}
-	_ = s.store.UpdateMonitorRootStatus(ctx, root.ID, root.SourceNodeID, batch.ID, BatchRunning, "", 0)
-
-	failScan := func(scanErr error) (SyncBatch, error) {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		batch.Status = BatchFailed
-		batch.FinishedAt = time.Now().Unix()
-		batch.ErrorMessage = scanErr.Error()
-		_ = s.store.FinishBatch(bgCtx, batch)
-		_ = s.store.UpdateMonitorRootStatus(bgCtx, root.ID, root.SourceNodeID, batch.ID, BatchFailed, scanErr.Error(), batch.FinishedAt)
-		return batch, scanErr
-	}
-
-	rootNode, err := s.reader.ResolvePath(ctx, root.RootPath)
-	if err != nil {
-		return failScan(err)
-	}
-
-	existingByKey, err := s.store.LoadRootResourcesBySourceKey(ctx, root.ID)
-	if err != nil {
-		return failScan(err)
-	}
-
-	type dirPaths struct {
-		full string
-		rel  string
-	}
-	knownDirs := map[int64]dirPaths{
-		rootNode.ID: {full: strings.TrimRight(rootNode.FullPath, "/"), rel: ""},
-	}
-	for _, m := range existingByKey {
-		if m.IsDir && m.SourceNodeID > 0 {
-			knownDirs[m.SourceNodeID] = dirPaths{full: m.SourcePath, rel: m.RelPath}
-		}
-	}
-
-	var toProcess []MediaResource
+	seen := make(map[string]bool, len(nodes))
+	var pending []string
 	now := time.Now().Unix()
-	maxID, readErr := s.reader.ReadNodesAfterID(ctx, cursor.LastMaxNodeID, 1000, func(rawNodes []xiaoya.RawNode) error {
-		tx, txErr := s.store.DB().BeginTx(ctx, nil)
-		if txErr != nil {
-			return txErr
-		}
-		defer tx.Rollback()
-
-		for _, raw := range rawNodes {
-			pDir, inSubtree := knownDirs[raw.ParentID]
-			if !inSubtree {
-				continue
-			}
-			fullPath := pDir.full + "/" + raw.Name
-			relPath := raw.Name
-			if pDir.rel != "" {
-				relPath = pDir.rel + "/" + raw.Name
-			}
-			if raw.IsDir {
-				knownDirs[raw.ID] = dirPaths{full: fullPath, rel: relPath}
-			}
-
-			sKey := sqliteSourceKey(raw.ID)
-			hashes := ComputeNodeHashes(raw.Name, fullPath, raw.ParentID, raw.IsDir, raw.Content)
-			res := MediaResource{
-				ID:               StableID(sKey),
-				SourceKey:        sKey,
-				OriginType:       OriginXiaoyaSQLite,
-				RootID:           root.ID,
-				SourceNodeID:     raw.ID,
-				SourceParentID:   raw.ParentID,
-				SourcePath:       fullPath,
-				RelPath:          relPath,
-				Name:             raw.Name,
-				IsDir:            raw.IsDir,
-				SourceContent:    raw.Content,
-				NameHash:         hashes.NameHash,
-				PathHash:         hashes.PathHash,
-				ContentHash:      hashes.ContentHash,
-				SnapshotHash:     hashes.SnapshotHash,
-				Status:           StatusActive,
-				FirstSeenBatchID: batch.ID,
-				LastSeenBatchID:  batch.ID,
-				FirstSeenAt:      now,
-				LastSeenAt:       now,
-				LastChangedAt:    now,
-			}
-			if err := s.store.UpsertResource(ctx, tx, res); err != nil {
-				return err
-			}
-			if err := s.store.UpsertManagedResource(ctx, tx, ManagedResource{
-				ResourceID:     res.ID,
-				ManageMode:     ManageAutoMonitor,
-				RootID:         root.ID,
-				Enabled:        true,
-				DeletionPolicy: "keep",
-			}); err != nil {
-				return err
-			}
-			if err := s.store.InsertChange(ctx, tx, ResourceChange{
-				BatchID:         batch.ID,
-				RootID:          root.ID,
-				ResourceID:      res.ID,
-				SourceNodeID:    raw.ID,
-				ChangeType:      ChangeAdded,
-				NewPath:         fullPath,
-				NewContentHash:  hashes.ContentHash,
-				NewSnapshotHash: hashes.SnapshotHash,
-				DetectedAt:      now,
-			}); err != nil {
-				return err
-			}
-			batch.TotalSeen++
-			batch.AddedCount++
-			if !res.IsDir {
-				toProcess = append(toProcess, res)
+	for _, n := range nodes {
+		key := "sqlite:" + strconv.FormatInt(n.ID, 10)
+		seen[key] = true
+		old, ok := existing[key]
+		if !ok {
+			old, ok, err = s.store.resourceByKey(ctx, tx, key)
+			if err != nil {
+				return nil, err
 			}
 		}
-		return tx.Commit()
-	})
-	if readErr != nil {
-		return failScan(readErr)
-	}
-
-	if s.processor != nil {
-		for _, res := range toProcess {
-			localPath, pErr := s.processor.ProcessResource(ctx, root, res, ChangeAdded)
-			if pErr != nil {
-				batch.FailedCount++
-				_ = s.store.UpdateResourceSTRMResult(ctx, res.ID, localPath, StatusFailed, pErr.Error())
-				continue
+		r := MediaResource{ID: StableID(key), SourceKey: key, OriginType: OriginXiaoyaSQLite, RootID: batch.RootID,
+			SourceNodeID: n.ID, SourceParentID: n.ParentID, SourcePath: n.FullPath, RelPath: n.RelPath, Name: n.Name, IsDir: n.IsDir, SourceContent: n.Content}
+		if suppressed(exclusions, r) {
+			// Track the location of an explicitly suppressed directory by node identity.
+			if _, err = tx.ExecContext(ctx, s.store.rebind("UPDATE resource_suppressions SET source_path=? WHERE resource_id=? AND source_path<>?"), r.SourcePath, r.ID, r.SourcePath); err != nil {
+				return nil, err
 			}
-			_ = s.store.UpdateResourceSTRMResult(ctx, res.ID, localPath, StatusActive, "")
-			if localPath != "" {
-				s.store.SetItemAvailabilityBySTRMPath(ctx, localPath, "AVAILABLE")
+			for i := range exclusions {
+				if exclusions[i].id == r.ID {
+					exclusions[i].path = r.SourcePath
+				}
+			}
+			continue
+		}
+		// For overlapping roots, keep one stable resource row and its existing owner when possible.
+		if ok && old.RootID != batch.RootID && old.RootID != "" {
+			var other string
+			err = tx.QueryRowContext(ctx, s.store.rebind("SELECT root_path FROM monitor_roots WHERE id=?"), old.RootID).Scan(&other)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return nil, err
+			}
+			if other != "" && hasPathPrefix(r.SourcePath, other) {
+				r.RootID = old.RootID
+				// Relative mapping belongs to the owner if it already monitors this path.
+				r.RelPath = r.SourcePath[len(other)+1:]
 			}
 		}
+		queued, e := s.recordObservation(ctx, tx, batch, r, old, ok, ManageAutoMonitor, "", "", now)
+		if e != nil {
+			return nil, e
+		}
+		if queued {
+			pending = append(pending, r.ID)
+		}
 	}
-
-	finishedAt := time.Now().Unix()
-	batch.MaxSourceNodeID = maxID
-	batch.Status = BatchSuccess
-	batch.FinishedAt = finishedAt
-	if err := s.store.FinishBatch(ctx, batch); err != nil {
-		return batch, err
+	if full {
+		for k, r := range existing {
+			if !seen[k] && r.OriginType == OriginXiaoyaSQLite && !suppressed(exclusions, r) {
+				if err = s.store.markMissing(ctx, tx, batch, r, now); err != nil {
+					return nil, err
+				}
+			}
+		}
+		cursor.LastCompleteScanAt = now
 	}
-	if err := s.store.SaveCursor(ctx, SyncCursor{
-		RootID:             root.ID,
-		RootNodeID:         rootNode.ID,
-		LastMaxNodeID:      maxID,
-		LastSuccessBatchID: batch.ID,
-		LastCompleteScanAt: cursor.LastCompleteScanAt,
-		UpdatedAt:          finishedAt,
-	}); err != nil {
-		return batch, err
+	if _, err = tx.ExecContext(ctx, s.store.rebind("UPDATE sync_batches SET scan_mode=? WHERE id=?"), batch.ScanMode, batch.ID); err != nil {
+		return nil, err
 	}
-	_ = s.store.UpdateMonitorRootStatus(ctx, root.ID, rootNode.ID, batch.ID, BatchSuccess, "", finishedAt)
-	return batch, nil
+	cursor.RootID = batch.RootID
+	cursor.RootNodeID = rootNode
+	cursor.LastMaxNodeID = batch.MaxSourceNodeID
+	cursor.LastSuccessBatchID = batch.ID
+	cursor.UpdatedAt = now
+	if err = s.store.saveCursor(ctx, tx, cursor); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return pending, nil
 }
 
-// ReprocessResource re-runs STRM & attachment generation for a single resource.
-func (s *Service) ReprocessResource(ctx context.Context, resourceID string) (MediaResource, error) {
-	res, err := s.store.GetResource(ctx, resourceID)
+func hasPathPrefix(p, base string) bool {
+	return len(p) > len(base) && p[:len(base)] == base && p[len(base)] == '/'
+}
+
+func (s *Service) recordObservation(ctx context.Context, tx *sql.Tx, b *SyncBatch, r, old MediaResource, exists bool, mode, library, dir string, now int64) (bool, error) {
+	h := ComputeNodeHashes(r.Name, r.SourcePath, r.SourceParentID, r.IsDir, r.SourceContent)
+	r.NameHash, r.PathHash, r.ContentHash, r.SnapshotHash = h.NameHash, h.PathHash, h.ContentHash, h.SnapshotHash
+	r.Status = StatusActive
+	r.LastSeenAt = now
+	r.LastSeenBatchID = b.ID
+	var changes []string
+	if !exists {
+		r.FirstSeenAt = now
+		r.FirstSeenBatchID = b.ID
+		change := ChangeAdded
+		if b.IsBaseline {
+			change = ChangeBaselineAdded
+		} else if mode != ManageAutoMonitor {
+			change = ChangeManualImported
+		}
+		changes = append(changes, change)
+		b.AddedCount++
+	} else {
+		r.ID = old.ID
+		r.FirstSeenAt = old.FirstSeenAt
+		r.FirstSeenBatchID = old.FirstSeenBatchID
+		r.LastChangedAt = old.LastChangedAt
+		r.LocalSTRMPath = old.LocalSTRMPath
+		r.MediaItemID = old.MediaItemID
+		r.Status, r.LastError, r.RetryCount = old.Status, old.LastError, old.RetryCount
+		if old.Status == StatusMissing {
+			changes = append(changes, ChangeRestored)
+			b.RestoredCount++
+		}
+		if r.SourceParentID != old.SourceParentID || (r.SourcePath != old.SourcePath && r.Name == old.Name) {
+			changes = append(changes, ChangeMoved)
+			b.MovedCount++
+		} else if r.Name != old.Name {
+			changes = append(changes, ChangeRenamed)
+			b.RenamedCount++
+		}
+		if r.ContentHash != old.ContentHash || r.IsDir != old.IsDir {
+			changes = append(changes, ChangeModified)
+			b.ModifiedCount++
+		}
+	}
+	if len(changes) > 0 {
+		r.Status = StatusActive
+		r.LastError = ""
+		r.RetryCount = 0
+		r.LastChangedAt = now
+	}
+	if err := s.store.UpsertResource(ctx, tx, r); err != nil {
+		return false, err
+	}
+	if !exists || mode != ManageAutoMonitor || r.RootID != old.RootID {
+		err := s.store.UpsertManagedResource(ctx, tx, ManagedResource{ResourceID: r.ID, ManageMode: mode, RootID: r.RootID, LibraryID: library, OutputDir: dir, Enabled: true, DeletionPolicy: "keep"})
+		if err != nil {
+			return false, err
+		}
+	}
+	for _, change := range changes {
+		c := ResourceChange{BatchID: b.ID, RootID: b.RootID, ResourceID: r.ID, SourceNodeID: r.SourceNodeID, ChangeType: change,
+			OldPath: old.SourcePath, NewPath: r.SourcePath, OldContentHash: old.ContentHash, NewContentHash: r.ContentHash,
+			OldSnapshotHash: old.SnapshotHash, NewSnapshotHash: r.SnapshotHash, DetectedAt: now}
+		if err := s.store.InsertChange(ctx, tx, c); err != nil {
+			return false, err
+		}
+	}
+	if old.Status == StatusMissing {
+		if err := s.store.refreshItemAvailability(ctx, tx, r.LocalSTRMPath); err != nil {
+			return false, err
+		}
+	}
+	queued := !r.IsDir && len(changes) > 0
+	if queued {
+		if err := s.store.enqueue(ctx, tx, r.ID); err != nil {
+			return false, err
+		}
+	}
+	return queued, nil
+}
+
+func (s *Service) finishMaterialization(ctx context.Context, b SyncBatch, pending []string, rootNode int64) (SyncBatch, error) {
+	b.Status = BatchSuccess
+	for _, id := range pending {
+		if err := ctx.Err(); err != nil {
+			return b, err
+		}
+		res, err := s.ReprocessResource(ctx, id)
+		if err == nil && strings.EqualFold(filepath.Ext(res.LocalSTRMPath), ".strm") {
+			b.MaterializedSTRMs = append(b.MaterializedSTRMs, res.LocalSTRMPath)
+		}
+		if err != nil && !errors.Is(err, ErrResourceUnmanaged) && !errors.Is(err, ErrResourceMissing) {
+			b.FailedCount++
+			if b.ErrorMessage == "" {
+				b.ErrorMessage = err.Error()
+			}
+		}
+	}
+	if b.FailedCount > 0 {
+		b.Status = BatchPartial
+	}
+	b.FinishedAt = time.Now().Unix()
+	if err := s.store.FinishBatch(ctx, b); err != nil {
+		return b, err
+	}
+	if b.RootID != "" {
+		if err := s.store.UpdateMonitorRootStatus(ctx, b.RootID, rootNode, b.ID, b.Status, b.ErrorMessage, b.FinishedAt); err != nil {
+			return b, err
+		}
+	}
+	return b, nil
+}
+
+func (s *Service) ReprocessResource(ctx context.Context, id string) (MediaResource, error) {
+	s.writes.Lock()
+	defer s.writes.Unlock()
+	res, err := s.store.GetResource(ctx, id)
 	if err != nil {
-		return MediaResource{}, err
+		return res, err
+	}
+	if res.Status == StatusMissing {
+		return res, ErrResourceMissing
+	}
+	blocked, err := s.store.IsUnmanaged(ctx, res)
+	if err != nil {
+		return res, err
+	}
+	if blocked {
+		return res, ErrResourceUnmanaged
 	}
 	if res.IsDir || s.processor == nil {
 		return res, nil
 	}
+	_, res.OutputDir, err = s.store.ManagedTarget(ctx, id)
+	if err != nil {
+		return res, err
+	}
 	var root MonitorRoot
 	if res.RootID != "" {
-		root, _ = s.store.GetMonitorRoot(ctx, res.RootID)
-	}
-	localPath, pErr := s.processor.ProcessResource(ctx, root, res, ChangeModified)
-	if pErr != nil {
-		_ = s.store.UpdateResourceSTRMResult(ctx, res.ID, localPath, StatusFailed, pErr.Error())
-		return MediaResource{}, pErr
-	}
-	if err := s.store.UpdateResourceSTRMResult(ctx, res.ID, localPath, StatusActive, ""); err != nil {
-		return MediaResource{}, err
-	}
-	return s.store.GetResource(ctx, resourceID)
-}
-
-// RegisterManualResource imports an AList file or directory into the unified `media_resources` + `managed_resources` model.
-func (s *Service) RegisterManualResource(ctx context.Context, sourcePath, relPath, name string, isDir bool, content, manageMode, libraryID, outputDir string) (MediaResource, error) {
-	now := time.Now().Unix()
-	sKey := alistSourceKey(sourcePath)
-	hashes := ComputeNodeHashes(name, sourcePath, 0, isDir, content)
-	batch, err := s.store.CreateBatch(ctx, "", sourcePath, ScanModeManualImport, false)
-	if err != nil {
-		return MediaResource{}, err
-	}
-
-	res := MediaResource{
-		ID:               StableID(sKey),
-		SourceKey:        sKey,
-		OriginType:       OriginAListManual,
-		SourcePath:       sourcePath,
-		RelPath:          relPath,
-		Name:             name,
-		IsDir:            isDir,
-		SourceContent:    content,
-		NameHash:         hashes.NameHash,
-		PathHash:         hashes.PathHash,
-		ContentHash:      hashes.ContentHash,
-		SnapshotHash:     hashes.SnapshotHash,
-		Status:           StatusActive,
-		FirstSeenBatchID: batch.ID,
-		LastSeenBatchID:  batch.ID,
-		FirstSeenAt:      now,
-		LastSeenAt:       now,
-		LastChangedAt:    now,
-	}
-
-	tx, err := s.store.DB().BeginTx(ctx, nil)
-	if err != nil {
-		return MediaResource{}, err
-	}
-	defer tx.Rollback()
-
-	if err := s.store.UpsertResource(ctx, tx, res); err != nil {
-		return MediaResource{}, err
-	}
-	if err := s.store.UpsertManagedResource(ctx, tx, ManagedResource{
-		ResourceID:     res.ID,
-		ManageMode:     manageMode,
-		LibraryID:      libraryID,
-		OutputDir:      outputDir,
-		Enabled:        true,
-		DeletionPolicy: "keep",
-	}); err != nil {
-		return MediaResource{}, err
-	}
-	if err := s.store.InsertChange(ctx, tx, ResourceChange{
-		BatchID:         batch.ID,
-		ResourceID:      res.ID,
-		ChangeType:      ChangeManualImported,
-		NewPath:         sourcePath,
-		NewContentHash:  hashes.ContentHash,
-		NewSnapshotHash: hashes.SnapshotHash,
-		DetectedAt:      now,
-	}); err != nil {
-		return MediaResource{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return MediaResource{}, err
-	}
-
-	batch.TotalSeen = 1
-	batch.AddedCount = 1
-	batch.Status = BatchSuccess
-	batch.FinishedAt = time.Now().Unix()
-
-	if !res.IsDir && s.processor != nil {
-		syntheticRoot := MonitorRoot{RootPath: "/"}
-		localPath, pErr := s.processor.ProcessResource(ctx, syntheticRoot, res, ChangeManualImported)
-		if pErr != nil {
-			batch.FailedCount = 1
-			_ = s.store.UpdateResourceSTRMResult(ctx, res.ID, localPath, StatusFailed, pErr.Error())
-		} else {
-			_ = s.store.UpdateResourceSTRMResult(ctx, res.ID, localPath, StatusActive, "")
+		root, err = s.store.GetMonitorRoot(ctx, res.RootID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return res, err
 		}
 	}
-	_ = s.store.FinishBatch(ctx, batch)
-	return s.store.GetResource(ctx, res.ID)
+	p, err := s.processor.ProcessResource(ctx, root, res, ChangeModified)
+	if e := s.store.processingResult(ctx, id, p, err); e != nil {
+		return res, errors.Join(err, e)
+	}
+	if err != nil {
+		return res, err
+	}
+	return s.store.GetResource(ctx, id)
+}
+
+func (s *Service) SetUnmanaged(ctx context.Context, id string, confirmed bool) (CleanupImpactPreview, error) {
+	s.writes.Lock()
+	defer s.writes.Unlock()
+	return s.store.ConfirmDeleteResource(ctx, id, confirmed)
+}
+
+func (s *Service) RestoreManagement(ctx context.Context, id string) error {
+	s.writes.Lock()
+	defer s.writes.Unlock()
+	return s.store.RestoreManagement(ctx, id)
+}
+
+// ManualNode is one discovered AList entry. Tree membership is distinct from opting into tracking.
+type ManualNode struct {
+	Path, RelPath, Name, Content string
+	IsDir                        bool
+}
+
+type ManualSnapshot struct {
+	RootPath, Mode, LibraryID, OutputDir string
+	Nodes                                []ManualNode
+	Missing                              []string // verified absent paths only
+	Track                                *bool    // nil preserves the tracking preference
+}
+
+func (s *Service) ApplyManualSnapshot(ctx context.Context, m ManualSnapshot) (SyncBatch, []MediaResource, error) {
+	b, err := s.store.CreateBatch(ctx, "", m.RootPath, ScanModeManualImport, false)
+	if err != nil {
+		return b, nil, err
+	}
+	pending, ids, err := s.commitManual(ctx, &b, m)
+	if err != nil {
+		b, err = s.failBatch(b, err)
+		return b, nil, err
+	}
+	b, err = s.finishMaterialization(ctx, b, pending, 0)
+	if err != nil {
+		return b, nil, err
+	}
+	out := make([]MediaResource, 0, len(ids))
+	for _, id := range ids {
+		r, e := s.store.GetResource(ctx, id)
+		if e != nil {
+			return b, nil, e
+		}
+		out = append(out, r)
+	}
+	return b, out, nil
+}
+
+func (s *Service) commitManual(ctx context.Context, b *SyncBatch, m ManualSnapshot) ([]string, []string, error) {
+	s.writes.Lock()
+	defer s.writes.Unlock()
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	exclusions, err := s.store.suppressions(ctx, tx, OriginAListManual)
+	if err != nil {
+		return nil, nil, err
+	}
+	now := time.Now().Unix()
+	var pending, ids []string
+	for _, n := range m.Nodes {
+		key := "alist:" + n.Path
+		r := MediaResource{ID: StableID(key), SourceKey: key, OriginType: OriginAListManual, SourcePath: n.Path, RelPath: n.RelPath, Name: n.Name, IsDir: n.IsDir, SourceContent: n.Content}
+		if suppressed(exclusions, r) {
+			if n.Path == m.RootPath && m.Track != nil {
+				return nil, nil, ErrResourceUnmanaged
+			}
+			continue
+		}
+		old, exists, e := s.store.resourceByKey(ctx, tx, key)
+		if e != nil {
+			return nil, nil, e
+		}
+		library, output := m.LibraryID, m.OutputDir
+		if exists && m.Mode == ManageManualSeriesDir && m.Track == nil {
+			library, output = "", "" // Existing children retain their previously selected target.
+		}
+		if exists && old.LocalSTRMPath != "" && output != "" {
+			rel, pathErr := filepath.Rel(output, old.LocalSTRMPath)
+			if pathErr != nil || !filepath.IsLocal(rel) {
+				return nil, nil, fmt.Errorf("已入库资源的输出路径不属于所选目录：%s", n.Path)
+			}
+		}
+		queued, e := s.recordObservation(ctx, tx, b, r, old, exists, m.Mode, library, output, now)
+		if e != nil {
+			return nil, nil, e
+		}
+		ids = append(ids, r.ID)
+		b.TotalSeen++
+		if queued {
+			pending = append(pending, r.ID)
+		}
+	}
+	for _, p := range m.Missing {
+		r, ok, e := s.store.resourceByKey(ctx, tx, "alist:"+p)
+		if e != nil {
+			return nil, nil, e
+		}
+		if ok && !suppressed(exclusions, r) {
+			if err = s.store.markMissing(ctx, tx, b, r, now); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+	if m.Track != nil {
+		id := StableID("alist:" + m.RootPath)
+		if *m.Track {
+			_, err = tx.ExecContext(ctx, s.store.rebind("INSERT INTO alist_tracking_roots(resource_id,review) VALUES(?,0) ON CONFLICT(resource_id) DO UPDATE SET review=0"), id)
+		} else {
+			_, err = tx.ExecContext(ctx, s.store.rebind("INSERT INTO alist_tracking_roots(resource_id,review) VALUES(?,2) ON CONFLICT(resource_id) DO UPDATE SET review=2"), id)
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return pending, ids, nil
+}
+
+func (s *Service) RegisterManualResource(ctx context.Context, p, rel, name string, dir bool, content, mode, library, output string) (MediaResource, error) {
+	_, rs, err := s.ApplyManualSnapshot(ctx, ManualSnapshot{RootPath: p, Mode: mode, LibraryID: library, OutputDir: output, Nodes: []ManualNode{{Path: p, RelPath: rel, Name: name, IsDir: dir, Content: content}}})
+	if err != nil {
+		return MediaResource{}, err
+	}
+	if len(rs) == 0 {
+		return MediaResource{}, ErrResourceUnmanaged
+	}
+	return rs[0], nil
 }

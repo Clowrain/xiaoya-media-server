@@ -124,3 +124,62 @@ func TestAdminAPIRoutesMonitorSyncCleanupAndTasks(t *testing.T) {
 		}
 	}
 }
+
+func TestBackgroundSyncPersistsFailureAndInterruptsStaleJobs(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(tmp, "biz.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := discovery.NewSQLStore(db, "sqlite")
+	if err = store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Xiaoya.SQLitePath = filepath.Join(tmp, "absent.db")
+	cfg.STRM.OutputRoot = filepath.Join(tmp, "out")
+	cfg.Monitor.Roots = []string{"/不可用"}
+	pipe, err := integration.NewPipeline(ctx, cfg, nil, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pipe.Close()
+	if err = store.CreateAdminJob(ctx, "stale", "sync", "scan:*", time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(cfg, store, pipe, nil, nil)
+	if err = h.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, route string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		h.ServeExtension(w, httptest.NewRequest(method, route, nil), embyserver.User{Admin: true})
+		return w
+	}
+	var old discovery.AdminJob
+	if w := call("GET", "/api/jobs/stale"); json.Unmarshal(w.Body.Bytes(), &old) != nil || old.Status != "INTERRUPTED" {
+		t.Fatalf("stale job not interrupted: %s", w.Body.String())
+	}
+	w := call("POST", "/api/sync/full?async=true")
+	var j discovery.AdminJob
+	if w.Code != 202 || json.Unmarshal(w.Body.Bytes(), &j) != nil || j.ID == "" {
+		t.Fatalf("submit status=%d body=%s", w.Code, w.Body.String())
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		w = call("GET", "/api/jobs/"+j.ID)
+		if json.Unmarshal(w.Body.Bytes(), &j) != nil {
+			t.Fatalf("invalid job response %s", w.Body.String())
+		}
+		if j.Status != "RUNNING" {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	var result syncResult
+	if j.Status != "FAILED" || json.Unmarshal(j.Result, &result) != nil || len(result.Errors) != 1 || len(result.Batches) != 1 || result.Batches[0].Status != discovery.BatchFailed {
+		t.Fatalf("background failure hidden: %+v %s", j, j.Result)
+	}
+}

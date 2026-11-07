@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -113,20 +114,24 @@ func TestPostgresScale400K(t *testing.T) {
 	t.Logf("deep page 399000: %s, %d rows", time.Since(start), len(items))
 }
 
-func TestBackupConnectionEnvironment(t *testing.T) {
-	env, e := postgresBackupEnv("postgres://emby:secret@postgres:5432/emby?sslmode=disable")
-	if e != nil {
-		t.Fatal(e)
-	}
-	for _, want := range []string{"PGUSER=emby", "PGPASSWORD=secret", "PGDATABASE=emby", "PGHOST=postgres", "PGPORT=5432", "PGSSLMODE=disable"} {
-		found := false
-		for _, v := range env {
-			if v == want {
-				found = true
-			}
+func TestBackupUsesEffectiveDatabaseSettings(t *testing.T) {
+	for _, dsn := range []string{"postgres://emby:secret@postgres:5432/emby?sslmode=disable", "host=postgres port=5432 user=emby password='secret' dbname=emby sslmode=disable"} {
+		p, env, cleanup, err := backupServiceFile(dsn)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !found {
-			t.Fatal("missing", strings.Split(want, "=")[0])
+		defer cleanup()
+		body, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), "password") || !slices.Contains(env, "PGPASSWORD=secret") {
+			t.Fatal("database password must be passed to the backup process without writing it to the service file")
+		}
+		for _, want := range []string{"[xiaoya_backup]", "user=emby", "dbname=emby", "host=postgres", "port=5432", "sslmode=disable"} {
+			if !strings.Contains(string(body), want+"\n") {
+				t.Fatal("missing", strings.Split(want, "=")[0])
+			}
 		}
 	}
 }

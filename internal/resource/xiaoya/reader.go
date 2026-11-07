@@ -60,9 +60,15 @@ func NormalizeMonitorPath(raw string) (string, []string, error) {
 }
 
 // Reader provides strictly read-only queries against Xiaoya's strm_internal.db.
+type queryReader interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 type Reader struct {
 	db             *sql.DB
 	ownsDB         bool
+	tx             *sql.Tx
 	parentChunkMax int
 	defaultPageMax int
 }
@@ -98,17 +104,40 @@ func (r *Reader) Close() error {
 	return nil
 }
 
+func (r *Reader) query() queryReader {
+	if r.tx != nil {
+		return r.tx
+	}
+	return r.db
+}
+
+// WithSnapshot keeps path resolution, traversal and the high-water mark in one SQLite read transaction.
+func (r *Reader) WithSnapshot(ctx context.Context, fn func(*Reader) error) error {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	view := *r
+	view.tx = tx
+	view.ownsDB = false
+	if err = fn(&view); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // VerifyReadOnly confirms query_only=1 and the presence of the `nodes` table.
 func (r *Reader) VerifyReadOnly(ctx context.Context) error {
 	var queryOnly int
-	if err := r.db.QueryRowContext(ctx, "PRAGMA query_only").Scan(&queryOnly); err != nil {
+	if err := r.query().QueryRowContext(ctx, "PRAGMA query_only").Scan(&queryOnly); err != nil {
 		return fmt.Errorf("check PRAGMA query_only: %w", err)
 	}
 	if queryOnly != 1 {
 		return fmt.Errorf("sqlite connection is not query_only (got %d)", queryOnly)
 	}
 	var tableName string
-	err := r.db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name='nodes'").Scan(&tableName)
+	err := r.query().QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type='table' AND name='nodes'").Scan(&tableName)
 	if err != nil {
 		return fmt.Errorf("verify nodes table: %w", err)
 	}
@@ -118,7 +147,7 @@ func (r *Reader) VerifyReadOnly(ctx context.Context) error {
 // MaxNodeID returns the current maximum `id` in `nodes` (0 if empty).
 func (r *Reader) MaxNodeID(ctx context.Context) (int64, error) {
 	var maxID sql.NullInt64
-	if err := r.db.QueryRowContext(ctx, "SELECT MAX(id) FROM nodes").Scan(&maxID); err != nil {
+	if err := r.query().QueryRowContext(ctx, "SELECT MAX(id) FROM nodes").Scan(&maxID); err != nil {
 		return 0, err
 	}
 	if !maxID.Valid {
@@ -141,7 +170,7 @@ func (r *Reader) ResolvePath(ctx context.Context, rootPath string) (Node, error)
 	builtSegments := make([]string, 0, len(segments))
 
 	for _, seg := range segments {
-		rows, qErr := r.db.QueryContext(
+		rows, qErr := r.query().QueryContext(
 			ctx,
 			"SELECT id, name, parent_id, is_dir, content FROM nodes WHERE parent_id = ? AND name = ? ORDER BY id ASC",
 			parentID, seg,
@@ -264,7 +293,7 @@ func (r *Reader) WalkSubtreeBatched(ctx context.Context, root Node, pageSize int
 				args = append(args, baseArgs...)
 				args = append(args, cursorID, pageSize)
 
-				rows, qErr := r.db.QueryContext(ctx, query, args...)
+				rows, qErr := r.query().QueryContext(ctx, query, args...)
 				if qErr != nil {
 					return stats, fmt.Errorf("walk subtree chunk cursor=%d: %w", cursorID, qErr)
 				}
@@ -336,6 +365,14 @@ func (r *Reader) WalkSubtreeBatched(ctx context.Context, root Node, pageSize int
 
 // ReadNodesAfterID reads newly inserted rows with `id > afterID` using the primary-key index.
 func (r *Reader) ReadNodesAfterID(ctx context.Context, afterID int64, pageSize int, onBatch func(batch []RawNode) error) (int64, error) {
+	maxID, err := r.MaxNodeID(ctx)
+	if err != nil {
+		return afterID, err
+	}
+	return r.readNodesBetween(ctx, afterID, maxID, pageSize, onBatch)
+}
+
+func (r *Reader) readNodesBetween(ctx context.Context, afterID, maxID int64, pageSize int, onBatch func([]RawNode) error) (int64, error) {
 	if pageSize <= 0 || pageSize > 2000 {
 		pageSize = 1000
 	}
@@ -344,10 +381,10 @@ func (r *Reader) ReadNodesAfterID(ctx context.Context, afterID int64, pageSize i
 		if err := ctx.Err(); err != nil {
 			return cursor, err
 		}
-		rows, err := r.db.QueryContext(
+		rows, err := r.query().QueryContext(
 			ctx,
-			"SELECT id, name, parent_id, is_dir, content FROM nodes WHERE id > ? ORDER BY id ASC LIMIT ?",
-			cursor, pageSize,
+			"SELECT id, name, parent_id, is_dir, content FROM nodes WHERE id > ? AND id <= ? ORDER BY id ASC LIMIT ?",
+			cursor, maxID, pageSize,
 		)
 		if err != nil {
 			return cursor, err
@@ -379,4 +416,61 @@ func (r *Reader) ReadNodesAfterID(ctx context.Context, afterID int64, pageSize i
 		}
 	}
 	return cursor, nil
+}
+
+// WalkNewUnderRoot resolves new rows against their current ancestors, not yesterday's saved paths.
+func (r *Reader) WalkNewUnderRoot(ctx context.Context, root Node, after, high int64, onBatch func([]Node) error) error {
+	dirs := map[int64]string{root.ID: root.FullPath, 0: ""}
+	var resolve func(int64, map[int64]bool) (string, error)
+	resolve = func(id int64, trail map[int64]bool) (string, error) {
+		if p, ok := dirs[id]; ok {
+			return p, nil
+		}
+		if trail[id] {
+			return "", fmt.Errorf("cycle in SQLite parents at node %d", id)
+		}
+		trail[id] = true
+		var name string
+		var parent int64
+		var isDir int
+		err := r.query().QueryRowContext(ctx, "SELECT name,parent_id,is_dir FROM nodes WHERE id=?", id).Scan(&name, &parent, &isDir)
+		if err == sql.ErrNoRows || (err == nil && isDir == 0) {
+			dirs[id] = ""
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		p, err := resolve(parent, trail)
+		if err != nil {
+			return "", err
+		}
+		if p != "" {
+			p += "/" + name
+		}
+		dirs[id] = p
+		return p, nil
+	}
+	_, err := r.readNodesBetween(ctx, after, high, 1000, func(raw []RawNode) error {
+		nodes := make([]Node, 0, len(raw))
+		for _, n := range raw {
+			if n.ID == root.ID {
+				continue
+			}
+			p, err := resolve(n.ParentID, map[int64]bool{})
+			if err != nil {
+				return err
+			}
+			if p == "" {
+				continue
+			}
+			full := p + "/" + n.Name
+			if n.IsDir {
+				dirs[n.ID] = full
+			}
+			nodes = append(nodes, Node{RawNode: n, FullPath: full, RelPath: strings.TrimPrefix(full, root.FullPath+"/")})
+		}
+		return onBatch(nodes)
+	})
+	return err
 }

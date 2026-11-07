@@ -6,16 +6,16 @@
 
 ## 核心特性
 
-1. **完整 Emby 兼容媒体服务（单进程统一交付）**
-   - 原生兼容 Infuse、VidHub、SenPlayer 及内置 Web 影库；支持 302 直链重定向播放、过期 `?sign=...` 自动刷新回退、外挂字幕发现与 `.srt -> WebVTT` 动态转换、播放进度续播与真实 `/Shows/NextUp` 下一集推荐。
+1. **Emby 兼容播放与网页管理**
+   - 网页用于浏览影库、管理媒体库和资源。使用 Infuse、VidHub、SenPlayer 等 Emby 兼容客户端播放，支持 302 直链重定向播放、过期 `?sign=...` 自动刷新回退、外挂字幕发现与 `.srt -> WebVTT` 动态转换、播放进度续播与真实 `/Shows/NextUp` 下一集推荐。
 2. **小雅 SQLite 零侵入只读目录监控**
    - 通过 `mode=ro` + `PRAGMA query_only=1` 只读消费小雅 `strm_internal.db`（WAL 安全），支持精确路径注册与按需监控，建立基线快照、分钟级 `id > last_max_node_id` 增量发现与全树差异对账。
-3. **100% 兼容 `strm.py` ∪ `strm2.py` 的 Go 原生 STRM 与附件引擎**
-   - 覆盖全部 21 类视频扩展名、10 类附件扩展名及无后缀分集节点（如 `E01..E27`），精确复刻 11 字符 URL 编码、`%20` 空格规整、防 `.strm.strm`、235 字符截断消歧、备用字符翻译表与 SHA-256 原子幂等写入，并通过实时 `python3` 黄金测试验证。
+3. **按 `strm.py` 和 `strm2.py` 规则生成 STRM 与附件**
+   - 覆盖两份脚本的媒体扩展名并集、字幕和图片等附件，支持无后缀分集节点（如 `E01..E27`）、原子写入和重启后复用 STRM 路径。规则片段用 Python 对照，特殊路径、签名和附件另有回归测试。
 4. **`prefer` NFO 优先策略 + TMDB v3 自动刮削**
    - 本地有效非空 NFO 优先采用（自动过滤空白页、HTML 错误页与 JSON 报错）；缺失 NFO 时识别 `{tmdb-*}` 或片名年份自动调用 TMDB v3 刮削中文剧集/季/集/电影海报与演职员，刮削异常绝不阻塞入库与播放。
 5. **`keep` 源端缺失保护策略**
-   - 仅完整无错扫描可标记资源 `MISSING`（扫描异常绝不推进游标或误标缺失），完整保留本地 STRM/NFO/字幕/图片与用户观看进度；源端恢复自动 `RESTORED`；管理员手动清理需经 `CleanupImpactPreview` 二次确认。
+   - 仅完整无错扫描可标记资源 `MISSING`（扫描异常绝不推进游标或误标缺失），完整保留本地 STRM/NFO/字幕/图片与用户观看进度；源端恢复自动 `RESTORED`；管理员可预览并确认取消管理；本地文件、媒体条目和观看记录继续保留。
 6. **AList 目录浏览、关键词搜索与一键人工入库**
    - 后台直接浏览与搜索小雅 AList 全量目录，支持单文件入库及整部剧集目录入库（可选开启自动追更），纳入同一统一资源台账与周期调度体系。
 
@@ -56,19 +56,20 @@ xiaoya-media-server/
 cd deployments
 cp .env.example .env
 # 编辑 .env 填写 POSTGRES_PASSWORD、ADMIN_PASSWORD(>=12位)、XIAOYA_DB_DIR、ALIST_BASE_URL、TMDB_API_KEY
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
-启动后访问 `http://<宿主机IP>:8096` 登录管理端，完整说明请参见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+启动后访问 `http://<宿主机IP>:8096` 登录管理端。播放时，在 Emby 兼容客户端中添加同一个服务器地址。完整说明见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
 ### 方式二：本地开发与测试
 
 ```bash
 # 纯 Go 静态编译
-CGO_ENABLED=0 go build -mod=vendor -o bin/xiaoya-media-server ./cmd/server
+CGO_ENABLED=0 go build -o bin/xiaoya-media-server ./cmd/server
 
-# 运行全量单元测试、Python 黄金对比测试与《折月亮》14 步端到端测试
-go test -mod=vendor ./...
+# 运行单元测试与《折月亮》样本测试；设置 TEST_DATABASE_URL 指向专用测试库以运行 PostgreSQL 集成测试
+go test ./...
 ```
 
 ---

@@ -1,6 +1,6 @@
 import { 
   User, LibraryView, MediaItem, AdminLibrary, SystemOverview, 
-  MonitorRoot, AListBrowseResult, TmdbConfig, TmdbSearchResult, LogEntry 
+  MonitorRoot, AListBrowseResult, AdminJob, TmdbConfig, TmdbSearchResult, LogEntry
 } from '../types';
 
 const TOKEN_KEY = 'xiaoya_token';
@@ -138,25 +138,6 @@ export async function fetchItemDetail(userId: string, itemId: string): Promise<M
   return request(`/emby/Users/${userId}/Items/${itemId}`);
 }
 
-export async function fetchPlaybackInfo(itemId: string): Promise<any> {
-  return request(`/emby/Items/${itemId}/PlaybackInfo`, 'POST', {});
-}
-
-export async function reportPlaybackProgress(itemId: string, currentSec: number, totalSec: number): Promise<void> {
-  await request('/Sessions/Playing/Progress', 'POST', {
-    ItemId: itemId,
-    PositionTicks: Math.floor(currentSec * 1e7),
-    RunTimeTicks: Number.isFinite(totalSec) ? Math.floor(totalSec * 1e7) : 0,
-  }).catch(() => {});
-}
-
-export async function reportPlaybackStopped(itemId: string): Promise<void> {
-  await request('/Sessions/Playing/Stopped', 'POST', {
-    ItemId: itemId,
-    PositionTicks: 0,
-  }).catch(() => {});
-}
-
 export async function refreshItemMediaInfo(itemId: string): Promise<void> {
   await request(`/emby/Items/${itemId}/RefreshMediaInfo`, 'POST', {});
 }
@@ -251,15 +232,17 @@ export async function deleteMonitorRoot(id: string): Promise<void> {
   await request(`/api/monitor/roots/${encodeURIComponent(id)}`, 'DELETE');
 }
 
-export async function triggerSync(id: string, full: boolean): Promise<any> {
-  return request(full ? '/api/sync/full' : '/api/sync/incremental', 'POST', { root_id: id });
+export async function triggerSync(id: string, full: boolean) {
+  return request<AdminJob>(full ? '/api/sync/full?async=true' : '/api/sync/incremental?async=true', 'POST', { root_id: id });
 }
 
-export async function importResource(path: string, isDir: boolean, trackUpdates: boolean): Promise<any> {
-  return request('/api/resources/import', 'POST', {
+export async function importResource(path: string, isDir: boolean, trackUpdates: boolean, libraryID: string, outputDir: string) {
+  return request<AdminJob>('/api/resources/import?async=true', 'POST', {
     path,
     is_dir: isDir,
     track_updates: trackUpdates,
+    library_id: libraryID,
+    output_dir: outputDir,
   });
 }
 
@@ -372,4 +355,18 @@ export async function fetchMediaInfoSettings(): Promise<any> {
 
 export async function updateMediaInfoSettings(data: any): Promise<void> {
   await request('/admin/media-info', 'PUT', data);
+}
+
+
+export async function fetchAdminJobs() {
+  return (await request<{items: AdminJob[]}>('/api/jobs')).items;
+}
+
+export async function waitForAdminJob(id: string, signal?: AbortSignal): Promise<AdminJob> {
+  while (true) {
+    if (signal?.aborted) throw new DOMException('任务视图已关闭', 'AbortError');
+    const job = await request<AdminJob>(`/api/jobs/${encodeURIComponent(id)}`);
+    if (job.status !== 'RUNNING') return job;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
 }

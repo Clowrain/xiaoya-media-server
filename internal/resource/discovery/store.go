@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"xiaoya-media-server/migrations"
 )
 
 var ErrConfirmationRequired = errors.New("manual cleanup confirmation required under keep policy")
@@ -205,9 +207,19 @@ func (s *SQLStore) EnsureSchema(ctx context.Context) error {
 	}
 	// If `items` exists in the same DB (unified PostgreSQL), ensure `availability` column exists.
 	if s.dialect == "postgres" {
-		_, _ = s.db.ExecContext(ctx, "ALTER TABLE items ADD COLUMN IF NOT EXISTS availability TEXT NOT NULL DEFAULT 'AVAILABLE'")
+		if _, err := s.db.ExecContext(ctx, "ALTER TABLE IF EXISTS items ADD COLUMN IF NOT EXISTS availability TEXT NOT NULL DEFAULT 'AVAILABLE'"); err != nil {
+			return err
+		}
 	}
-	return nil
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, migrations.ResourceLifecycle); err != nil {
+		return fmt.Errorf("migrate resource lifecycle: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (s *SQLStore) UpsertMonitorRoot(ctx context.Context, rootPath string, enabled bool, intervalSec int64) (MonitorRoot, error) {
@@ -377,6 +389,10 @@ func (s *SQLStore) GetCursor(ctx context.Context, rootID string) (SyncCursor, bo
 }
 
 func (s *SQLStore) SaveCursor(ctx context.Context, c SyncCursor) error {
+	return s.saveCursor(ctx, s.db, c)
+}
+
+func (s *SQLStore) saveCursor(ctx context.Context, db sqlExecer, c SyncCursor) error {
 	if c.UpdatedAt == 0 {
 		c.UpdatedAt = time.Now().Unix()
 	}
@@ -385,11 +401,11 @@ INSERT INTO sync_cursors(root_id, root_node_id, last_max_node_id, last_success_b
 VALUES(?, ?, ?, ?, ?, ?)
 ON CONFLICT(root_id) DO UPDATE SET
 	root_node_id = excluded.root_node_id,
-	last_max_node_id = CASE WHEN excluded.last_max_node_id > sync_cursors.last_max_node_id THEN excluded.last_max_node_id ELSE sync_cursors.last_max_node_id END,
+	last_max_node_id = excluded.last_max_node_id,
 	last_success_batch_id = excluded.last_success_batch_id,
 	last_complete_scan_at = CASE WHEN excluded.last_complete_scan_at > 0 THEN excluded.last_complete_scan_at ELSE sync_cursors.last_complete_scan_at END,
 	updated_at = excluded.updated_at`)
-	_, err := s.db.ExecContext(ctx, q, c.RootID, c.RootNodeID, c.LastMaxNodeID, c.LastSuccessBatchID, c.LastCompleteScanAt, c.UpdatedAt)
+	_, err := db.ExecContext(ctx, q, c.RootID, c.RootNodeID, c.LastMaxNodeID, c.LastSuccessBatchID, c.LastCompleteScanAt, c.UpdatedAt)
 	return err
 }
 
@@ -413,7 +429,11 @@ func scanMediaResource(scanner interface{ Scan(...any) error }) (MediaResource, 
 }
 
 func (s *SQLStore) LoadRootResourcesBySourceKey(ctx context.Context, rootID string) (map[string]MediaResource, error) {
-	rows, err := s.db.QueryContext(ctx, s.rebind("SELECT "+mediaResourceCols+" FROM media_resources WHERE root_id = ?"), rootID)
+	return s.loadRootResources(ctx, s.db, rootID)
+}
+
+func (s *SQLStore) loadRootResources(ctx context.Context, db sqlQueryer, rootID string) (map[string]MediaResource, error) {
+	rows, err := db.QueryContext(ctx, s.rebind("SELECT "+mediaResourceCols+" FROM media_resources WHERE root_id = ?"), rootID)
 	if err != nil {
 		return nil, err
 	}
@@ -435,7 +455,11 @@ func (s *SQLStore) GetResource(ctx context.Context, id string) (MediaResource, e
 }
 
 func (s *SQLStore) GetResourceBySourceKey(ctx context.Context, sourceKey string) (MediaResource, bool, error) {
-	row := s.db.QueryRowContext(ctx, s.rebind("SELECT "+mediaResourceCols+" FROM media_resources WHERE source_key = ?"), sourceKey)
+	return s.resourceByKey(ctx, s.db, sourceKey)
+}
+
+func (s *SQLStore) resourceByKey(ctx context.Context, db sqlQueryer, sourceKey string) (MediaResource, bool, error) {
+	row := db.QueryRowContext(ctx, s.rebind("SELECT "+mediaResourceCols+" FROM media_resources WHERE source_key = ?"), sourceKey)
 	m, err := scanMediaResource(row)
 	if err == sql.ErrNoRows {
 		return MediaResource{}, false, nil
@@ -550,20 +574,6 @@ ON CONFLICT(source_key) DO UPDATE SET
 		m.Status, m.LocalSTRMPath, m.MediaItemID, m.LastError, m.RetryCount,
 		m.FirstSeenBatchID, m.LastSeenBatchID, m.FirstSeenAt, m.LastSeenAt, m.LastChangedAt,
 	)
-	return err
-}
-
-func (s *SQLStore) UpdateResourceSTRMResult(ctx context.Context, resourceID, localSTRMPath, status, errMsg string) error {
-	now := time.Now().Unix()
-	q := s.rebind(`
-UPDATE media_resources
-SET local_strm_path = CASE WHEN ? <> '' THEN ? ELSE local_strm_path END,
-    status = ?,
-    last_error = ?,
-    retry_count = CASE WHEN ? = 'FAILED' THEN retry_count + 1 ELSE 0 END,
-    last_changed_at = ?
-WHERE id = ?`)
-	_, err := s.db.ExecContext(ctx, q, localSTRMPath, localSTRMPath, status, errMsg, status, now, resourceID)
 	return err
 }
 
@@ -708,66 +718,47 @@ FROM media_attachments WHERE resource_id = ? ORDER BY local_path ASC`), resource
 	return out, rows.Err()
 }
 
-// PreviewCleanup calculates the impact scope of deleting a resource, as required by Spec Section 5.9.
-func (s *SQLStore) PreviewCleanup(ctx context.Context, resourceID string) (CleanupImpactPreview, error) {
-	res, err := s.GetResource(ctx, resourceID)
+// PreviewCleanup reports which resources will stop syncing; the catalog and files stay intact.
+func (s *SQLStore) PreviewCleanup(ctx context.Context, id string) (CleanupImpactPreview, error) {
+	res, err := s.GetResource(ctx, id)
 	if err != nil {
 		return CleanupImpactPreview{}, err
 	}
-	atts, _ := s.ListAttachments(ctx, resourceID)
-	attPaths := make([]string, 0, len(atts))
+	atts, err := s.ListAttachments(ctx, id)
+	if err != nil {
+		return CleanupImpactPreview{}, err
+	}
+	paths := make([]string, 0, len(atts))
 	for _, a := range atts {
-		attPaths = append(attPaths, a.LocalPath)
+		paths = append(paths, a.LocalPath)
 	}
-	affected := 1
+	count := 1
 	if res.IsDir {
-		_ = s.db.QueryRowContext(ctx, s.rebind("SELECT COUNT(*) FROM media_resources WHERE source_path = ? OR source_path LIKE ?"), res.SourcePath, res.SourcePath+"/%").Scan(&affected)
+		prefix := res.SourcePath + "/"
+		err = s.db.QueryRowContext(ctx, s.rebind("SELECT COUNT(*) FROM media_resources WHERE origin_type=? AND (id=? OR substr(source_path,1,length(?))=?)"), res.OriginType, id, prefix, prefix).Scan(&count)
+		if err != nil {
+			return CleanupImpactPreview{}, err
+		}
 	}
-	return CleanupImpactPreview{
-		ResourceID:        res.ID,
-		SourcePath:        res.SourcePath,
-		Status:            res.Status,
-		LocalSTRMPath:     res.LocalSTRMPath,
-		AttachmentPaths:   attPaths,
-		AffectedResources: affected,
-		RequiresConfirm:   true,
-	}, nil
+	blocked, err := s.IsUnmanaged(ctx, res)
+	return CleanupImpactPreview{ResourceID: id, SourcePath: res.SourcePath, Status: res.Status, LocalSTRMPath: res.LocalSTRMPath, AttachmentPaths: paths, AffectedResources: count, RequiresConfirm: true, Unmanaged: blocked}, err
 }
 
-// ConfirmDeleteResource deletes a resource record ONLY when confirmed=true, enforcing V1.0 `keep` safety.
-func (s *SQLStore) ConfirmDeleteResource(ctx context.Context, resourceID string, confirmed bool) (CleanupImpactPreview, error) {
-	preview, err := s.PreviewCleanup(ctx, resourceID)
+func (s *SQLStore) ConfirmDeleteResource(ctx context.Context, id string, confirmed bool) (CleanupImpactPreview, error) {
+	preview, err := s.PreviewCleanup(ctx, id)
 	if err != nil {
-		return CleanupImpactPreview{}, err
+		return preview, err
 	}
 	if !confirmed {
 		return preview, ErrConfirmationRequired
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return preview, err
+	_, err = s.db.ExecContext(ctx, s.rebind(`INSERT INTO resource_suppressions(resource_id,origin_type,source_path,is_dir)
+SELECT id,origin_type,source_path,is_dir FROM media_resources WHERE id=?
+ON CONFLICT(resource_id) DO UPDATE SET source_path=excluded.source_path`), id)
+	if err == nil {
+		preview.Unmanaged = true
 	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, s.rebind("DELETE FROM media_attachments WHERE resource_id = ?"), resourceID); err != nil {
-		return preview, err
-	}
-	if _, err := tx.ExecContext(ctx, s.rebind("DELETE FROM managed_resources WHERE resource_id = ?"), resourceID); err != nil {
-		return preview, err
-	}
-	if _, err := tx.ExecContext(ctx, s.rebind("DELETE FROM media_resources WHERE id = ?"), resourceID); err != nil {
-		return preview, err
-	}
-	if err := tx.Commit(); err != nil {
-		return preview, err
-	}
-	return preview, nil
-}
-
-func (s *SQLStore) SetItemAvailabilityBySTRMPath(ctx context.Context, localSTRMPath, availability string) {
-	if localSTRMPath == "" || s.dialect != "postgres" {
-		return
-	}
-	_, _ = s.db.ExecContext(ctx, s.rebind("UPDATE items SET availability = ? WHERE path = ?"), availability, localSTRMPath)
+	return preview, err
 }
 
 func (s *SQLStore) UpsertScheduledTask(ctx context.Context, t ScheduledTaskState) error {

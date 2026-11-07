@@ -1,8 +1,8 @@
 # STRM 与附件生成规则审计报告（`strm.py` / `strm2.py` 对照基线）
 
 **基线文件**：
-- [strm.py](../scripts/ref/strm.py)（242 行）
-- [strm2.py](../scripts/ref/strm2.py)（238 行）
+- `3776ca6:scripts/ref/strm.py`（242 行）
+- `3776ca6:scripts/ref/strm2.py`（238 行）
 - **审计日期**：2026-11-07
 
 ---

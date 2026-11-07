@@ -33,6 +33,7 @@ const (
 const (
 	BatchRunning = "RUNNING"
 	BatchSuccess = "SUCCESS"
+	BatchPartial = "PARTIAL"
 	BatchFailed  = "FAILED"
 )
 
@@ -63,24 +64,26 @@ type MonitorRoot struct {
 }
 
 type SyncBatch struct {
-	ID              string `json:"id"`
-	RootID          string `json:"root_id"`
-	RootPath        string `json:"root_path"`
-	ScanMode        string `json:"scan_mode"`
-	IsBaseline      bool   `json:"is_baseline"`
-	Status          string `json:"status"`
-	StartedAt       int64  `json:"started_at"`
-	FinishedAt      int64  `json:"finished_at"`
-	TotalSeen       int64  `json:"total_seen"`
-	AddedCount      int64  `json:"added_count"`
-	ModifiedCount   int64  `json:"modified_count"`
-	RenamedCount    int64  `json:"renamed_count"`
-	MovedCount      int64  `json:"moved_count"`
-	MissingCount    int64  `json:"missing_count"`
-	RestoredCount   int64  `json:"restored_count"`
-	FailedCount     int64  `json:"failed_count"`
-	MaxSourceNodeID int64  `json:"max_source_node_id"`
-	ErrorMessage    string `json:"error_message"`
+	ID                 string   `json:"id"`
+	RootID             string   `json:"root_id"`
+	RootPath           string   `json:"root_path"`
+	ScanMode           string   `json:"scan_mode"`
+	IsBaseline         bool     `json:"is_baseline"`
+	Status             string   `json:"status"`
+	StartedAt          int64    `json:"started_at"`
+	FinishedAt         int64    `json:"finished_at"`
+	TotalSeen          int64    `json:"total_seen"`
+	AddedCount         int64    `json:"added_count"`
+	ModifiedCount      int64    `json:"modified_count"`
+	RenamedCount       int64    `json:"renamed_count"`
+	MovedCount         int64    `json:"moved_count"`
+	MissingCount       int64    `json:"missing_count"`
+	RestoredCount      int64    `json:"restored_count"`
+	FailedCount        int64    `json:"failed_count"`
+	MaxSourceNodeID    int64    `json:"max_source_node_id"`
+	ErrorMessage       string   `json:"error_message"`
+	MaterializedSTRMs  []string `json:"-"`
+	UnindexedSTRMCount int      `json:"unindexed_strm_count,omitempty"`
 }
 
 type SyncCursor struct {
@@ -110,6 +113,7 @@ type MediaResource struct {
 	SnapshotHash     string `json:"snapshot_hash"`
 	Status           string `json:"status"`
 	LocalSTRMPath    string `json:"local_strm_path"`
+	OutputDir        string `json:"-"`
 	MediaItemID      string `json:"media_item_id"`
 	LastError        string `json:"last_error"`
 	RetryCount       int64  `json:"retry_count"`
@@ -184,4 +188,5 @@ type CleanupImpactPreview struct {
 	AttachmentPaths   []string `json:"attachment_paths"`
 	AffectedResources int      `json:"affected_resources"`
 	RequiresConfirm   bool     `json:"requires_confirm"`
+	Unmanaged         bool     `json:"unmanaged"`
 }

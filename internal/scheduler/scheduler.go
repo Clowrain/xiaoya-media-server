@@ -2,8 +2,10 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,7 +64,7 @@ func New(store *discovery.SQLStore, pipeline *integration.Pipeline, importer *al
 		Name:     "附件差异同步与重试",
 		Interval: 30 * time.Minute,
 		Enabled:  true,
-		Fn:       s.runFailedRetry,
+		Fn:       s.runAttachmentDiff,
 	})
 	s.register(TaskSpec{
 		Key:      "daily_full_diff",
@@ -135,6 +137,9 @@ func (s *Scheduler) Start(ctx context.Context) {
 		}
 		taskKey := sp.Key
 		interval := sp.Interval
+		if taskKey == "monitor_root_scan" {
+			interval = time.Second
+		}
 		go func() {
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
@@ -143,6 +148,12 @@ func (s *Scheduler) Start(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+					if taskKey == "monitor_root_scan" {
+						roots, err := s.dueMonitorRoots(ctx)
+						if err == nil && len(roots) == 0 {
+							continue
+						}
+					}
 					_ = s.RunTaskNow(ctx, taskKey)
 				}
 			}
@@ -207,24 +218,39 @@ func (s *Scheduler) RunTaskNow(ctx context.Context, taskKey string) error {
 	return runErr
 }
 
+func (s *Scheduler) dueMonitorRoots(ctx context.Context) ([]discovery.MonitorRoot, error) {
+	roots, err := s.store.ListMonitorRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	var due []discovery.MonitorRoot
+	for _, r := range roots {
+		if r.Enabled && now >= r.LastScannedAt+r.IntervalSec && (s.pipeline == nil || !s.pipeline.Discovery().RootPathBusy(r.RootPath)) {
+			due = append(due, r)
+		}
+	}
+	return due, nil
+}
+
 func (s *Scheduler) runIncrementalMonitorScan(ctx context.Context) error {
 	if s.pipeline == nil {
 		return nil
 	}
-	roots, err := s.store.ListMonitorRoots(ctx)
+	roots, err := s.dueMonitorRoots(ctx)
 	if err != nil {
 		return err
 	}
-	var firstErr error
+	var result []error
 	for _, r := range roots {
-		if !r.Enabled {
-			continue
-		}
-		if _, sErr := s.pipeline.RunIncrementalSyncRoot(ctx, r.ID); sErr != nil && firstErr == nil {
-			firstErr = sErr
+		b, err := s.pipeline.RunIncrementalSyncRoot(ctx, r.ID)
+		if err != nil {
+			result = append(result, err)
+		} else if b.FailedCount > 0 {
+			result = append(result, fmt.Errorf("%s: %d 个资源处理失败", r.RootPath, b.FailedCount))
 		}
 	}
-	return firstErr
+	return errors.Join(result...)
 }
 
 func (s *Scheduler) runFullDiffScan(ctx context.Context) error {
@@ -240,8 +266,13 @@ func (s *Scheduler) runFullDiffScan(ctx context.Context) error {
 		if !r.Enabled {
 			continue
 		}
-		if _, sErr := s.pipeline.RunFullSyncRoot(ctx, r.ID); sErr != nil && firstErr == nil {
-			firstErr = sErr
+		b, sErr := s.pipeline.RunFullSyncRoot(ctx, r.ID)
+		if firstErr == nil {
+			if sErr != nil {
+				firstErr = sErr
+			} else if b.FailedCount > 0 {
+				firstErr = fmt.Errorf("%s: %d 个资源处理失败", r.RootPath, b.FailedCount)
+			}
 		}
 	}
 	return firstErr
@@ -259,54 +290,68 @@ func (s *Scheduler) runFailedRetry(ctx context.Context) error {
 	if s.pipeline == nil {
 		return nil
 	}
-	failedList, _, err := s.store.ListResources(ctx, discovery.ResourceFilter{
-		Status:    discovery.StatusFailed,
-		OnlyFiles: true,
-		Limit:     100,
-	})
+	ids, err := s.store.PendingResourceIDs(ctx, 100)
 	if err != nil {
 		return err
 	}
-	for _, res := range failedList {
-		if res.RetryCount >= 5 {
-			continue
+	var first error
+	for _, id := range ids {
+		_, err = s.pipeline.Discovery().ReprocessResource(ctx, id)
+		if first == nil && err != nil && !errors.Is(err, discovery.ErrResourceUnmanaged) && !errors.Is(err, discovery.ErrResourceMissing) {
+			first = err
 		}
-		_, _ = s.pipeline.Discovery().ReprocessResource(ctx, res.ID)
 	}
 	s.pipeline.FlushScopedLibraryScans()
-	return nil
+	return first
 }
 
-// runSTRMConsistencyCheck ensures all ACTIVE media resources still have their generated `.strm` file on disk
-// (while leaving MISSING resources untouched per `keep` policy).
+func (s *Scheduler) runAttachmentDiff(ctx context.Context) error {
+	return s.recheckFiles(ctx, true)
+}
+
 func (s *Scheduler) runSTRMConsistencyCheck(ctx context.Context) error {
+	return s.recheckFiles(ctx, false)
+}
+
+func (s *Scheduler) recheckFiles(ctx context.Context, attachments bool) error {
 	if s.pipeline == nil {
 		return nil
 	}
-	offset := 0
+	var first error
+	cursor := ""
 	for {
-		items, total, err := s.store.ListResources(ctx, discovery.ResourceFilter{
-			Status:    discovery.StatusActive,
-			OnlyFiles: true,
-			Limit:     200,
-			Offset:    offset,
-		})
+		res, err := s.store.MaintenanceFiles(ctx, cursor, 200)
 		if err != nil {
 			return err
 		}
-		for _, res := range items {
-			if res.LocalSTRMPath == "" {
-				continue
+		for _, r := range res {
+			cursor = r.ID
+			if attachments {
+				if !s.pipeline.STRMEngine().IsAttachment(r) {
+					continue
+				}
+			} else {
+				if !strings.EqualFold(filepath.Ext(r.LocalSTRMPath), ".strm") {
+					continue
+				}
+				if !s.pipeline.STRMEngine().RequiresSTRMRepair(r) {
+					continue
+				}
 			}
-			if _, stErr := os.Stat(res.LocalSTRMPath); os.IsNotExist(stErr) {
-				_, _ = s.pipeline.Discovery().ReprocessResource(ctx, res.ID)
+			_, err = s.pipeline.Discovery().ReprocessResource(ctx, r.ID)
+			if first == nil && err != nil && !errors.Is(err, discovery.ErrResourceUnmanaged) && !errors.Is(err, discovery.ErrResourceMissing) {
+				first = err
 			}
 		}
-		offset += len(items)
-		if offset >= total || len(items) == 0 {
+		if len(res) < 200 {
 			break
 		}
 	}
 	s.pipeline.FlushScopedLibraryScans()
-	return nil
+	return first
+}
+
+func (s *Scheduler) HasTask(key string) bool {
+	_, ok := s.specs[key]
+	return ok
 }

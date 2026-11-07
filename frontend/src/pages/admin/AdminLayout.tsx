@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Folder, FolderSync, Sparkles, Users, Sliders } from 'lucide-react';
+import { Folder, FolderSync, Sparkles, Users, ListChecks } from 'lucide-react';
 import { MediaItem } from '../../types';
 import { AdminLibraries } from './AdminLibraries';
 import { AdminXiaoyaSync } from './AdminXiaoyaSync';
 import { AdminTmdb } from './AdminTmdb';
 import { AdminSystemUsers } from './AdminSystemUsers';
+import { AdminResources } from './AdminResources';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 
 interface AdminLayoutProps {
-  initialTab?: 'libraries' | 'sync' | 'tmdb' | 'users';
+  initialTab?: 'libraries' | 'sync' | 'resources' | 'tmdb' | 'users';
   initialMatchItem?: MediaItem | null;
   onClearInitialMatchItem?: () => void;
   onOpenLogs: () => void;
@@ -20,7 +21,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
   onClearInitialMatchItem,
   onOpenLogs,
 }) => {
-  const [activeTab, setActiveTab] = useState<'libraries' | 'sync' | 'tmdb' | 'users'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'libraries' | 'sync' | 'resources' | 'tmdb' | 'users'>(initialTab);
 
   useEffect(() => {
     if (initialMatchItem) {
@@ -60,6 +61,15 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
 
         <button
           type="button"
+          onClick={() => setActiveTab('resources')}
+          className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-semibold shrink-0 ${activeTab === 'resources' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'}`}
+        >
+          <ListChecks className="h-4 w-4" />
+          资源与任务
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveTab('tmdb')}
           className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition shrink-0 cursor-pointer ${
             activeTab === 'tmdb'
@@ -90,6 +100,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
         <div>
           {activeTab === 'libraries' && <AdminLibraries onOpenLogs={onOpenLogs} />}
           {activeTab === 'sync' && <AdminXiaoyaSync onOpenLogs={onOpenLogs} />}
+          {activeTab === 'resources' && <AdminResources />}
           {activeTab === 'tmdb' && (
             <AdminTmdb
               initialMatchItem={initialMatchItem}

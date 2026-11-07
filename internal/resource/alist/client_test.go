@@ -151,3 +151,101 @@ func TestAListBrowseSearchImportAndSeriesAutoTrack(t *testing.T) {
 		t.Fatalf("auto-tracked S01E03.strm missing or invalid: content=%q err=%v", string(raw), rErr)
 	}
 }
+
+func TestAListReloginAlsoRefreshesPlaybackLink(t *testing.T) {
+	logins := 0
+	cli := NewClient(Options{BaseURL: "http://xiaoya.host:5678", Username: "fixture", Password: "fixture", HTTPClient: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			logins++
+			tok := "expired"
+			if logins == 2 {
+				tok = "new"
+			}
+			return jsonResp(map[string]any{"code": 200, "data": map[string]string{"token": tok}}), nil
+		case "/api/fs/get":
+			if r.Header.Get("Authorization") != "new" {
+				return jsonResp(map[string]any{"code": 401, "message": "expired"}), nil
+			}
+			if r.Header.Get("X-Alist-OriUA") != "VidHub" {
+				t.Errorf("missing client user agent")
+			}
+			return jsonResp(map[string]any{"code": 200, "data": map[string]string{"raw_url": "https://cdn.example/episode.mp4", "sign": "new-sign"}}), nil
+		}
+		t.Fatalf("unexpected request %s", r.URL.Path)
+		return nil, nil
+	})}})
+	u, sign, err := cli.PlaybackFile(context.Background(), "/Tracked/E01.mp4", "VidHub")
+	if err != nil || u != "https://cdn.example/episode.mp4" || sign != "new-sign" || logins != 2 {
+		t.Fatalf("u=%q sign=%q logins=%d err=%v", u, sign, logins, err)
+	}
+}
+
+func TestOnlyOptedInDirectoryTracksAndAbsenceRequiresHealthyListing(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(tmp, "biz.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := discovery.NewSQLStore(db, "sqlite")
+	if err = store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string][]Entry{"/Once": {{Name: "Season", IsDir: true}}, "/Once/Season": {{Name: "E01.mp4"}}, "/Tracked": {{Name: "E01.mp4"}}}
+	fail := false
+	client := NewClient(Options{HTTPClient: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		var b struct{ Path string }
+		if e := json.NewDecoder(r.Body).Decode(&b); e != nil {
+			return nil, e
+		}
+		if fail && b.Path == "/Tracked" {
+			return jsonResp(map[string]any{"code": 503, "message": "offline"}), nil
+		}
+		es := entries[b.Path]
+		return jsonResp(map[string]any{"code": 200, "data": map[string]any{"content": es, "total": len(es)}}), nil
+	})}})
+	e := strm.NewEngine(strm.Config{OutputRoot: filepath.Join(tmp, "out"), PreserveSourceStructure: true, PathStore: store})
+	s := discovery.NewService(store, nil, e)
+	im := NewImporter(client, s, e, nil)
+	dir := true
+	if _, err = im.Import(ctx, ImportRequest{Path: "/Once", IsDir: &dir}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = im.Import(ctx, ImportRequest{Path: "/Tracked", IsDir: &dir, TrackUpdates: true}); err != nil {
+		t.Fatal(err)
+	}
+	entries["/Once/Season"] = append(entries["/Once/Season"], Entry{Name: "E02.mp4"})
+	entries["/Tracked"] = nil
+	fail = true
+	if _, err = im.SyncTrackedDirectories(ctx); err == nil {
+		t.Fatal("upstream failure was swallowed")
+	}
+	r, _, _ := store.GetResourceBySourceKey(ctx, "alist:/Tracked/E01.mp4")
+	if r.Status != discovery.StatusActive {
+		t.Fatalf("failed inventory changed state to %s", r.Status)
+	}
+	fail = false
+	if n, e := im.SyncTrackedDirectories(ctx); n != 1 || e != nil {
+		t.Fatalf("tracking n=%d err=%v", n, e)
+	}
+	if _, exists, _ := store.GetResourceBySourceKey(ctx, "alist:/Once/Season/E02.mp4"); exists {
+		t.Fatal("one-shot import started tracking")
+	}
+	r, _, _ = store.GetResourceBySourceKey(ctx, "alist:/Tracked/E01.mp4")
+	if r.Status != discovery.StatusMissing {
+		t.Fatalf("confirmed absence was not recorded: %+v", r)
+	}
+	if _, err = os.Stat(r.LocalSTRMPath); err != nil {
+		t.Fatalf("keep lost STRM: %v", err)
+	}
+	entries["/Tracked"] = []Entry{{Name: "E01.mp4"}}
+	if _, err = im.SyncTrackedDirectories(ctx); err != nil {
+		t.Fatal(err)
+	}
+	next, _, _ := store.GetResourceBySourceKey(ctx, r.SourceKey)
+	if next.Status != discovery.StatusActive || next.ID != r.ID || next.LocalSTRMPath != r.LocalSTRMPath {
+		t.Fatalf("restored resource lost identity: %+v", next)
+	}
+}

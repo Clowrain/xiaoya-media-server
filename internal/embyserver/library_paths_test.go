@@ -76,14 +76,11 @@ func TestFolderMutationBlockedDuringScan(t *testing.T) {
 
 func TestFolderAdditionValidationAndScan(t *testing.T) {
 	a := testApp(t)
-	if e := os.MkdirAll("/media", 0755); e != nil {
-		t.Skip(e)
-	}
-	base, e := os.MkdirTemp("/media", "go-emby-folders-test-")
+	base, e := filepath.EvalSymlinks(t.TempDir())
 	if e != nil {
-		t.Skip(e)
+		t.Fatal(e)
 	}
-	defer os.RemoveAll(base)
+	t.Setenv("MEDIA_ROOTS", base)
 	first := filepath.Join(base, "first")
 	second := filepath.Join(base, "second")
 	os.MkdirAll(first, 0755)

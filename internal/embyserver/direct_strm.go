@@ -43,7 +43,7 @@ func (a *App) resolveSTRM(w http.ResponseWriter, r *http.Request, x Item, endpoi
 		w.WriteHeader(http.StatusFound)
 		return
 	}
-	link, err := xiaoyaLinkWithToken(r, x.URL, endpoint, a.alistTokenForPlayback())
+	link, err := a.resolvePlaybackLink(r, x.URL, endpoint)
 	if err != nil {
 		RecordGlobalLog("ERROR", "playback", "STRM 直链解析失败", fmt.Sprintf("影片: %s (ID: %s) · 原始 STRM: %s", x.Name, x.ID, x.URL), "", err.Error())
 		fail(w, http.StatusBadGateway, "STRM 直链解析失败: "+err.Error())

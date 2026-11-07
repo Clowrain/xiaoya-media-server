@@ -2,10 +2,7 @@ package embyserver
 
 import (
 	"database/sql"
-	"errors"
 	_ "github.com/lib/pq"
-	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -91,21 +88,4 @@ func pgArgs(a []any) []any {
 		}
 	}
 	return a
-}
-
-func postgresBackupEnv(dsn string) ([]string, error) {
-	u, e := url.Parse(dsn)
-	if e != nil || u.User == nil || u.Hostname() == "" || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
-		return nil, errors.New("PostgreSQL backup requires DATABASE_URL")
-	}
-	pass, _ := u.User.Password()
-	port := u.Port()
-	if port == "" {
-		port = "5432"
-	}
-	mode := u.Query().Get("sslmode")
-	if mode == "" {
-		mode = "prefer"
-	}
-	return append(os.Environ(), "PGHOST="+u.Hostname(), "PGPORT="+port, "PGUSER="+u.User.Username(), "PGPASSWORD="+pass, "PGDATABASE="+strings.TrimPrefix(u.Path, "/"), "PGSSLMODE="+mode, "PGCONNECT_TIMEOUT=10"), nil
 }

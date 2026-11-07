@@ -136,3 +136,64 @@ func TestReaderReadOnlyAndZheYueLiangSubtree(t *testing.T) {
 		t.Fatalf("unexpected last node: %+v", last)
 	}
 }
+
+func TestSnapshotKeepsMovedFileAndDefersNewNode(t *testing.T) {
+	ctx := context.Background()
+	p := filepath.Join(t.TempDir(), "source.db")
+	w, err := sql.Open("sqlite", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	_, err = w.Exec(`PRAGMA journal_mode=WAL;
+CREATE TABLE nodes(id INTEGER PRIMARY KEY,name TEXT,parent_id INTEGER,is_dir INTEGER,content TEXT);
+INSERT INTO nodes VALUES(1,'Root',0,1,''),(2,'A',1,1,''),(3,'B',1,1,''),(4,'E01',2,0,'url'),(5,'E02',3,0,'url');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenReader(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	var high int64
+	seen := map[int64]string{}
+	err = r.WithSnapshot(ctx, func(view *Reader) error {
+		root, e := view.ResolvePath(ctx, "/Root")
+		if e != nil {
+			return e
+		}
+		_, e = view.WalkSubtreeBatched(ctx, root, 1, func(nodes []Node) error {
+			n := nodes[0]
+			seen[n.ID] = n.FullPath
+			if n.ID == 4 {
+				_, e := w.Exec("UPDATE nodes SET parent_id=1 WHERE id=5; INSERT INTO nodes VALUES(6,'E03',2,0,'url')")
+				return e
+			}
+			return nil
+		})
+		if e != nil {
+			return e
+		}
+		high, e = view.MaxNodeID(ctx)
+		return e
+	})
+	if err != nil || high != 5 || seen[5] != "/Root/B/E02" || seen[6] != "" {
+		t.Fatalf("mixed snapshot: seen=%v high=%d err=%v", seen, high, err)
+	}
+	err = r.WithSnapshot(ctx, func(view *Reader) error {
+		root, e := view.ResolvePath(ctx, "/Root")
+		if e != nil {
+			return e
+		}
+		return view.WalkNewUnderRoot(ctx, root, high, 6, func(nodes []Node) error {
+			for _, n := range nodes {
+				seen[n.ID] = n.FullPath
+			}
+			return nil
+		})
+	})
+	if err != nil || seen[6] != "/Root/A/E03" {
+		t.Fatalf("next incremental scan did not see E03: %v %v", seen, err)
+	}
+}

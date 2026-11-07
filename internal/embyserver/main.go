@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -33,24 +32,28 @@ type M = map[string]any
 type ExtensionHandler func(w http.ResponseWriter, r *http.Request, u User) bool
 
 type App struct {
-	cfg           *config.Config
-	extHandler    ExtensionHandler
-	scanControlMu sync.Mutex
-	scanResume    chan struct{}
-	pages         pageCache
-	cursorSecret  string
-	proxyDebug    proxyDebugState
-	activity      activityState
-	probes        probeState
-	db            *Database
-	write         sync.Mutex
-	libraryConfig sync.Mutex
-	scan          sync.RWMutex
-	jobs          libraryJobQueue
-	playing       sync.Mutex
-	loginMu       sync.Mutex
-	attempts      map[string][]time.Time
-	serverID      string
+	cfg               *config.Config
+	extHandler        ExtensionHandler
+	alistPlaybackBase string
+	alistPlayback     alistFileLookup
+	scanControlMu     sync.Mutex
+	scanResume        chan struct{}
+	pages             pageCache
+	cursorSecret      string
+	proxyDebug        proxyDebugState
+	activity          activityState
+	probes            probeState
+	db                *Database
+	databaseDSN       string
+	backupMu          sync.Mutex
+	write             sync.Mutex
+	libraryConfig     sync.Mutex
+	scan              sync.RWMutex
+	jobs              libraryJobQueue
+	playing           sync.Mutex
+	loginMu           sync.Mutex
+	attempts          map[string][]time.Time
+	serverID          string
 }
 type User struct {
 	ID     string
@@ -1507,46 +1510,9 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request, u User, i string) {
 	w.WriteHeader(http.StatusFound)
 }
 func (a *App) poster(w http.ResponseWriter, r *http.Request, i string) { a.serveImage(w, r, i) }
-func (a *App) backup() (string, error) {
-	p := "/app/backups/emby-" + time.Now().UTC().Format("20060102T150405.000000000") + ".dump"
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-	f, e := os.OpenFile(p+".partial", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if e != nil {
-		return "", e
-	}
-	cmd := exec.CommandContext(ctx, "pg_dump", "--format=custom", "--no-owner", "--no-acl")
-	cmd.Env, e = postgresBackupEnv(os.Getenv("DATABASE_URL"))
-	if e != nil {
-		f.Close()
-		os.Remove(p + ".partial")
-		return "", e
-	}
-	cmd.Stdout = f
-	e = cmd.Run()
-	closeErr := f.Close()
-	if e == nil {
-		e = closeErr
-	}
-	if e != nil {
-		os.Remove(p + ".partial")
-		return "", e
-	}
-	if e = os.Rename(p+".partial", p); e != nil {
-		return "", e
-	}
-	files, _ := filepath.Glob("/app/backups/emby-*.dump")
-	if len(files) > 14 {
-		for _, old := range files[:len(files)-14] {
-			os.Remove(old)
-		}
-	}
-	return p, nil
-}
-// SetExtensionHandler registers an authenticated handler for unified resource/AList/task management APIs (/api/*).
-func (a *App) SetExtensionHandler(h ExtensionHandler) {
-	a.extHandler = h
-}
+
+// SetExtensionHandler registers the authenticated resource management API.
+func (a *App) SetExtensionHandler(h ExtensionHandler) { a.extHandler = h }
 
 // DB exposes the underlying PostgreSQL *sql.DB for unified repositories and migrations.
 func (a *App) SQLDB() *sql.DB {
@@ -1572,28 +1538,8 @@ func (a *App) TriggerScanAll() {
 
 // TriggerScopedPathScan triggers an incremental scoped scan on any library containing targetPath.
 func (a *App) TriggerScopedPathScan(targetPath string) {
-	if a == nil || a.db == nil || strings.TrimSpace(targetPath) == "" {
-		return
-	}
-	targetPath = filepath.Clean(targetPath)
-	rows, err := a.db.Query("SELECT id, path FROM libraries")
-	if err != nil {
-		return
-	}
-	type match struct{ id, path string }
-	var matches []match
-	for rows.Next() {
-		var m match
-		if rows.Scan(&m.id, &m.path) == nil {
-			cleanRoot := filepath.Clean(m.path)
-			if targetPath == cleanRoot || strings.HasPrefix(targetPath, cleanRoot+string(filepath.Separator)) {
-				matches = append(matches, m)
-			}
-		}
-	}
-	rows.Close()
-	for _, m := range matches {
-		go a.scanLibraryScoped(m.id, true, false, []string{targetPath})
+	if strings.TrimSpace(targetPath) != "" {
+		a.TriggerScopedPathScans([]string{targetPath})
 	}
 }
 
@@ -1636,7 +1582,7 @@ func OpenApp(ctx context.Context, cfg *config.Config, extraMigrate func(*sql.DB)
 	if err != nil {
 		return nil, nil, err
 	}
-	a := &App{cfg: cfg, db: db, attempts: map[string][]time.Time{}}
+	a := &App{cfg: cfg, db: db, databaseDSN: dsn, attempts: map[string][]time.Time{}}
 	a.init()
 	if extraMigrate != nil {
 		if err := extraMigrate(db.DB); err != nil {

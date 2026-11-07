@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,7 +20,11 @@ func testApp(t *testing.T) *App {
 	t.Helper()
 	t.Setenv("ADMIN_PASSWORD", "test-password-12345")
 	t.Setenv("BOOTSTRAP_API_KEY", "")
-	t.Setenv("MEDIA_INFO_ROOT", t.TempDir())
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MEDIA_INFO_ROOT", root)
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL required for PostgreSQL integration tests")

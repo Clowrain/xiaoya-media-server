@@ -11,8 +11,9 @@ import (
 
 func TestSnapshotDiffAndSeasonPosters(t *testing.T) {
 	a := testApp(t)
-	os.MkdirAll("/media", 0755)
-	root, e := os.MkdirTemp("/media", "snapshot-")
+	fixtureRoot := t.TempDir()
+	t.Setenv("MEDIA_ROOTS", fixtureRoot)
+	root, e := os.MkdirTemp(fixtureRoot, "snapshot-")
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -92,6 +92,8 @@ export interface MonitorRoot {
   interval_sec: number;
   enabled: boolean;
   last_scan_time?: string;
+  last_status?: string;
+  last_error?: string;
   item_count?: number;
 }
 
@@ -141,4 +143,41 @@ export interface LogEntry {
   source?: string;
   trace_id?: string;
   [key: string]: any;
+}
+
+
+export interface SyncBatch {
+  id: string;
+  root_path: string;
+  status: string;
+  total_seen: number;
+  added_count: number;
+  modified_count: number;
+  renamed_count: number;
+  moved_count: number;
+  missing_count: number;
+  restored_count: number;
+  failed_count: number;
+  unindexed_strm_count?: number;
+  error_message?: string;
+  started_at: number;
+}
+
+export interface AdminJob {
+  id: string;
+  kind: 'sync' | 'import' | 'task';
+  scope: string;
+  status: 'RUNNING' | 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'INTERRUPTED';
+  created_at: number;
+  error?: string;
+  result?: {
+    source_path?: string;
+    errors?: string[];
+    batches?: SyncBatch[];
+    imported_files?: number;
+    imported_dirs?: number;
+    failed_files?: number;
+    generated_strms?: string[];
+    unindexed_strms?: string[];
+  };
 }
