@@ -12,6 +12,25 @@ var (
 	extraMediaRoots   = map[string]bool{}
 )
 
+// resolveSymlinkAllowNonExistent resolves symlinks in existing ancestor components even if leaf dirs do not exist yet.
+func resolveSymlinkAllowNonExistent(p string) string {
+	p = filepath.Clean(p)
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return filepath.Clean(real)
+	}
+	var tail []string
+	cur := p
+	for cur != "/" && cur != "." {
+		tail = append([]string{filepath.Base(cur)}, tail...)
+		cur = filepath.Dir(cur)
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			joined := filepath.Join(append([]string{real}, tail...)...)
+			return filepath.Clean(joined)
+		}
+	}
+	return p
+}
+
 // RegisterMediaRoot adds an allowed media root directory (and its resolved symlink target, if any).
 func RegisterMediaRoot(root string) {
 	root = filepath.Clean(strings.TrimSpace(root))
@@ -21,8 +40,8 @@ func RegisterMediaRoot(root string) {
 	extraMediaRootsMu.Lock()
 	defer extraMediaRootsMu.Unlock()
 	extraMediaRoots[root] = true
-	if real, err := filepath.EvalSymlinks(root); err == nil && filepath.IsAbs(real) && real != "/" {
-		extraMediaRoots[filepath.Clean(real)] = true
+	if resolved := resolveSymlinkAllowNonExistent(root); filepath.IsAbs(resolved) && resolved != "/" {
+		extraMediaRoots[resolved] = true
 	}
 }
 
