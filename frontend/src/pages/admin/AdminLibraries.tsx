@@ -27,17 +27,21 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
   const [showScheduleModal, setShowScheduleModal] = useState<boolean>(false);
 
   // Directory picker state
-  const [pickerTarget, setPickerTarget] = useState<'add' | 'folder' | null>(null);
+  const [pickerTarget, setPickerTarget] = useState<'add' | 'folder' | 'edit-folder' | null>(null);
   const [currentSelectedPath, setCurrentSelectedPath] = useState<string>('/media/strm');
 
-  // Form states
+  // Form states - Add
   const [addName, setAddName] = useState('');
   const [addKind, setAddKind] = useState('movies');
   const [addPath, setAddPath] = useState('/media/strm/电影');
 
+  // Form states - Edit
   const [editName, setEditName] = useState('');
   const [editKind, setEditKind] = useState('movies');
+  const [editPaths, setEditPaths] = useState<string[]>([]);
+  const [editNewPath, setEditNewPath] = useState<string>('');
 
+  // Form states - Manage folders
   const [newFolderPath, setNewFolderPath] = useState('');
 
   // Schedule state
@@ -46,39 +50,81 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
   const [scheduleTime, setScheduleTime] = useState('03:00');
   const [scheduleMinutes, setScheduleMinutes] = useState(60);
 
-  const loadLibraries = async () => {
-    setLoading(true);
+  // Helper to extract full paths list with fallbacks
+  const getLibPaths = (lib?: AdminLibrary | null): string[] => {
+    if (!lib) return [];
+    if (Array.isArray(lib.Paths) && lib.Paths.length > 0) return lib.Paths;
+    if (Array.isArray(lib.Locations) && lib.Locations.length > 0) return lib.Locations;
+    if (lib.Path) return [lib.Path];
+    return [];
+  };
+
+  const getKindBadge = (kind?: string, collectionType?: string) => {
+    const k = (kind || collectionType || '').toLowerCase();
+    if (k === 'tvshows' || k === 'tv' || k === 'series') {
+      return { text: '剧集', className: 'text-indigo-400 bg-indigo-950/60 border-indigo-500/20' };
+    }
+    if (k === 'music') {
+      return { text: '音乐', className: 'text-amber-400 bg-amber-950/60 border-amber-500/20' };
+    }
+    return { text: '电影', className: 'text-emerald-400 bg-emerald-950/60 border-emerald-500/20' };
+  };
+
+  const formatScannedTime = (scanned?: number) => {
+    if (!scanned || scanned <= 0) return null;
+    const d = new Date(scanned * 1000);
+    return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  };
+
+  const loadLibraries = async (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
     try {
       const data = await fetchAdminLibraries();
       setLibraries(data);
     } catch (err: any) {
-      notifyToast(err.message || '加载媒体库列表失败', 'error');
+      if (showSpinner) {
+        notifyToast(err.message || '加载媒体库列表失败', 'error');
+      }
     } finally {
-      setLoading(false);
+      if (showSpinner) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadLibraries();
+    loadLibraries(true);
   }, []);
 
-  const handleScan = async (id: string, mode: string = 'scan') => {
+  // Poll library status if any library is scanning
+  useEffect(() => {
+    const hasActiveScan = libraries.some(l => l.Status === 'scanning');
+    if (!hasActiveScan) return;
+    const timer = setInterval(() => {
+      loadLibraries(false);
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [libraries]);
+
+  const handleScan = async (id: string, mode: 'update' | 'refresh') => {
     try {
+      setLibraries(prev => prev.map(l => l.Id === id ? { ...l, Status: 'scanning', Error: '' } : l));
       await scanLibrary(id, mode);
-      notifyToast('扫描任务已加入队列，可查看实时日志', 'success');
+      notifyToast(mode === 'update' ? '增量扫描任务已加入队列' : '全量刷新任务已加入队列', 'success');
       onOpenLogs();
     } catch (err: any) {
       notifyToast(err.message || '触发扫描失败', 'error');
+      loadLibraries(false);
     }
   };
 
   const handleScanAll = async () => {
     try {
+      setLibraries(prev => prev.map(l => ({ ...l, Status: 'scanning', Error: '' })));
       await scanAllLibraries();
       notifyToast('所有媒体库扫描已加入队列', 'success');
       onOpenLogs();
     } catch (err: any) {
       notifyToast(err.message || '触发全库扫描失败', 'error');
+      loadLibraries(false);
     }
   };
 
@@ -110,14 +156,45 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
     }
   };
 
+  const openEditModal = (lib: AdminLibrary) => {
+    setShowEditModal(lib);
+    setEditName(lib.Name);
+    setEditKind(lib.Kind || lib.CollectionType || 'movies');
+    setEditPaths(getLibPaths(lib));
+    setEditNewPath('');
+  };
+
+  const handleAddEditPath = () => {
+    const p = editNewPath.trim();
+    if (!p) return;
+    if (editPaths.includes(p)) {
+      notifyToast('该路径已在列表中', 'warning');
+      return;
+    }
+    setEditPaths([...editPaths, p]);
+    setEditNewPath('');
+  };
+
+  const handleRemoveEditPath = (pathToRemove: string) => {
+    if (editPaths.length <= 1) {
+      notifyToast('媒体库至少需要保留一个目录', 'warning');
+      return;
+    }
+    setEditPaths(editPaths.filter(p => p !== pathToRemove));
+  };
+
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!showEditModal || !editName.trim()) return;
+    if (editPaths.length === 0) {
+      notifyToast('媒体库至少需要包含一个有效路径', 'error');
+      return;
+    }
     try {
-      await updateAdminLibrary(showEditModal.Id, editName.trim(), editKind);
+      await updateAdminLibrary(showEditModal.Id, editName.trim(), editKind, editPaths);
       notifyToast('媒体库配置已更新', 'success');
       setShowEditModal(null);
-      loadLibraries();
+      loadLibraries(false);
     } catch (err: any) {
       notifyToast(err.message || '更新媒体库失败', 'error');
     }
@@ -140,6 +217,11 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
 
   const handleRemoveFolder = async (path: string) => {
     if (!showFoldersModal) return;
+    const currentPaths = getLibPaths(showFoldersModal);
+    if (currentPaths.length <= 1) {
+      notifyToast('媒体库至少需要保留一个目录', 'warning');
+      return;
+    }
     if (!confirm(`确定解绑目录 ${path}？`)) return;
     try {
       await removeLibraryFolder(showFoldersModal.Id, path);
@@ -234,94 +316,128 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {libraries.map((lib) => (
-            <div
-              key={lib.Id}
-              className="p-5 rounded-2xl bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 transition flex flex-col justify-between space-y-4"
-            >
-              <div>
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-xl bg-emerald-950/80 border border-emerald-500/20 flex items-center justify-center">
-                      <Folder className="w-5 h-5 text-emerald-400" />
+          {libraries.map((lib) => {
+            const paths = getLibPaths(lib);
+            const badge = getKindBadge(lib.Kind, lib.CollectionType);
+            const isScanning = lib.Status === 'scanning';
+            const itemCount = lib.Items ?? lib.Count ?? 0;
+            const lastScan = formatScannedTime(lib.Scanned);
+
+            return (
+              <div
+                key={lib.Id}
+                className="p-5 rounded-2xl bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 transition flex flex-col justify-between space-y-4"
+              >
+                <div>
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center border ${
+                        isScanning 
+                          ? 'bg-amber-950/80 border-amber-500/30 text-amber-400' 
+                          : 'bg-emerald-950/80 border-emerald-500/20 text-emerald-400'
+                      }`}>
+                        {isScanning ? (
+                          <RefreshCw className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <Folder className="w-5 h-5" />
+                        )}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-sm text-zinc-100">{lib.Name}</h3>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${badge.className}`}>
+                            {badge.text}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5 text-xs text-zinc-400">
+                          <span>{itemCount} 部媒体</span>
+                          {isScanning ? (
+                            <span className="text-[11px] text-amber-400 font-medium animate-pulse">正在扫描中...</span>
+                          ) : lib.Error ? (
+                            <span className="text-[11px] text-rose-400 font-medium truncate max-w-[140px]" title={lib.Error}>
+                              异常: {lib.Error}
+                            </span>
+                          ) : lastScan ? (
+                            <span className="text-[10px] text-zinc-500">最近扫描: {lastScan}</span>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-bold text-sm text-zinc-100">{lib.Name}</h3>
-                      <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">
-                        {lib.Kind}
-                      </span>
+
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => openEditModal(lib)}
+                        className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition"
+                        title="编辑基本信息与路径"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(lib.Id, lib.Name)}
+                        className="p-1.5 rounded-lg hover:bg-rose-950/50 text-zinc-400 hover:text-rose-400 transition"
+                        title="删除媒体库"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => {
-                        setShowEditModal(lib);
-                        setEditName(lib.Name);
-                        setEditKind(lib.Kind);
-                      }}
-                      className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition"
-                      title="编辑基本信息"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(lib.Id, lib.Name)}
-                      className="p-1.5 rounded-lg hover:bg-rose-950/50 text-zinc-400 hover:text-rose-400 transition"
-                      title="删除媒体库"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                  {/* Bound Paths */}
+                  <div className="mt-4 space-y-1.5">
+                    <div className="text-[11px] font-semibold text-zinc-500 flex items-center justify-between">
+                      <span>关联存储目录 ({paths.length}):</span>
+                      <button
+                        onClick={() => setShowFoldersModal(lib)}
+                        className="text-emerald-400 hover:underline text-[11px]"
+                      >
+                        管理路径
+                      </button>
+                    </div>
+                    {paths.length === 0 ? (
+                      <div className="text-xs text-zinc-500 italic px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800/80">
+                        暂无关联路径，请点击「管理路径」添加
+                      </div>
+                    ) : (
+                      paths.slice(0, 2).map((p, idx) => (
+                        <div
+                          key={idx}
+                          className="text-xs font-mono px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800/80 text-zinc-300 truncate"
+                          title={p}
+                        >
+                          {p}
+                        </div>
+                      ))
+                    )}
+                    {paths.length > 2 && (
+                      <div className="text-[10px] text-zinc-500 pl-1">
+                        还有 {paths.length - 2} 个路径...
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* Bound Paths */}
-                <div className="mt-4 space-y-1.5">
-                  <div className="text-[11px] font-semibold text-zinc-500 flex items-center justify-between">
-                    <span>关联存储目录 ({(lib.Paths || []).length}):</span>
-                    <button
-                      onClick={() => setShowFoldersModal(lib)}
-                      className="text-emerald-400 hover:underline text-[11px]"
-                    >
-                      管理路径
-                    </button>
-                  </div>
-                  {(lib.Paths || []).slice(0, 2).map((p, idx) => (
-                    <div
-                      key={idx}
-                      className="text-xs font-mono px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800/80 text-zinc-300 truncate"
-                      title={p}
-                    >
-                      {p}
-                    </div>
-                  ))}
-                  {(lib.Paths || []).length > 2 && (
-                    <div className="text-[10px] text-zinc-500 pl-1">
-                      还有 {(lib.Paths || []).length - 2} 个路径...
-                    </div>
-                  )}
+                {/* Action Buttons */}
+                <div className="pt-2 border-t border-zinc-800/60 flex items-center gap-2">
+                  <button
+                    onClick={() => handleScan(lib.Id, 'update')}
+                    disabled={isScanning}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-200 text-xs font-medium transition"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isScanning ? 'animate-spin' : ''}`} />
+                    {isScanning ? '扫描中...' : '增量扫描'}
+                  </button>
+                  <button
+                    onClick={() => handleScan(lib.Id, 'refresh')}
+                    disabled={isScanning}
+                    className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 text-xs font-medium transition"
+                    title="全量扫描并刷新元数据"
+                  >
+                    全量刷新
+                  </button>
                 </div>
               </div>
-
-              {/* Action Buttons */}
-              <div className="pt-2 border-t border-zinc-800/60 flex items-center gap-2">
-                <button
-                  onClick={() => handleScan(lib.Id, 'scan')}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
-                  增量扫描
-                </button>
-                <button
-                  onClick={() => handleScan(lib.Id, 'refresh')}
-                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium transition"
-                  title="全量扫描并刷新元数据"
-                >
-                  全量刷新
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -433,9 +549,12 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
       {/* Edit Library Modal */}
       {showEditModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in">
-          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-4">
+          <div className="w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-              <h3 className="text-base font-bold text-zinc-100">编辑媒体库</h3>
+              <div>
+                <h3 className="text-base font-bold text-zinc-100">编辑媒体库</h3>
+                <p className="text-xs text-zinc-400 mt-0.5">修改媒体库名称、分类及关联存储路径</p>
+              </div>
               <button
                 onClick={() => setShowEditModal(null)}
                 className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white"
@@ -454,6 +573,7 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
                   className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500"
                 />
               </div>
+
               <div>
                 <label className="block text-xs font-semibold text-zinc-400 mb-1.5">内容类型</label>
                 <select
@@ -462,12 +582,66 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
                   className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500"
                 >
                   <option value="movies">电影 (Movies)</option>
-                  <option value="tvshows">剧集 (TV Shows)</option>
+                  <option value="tvshows">剧集/电视剧 (TV Shows)</option>
                   <option value="music">音乐 (Music)</option>
                   <option value="others">其它混合 (Mixed)</option>
                 </select>
               </div>
-              <div className="flex items-center justify-end gap-3 pt-2">
+
+              {/* Edit Associated Paths */}
+              <div className="space-y-2 pt-1 border-t border-zinc-800/60">
+                <label className="block text-xs font-semibold text-zinc-400">
+                  关联存储路径 ({editPaths.length})
+                </label>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                  {editPaths.map((p) => (
+                    <div
+                      key={p}
+                      className="flex items-center justify-between p-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono"
+                    >
+                      <span className="text-zinc-200 truncate mr-2" title={p}>{p}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveEditPath(p)}
+                        className="p-1 rounded text-zinc-500 hover:text-rose-400 transition shrink-0"
+                        title="从列表中移除"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Add path input */}
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="text"
+                    value={editNewPath}
+                    onChange={(e) => setEditNewPath(e.target.value)}
+                    placeholder="/media/strm/新目录"
+                    className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-zinc-200 focus:outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCurrentSelectedPath(editNewPath || '/media/strm');
+                      setPickerTarget('edit-folder');
+                    }}
+                    className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium shrink-0"
+                  >
+                    浏览
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddEditPath}
+                    className="px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-emerald-400 text-xs font-medium shrink-0"
+                  >
+                    添加
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-zinc-800/80">
                 <button
                   type="button"
                   onClick={() => setShowEditModal(null)}
@@ -506,12 +680,12 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
 
             {/* Existing Paths */}
             <div className="space-y-2 max-h-48 overflow-y-auto">
-              {(showFoldersModal.Paths || []).map((p) => (
+              {getLibPaths(showFoldersModal).map((p) => (
                 <div
                   key={p}
                   className="flex items-center justify-between p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono"
                 >
-                  <span className="text-zinc-200 truncate mr-2">{p}</span>
+                  <span className="text-zinc-200 truncate mr-2" title={p}>{p}</span>
                   <button
                     onClick={() => handleRemoveFolder(p)}
                     className="p-1 rounded text-zinc-500 hover:text-rose-400 transition shrink-0"
@@ -612,9 +786,10 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
                   <label className="block text-xs font-semibold text-zinc-400 mb-1.5">间隔分钟数</label>
                   <input
                     type="number"
-                    min={1}
+                    min="5"
+                    max="1440"
                     value={scheduleMinutes}
-                    onChange={(e) => setScheduleMinutes(Number(e.target.value))}
+                    onChange={(e) => setScheduleMinutes(parseInt(e.target.value) || 60)}
                     className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500"
                   />
                 </div>
@@ -648,6 +823,7 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
           onSelect={(selected) => {
             if (pickerTarget === 'add') setAddPath(selected);
             if (pickerTarget === 'folder') setNewFolderPath(selected);
+            if (pickerTarget === 'edit-folder') setEditNewPath(selected);
           }}
           onClose={() => setPickerTarget(null)}
         />

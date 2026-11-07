@@ -65,6 +65,9 @@ func (a *App) libraryFolders(w http.ResponseWriter, r *http.Request) {
 	}
 	path := filepath.Clean(mediaPath(b.Path))
 	if r.Method == "POST" || r.Method == "PUT" {
+		if allowedMediaPath(path) {
+			_ = os.MkdirAll(path, 0755)
+		}
 		real, e := filepath.EvalSymlinks(path)
 		if e != nil || !allowedMediaPath(real) {
 			fail(w, 400, "请选择已挂载媒体目录下的现有目录")

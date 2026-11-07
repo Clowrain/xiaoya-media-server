@@ -21,14 +21,22 @@ func (a *App) createLibrary(w http.ResponseWriter, name, kind, path string, path
 	}
 	validated := []string{}
 	for _, p := range paths {
-		real, e := filepath.EvalSymlinks(mediaPath(p))
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		mp := mediaPath(p)
+		if allowedMediaPath(mp) {
+			_ = os.MkdirAll(mp, 0755)
+		}
+		real, e := filepath.EvalSymlinks(mp)
 		if e != nil || !allowedMediaPath(real) {
-			fail(w, 400, "请选择已挂载媒体目录下的现有目录")
+			fail(w, 400, "请选择已挂载媒体目录下的现有目录: "+p)
 			return
 		}
 		fi, e := os.Stat(real)
 		if e != nil || !fi.IsDir() {
-			fail(w, 400, "无效目录")
+			fail(w, 400, "无效目录: "+p)
 			return
 		}
 		for _, prev := range validated {
@@ -46,6 +54,10 @@ func (a *App) createLibrary(w http.ResponseWriter, name, kind, path string, path
 			}
 		}
 		validated = append(validated, real)
+	}
+	if len(validated) == 0 {
+		fail(w, 400, "请至少指定一个有效的媒体目录")
+		return
 	}
 	if kind != "tvshows" {
 		kind = "movies"
@@ -167,7 +179,15 @@ func (a *App) updateLibrary(w http.ResponseWriter, libID, name, kind string, pat
 	if len(paths) > 0 {
 		validated := []string{}
 		for _, p := range paths {
-			real, e := filepath.EvalSymlinks(mediaPath(p))
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			mp := mediaPath(p)
+			if allowedMediaPath(mp) {
+				_ = os.MkdirAll(mp, 0755)
+			}
+			real, e := filepath.EvalSymlinks(mp)
 			if e != nil || !allowedMediaPath(real) {
 				fail(w, 400, "请选择已挂载媒体目录下的现有目录: "+p)
 				return
@@ -177,11 +197,36 @@ func (a *App) updateLibrary(w http.ResponseWriter, libID, name, kind string, pat
 				fail(w, 400, "无效目录: "+p)
 				return
 			}
+			for _, prev := range validated {
+				if pathsOverlap(real, prev) {
+					fail(w, 409, "目录不能重复或互相包含")
+					return
+				}
+			}
+			for _, lib := range a.libraries() {
+				if lib["Id"].(string) == libID {
+					continue
+				}
+				for _, prev := range lib["Locations"].([]string) {
+					if pathsOverlap(real, prev) {
+						fail(w, 409, "媒体库目录与现有媒体库重复或互相包含")
+						return
+					}
+				}
+			}
 			validated = append(validated, real)
+		}
+		if len(validated) == 0 {
+			fail(w, 400, "请至少保留一个有效的媒体目录")
+			return
 		}
 		raw, _ := json.Marshal(validated)
 		if _, err := tx.Exec("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", "library-paths:"+libID, string(raw)); err != nil {
 			fail(w, 500, "更新媒体库目录失败: "+err.Error())
+			return
+		}
+		if _, err := tx.Exec("UPDATE libraries SET path=? WHERE id=?", validated[0], libID); err != nil {
+			fail(w, 500, "更新媒体库主路径失败: "+err.Error())
 			return
 		}
 	}

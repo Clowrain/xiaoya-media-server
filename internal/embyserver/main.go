@@ -940,11 +940,17 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u User, p string) {
 			fail(w, 404, "媒体库不存在")
 			return
 		}
-		if b.Mode != "" && b.Mode != "scan" && b.Mode != "update" {
+		incremental := false
+		switch strings.ToLower(b.Mode) {
+		case "update", "incremental":
+			incremental = true
+		case "scan", "refresh", "full", "":
+			incremental = false
+		default:
 			fail(w, 400, "无效扫描模式")
 			return
 		}
-		go a.scanLibraryMode(b.ID, b.Mode == "update")
+		go a.scanLibraryMode(b.ID, incremental)
 		respond(w, M{"queued": true})
 	case "/admin/user-identity":
 		a.userIdentity(w, r)
@@ -1134,11 +1140,28 @@ func (a *App) libraries() []M {
 		var t, c int64
 		var d float64
 		rows.Scan(&i, &n, &p, &k, &s, &t, &er, &c, &d)
-		out = append(out, M{"Id": i, "ItemId": i, "Name": n, "Path": p, "Locations": []string{p}, "CollectionType": k, "Status": s, "Scanned": t, "Error": er, "Count": c, "Duration": d})
+		out = append(out, M{
+			"Id":             i,
+			"ItemId":         i,
+			"Name":           n,
+			"Path":           p,
+			"Locations":      []string{p},
+			"Paths":          []string{p},
+			"CollectionType": k,
+			"Kind":           k,
+			"Status":         s,
+			"Scanned":        t,
+			"Error":          er,
+			"Count":          c,
+			"Items":          c,
+			"Duration":       d,
+		})
 	}
 	rows.Close()
 	for _, lib := range out {
-		lib["Locations"] = a.libraryPaths(lib["Id"].(string), lib["Path"].(string))
+		paths := a.libraryPaths(lib["Id"].(string), lib["Path"].(string))
+		lib["Locations"] = paths
+		lib["Paths"] = paths
 	}
 	return out
 }

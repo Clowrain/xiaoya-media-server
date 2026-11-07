@@ -41,7 +41,7 @@ export function clearAuthSession() {
 }
 
 // Toast emitter
-type ToastListener = (msg: string, type?: 'info' | 'success' | 'error') => void;
+type ToastListener = (msg: string, type?: 'info' | 'success' | 'error' | 'warning') => void;
 const toastListeners: Set<ToastListener> = new Set();
 
 export function onToast(fn: ToastListener) {
@@ -49,7 +49,7 @@ export function onToast(fn: ToastListener) {
   return () => toastListeners.delete(fn);
 }
 
-export function notifyToast(msg: string, type: 'info' | 'success' | 'error' = 'info') {
+export function notifyToast(msg: string, type: 'info' | 'success' | 'error' | 'warning' = 'info') {
   toastListeners.forEach(fn => fn(msg, type));
 }
 
@@ -179,8 +179,12 @@ export async function createAdminLibrary(name: string, kind: string, paths: stri
   await request('/admin/libraries', 'POST', { Name: name, Kind: kind, Paths: paths });
 }
 
-export async function updateAdminLibrary(id: string, name: string, kind: string): Promise<void> {
-  await request('/admin/libraries', 'PUT', { ID: id, Name: name, Kind: kind });
+export async function updateAdminLibrary(id: string, name: string, kind: string, paths?: string[]): Promise<void> {
+  const payload: any = { ID: id, Name: name, Kind: kind };
+  if (paths && paths.length > 0) {
+    payload.Paths = paths;
+  }
+  await request('/admin/libraries', 'PUT', payload);
 }
 
 export async function deleteAdminLibrary(id: string): Promise<void> {

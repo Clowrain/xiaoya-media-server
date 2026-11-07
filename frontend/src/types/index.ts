@@ -52,10 +52,19 @@ export interface MediaSource {
 
 export interface AdminLibrary {
   Id: string;
+  ItemId?: string;
   Name: string;
-  Kind: string;
-  Paths: string[];
+  Kind?: string;
+  CollectionType?: string;
+  Path?: string;
+  Paths?: string[];
+  Locations?: string[];
   Items?: number;
+  Count?: number;
+  Status?: string;
+  Scanned?: number;
+  Error?: string;
+  Duration?: number;
 }
 
 export interface SystemOverview {
