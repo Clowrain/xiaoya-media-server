@@ -1,0 +1,55 @@
+# Binaries & Build Outputs
+bin/
+dist/
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+xiaoya-media-server
+
+# Go Test & Coverage
+*.test
+*.out
+coverage.html
+go.work
+go.work.sum
+
+# Frontend / Web Build
+node_modules/
+web/node_modules/
+web/dist/
+.pnpm-store/
+
+# Secrets & Local Configs (Never commit secrets)
+.env
+.env.*
+!.env.example
+configs/*.local.yaml
+configs/*.secret.yaml
+*.pem
+*.key
+
+# Local Databases, Snapshots & Runtime Data
+data/
+tmp/
+logs/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+strm_output/
+media_output/
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# CodeGraph local index
+.codegraph/
