@@ -1062,7 +1062,14 @@
       const c=await api('/admin/tmdb');
       box.innerHTML=`
         <h2>TMDB 刮削与修正</h2>
-        <p class="muted" style="margin-bottom:20px">配置官方 TMDB v3 刮削凭据。当资源无本地有效 NFO 时，将自动刮削海报、剧照、演职员与中文简介。</p>
+        <p class="muted" style="margin-bottom:16px">配置官方 TMDB v3 刮削凭据。当资源无本地有效 NFO 时，将自动刮削海报、剧照、演职员与中文简介。</p>
+        
+        <div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:12px;padding:12px 16px;margin-bottom:20px;font-size:13px;line-height:1.6">
+          <strong style="color:var(--warning)">网络连接提示：</strong><br>
+          国内宽带直连 <code>api.themoviedb.org</code> 官方域名通常会被网络拦截导致 <code>context deadline exceeded</code>（超时）。<br>
+          👉 <strong>解决方案</strong>：配置<strong>网络代理</strong>（如局域网 Clash/V2Ray 地址），或使用 <strong>TMDB 国内反代镜像源</strong>（例如下方一键填入镜像）。
+        </div>
+
         <div class="panel">
           <form id="f-tmdb" class="form-grid" style="margin:0">
             <label class="toggle-row" style="grid-column:1/-1">
@@ -1072,10 +1079,20 @@
             <label style="grid-column:1/-1">TMDB v3 API Key（当前: ${esc(c.MaskedKey||'未设置')}）
               <input type="password" name="APIKey" placeholder="留空保持原有 Key 不变">
             </label>
-            <label>语言代码<input name="Language" value="${esc(c.Language||'zh-CN')}" required></label>
-            <label>API 基础地址<input name="BaseURL" value="${esc(c.BaseURL||'https://api.themoviedb.org/3')}" required></label>
+            <label>刮削语言代码<input name="Language" value="${esc(c.Language||'zh-CN')}" required></label>
+            <label>API 基础地址 (BaseURL)
+              <input name="BaseURL" id="tmdb-base-url" value="${esc(c.BaseURL||'https://api.themoviedb.org/3')}" required>
+            </label>
+            <div style="grid-column:1/-1;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span class="muted" style="font-size:12px">快捷填入常用源：</span>
+              <button type="button" class="secondary" style="height:28px;padding:0 10px;font-size:12px" onclick="$('#tmdb-base-url').value='https://api.themoviedb.org/3'">官方直连</button>
+              <button type="button" class="secondary" style="height:28px;padding:0 10px;font-size:12px" onclick="$('#tmdb-base-url').value='https://tmdb.api.951013.xyz/3'">公共反代 1</button>
+            </div>
+            <label style="grid-column:1/-1">HTTP/SOCKS5 代理地址（可选，如 http://192.168.1.100:7890）
+              <input name="ProxyURL" placeholder="http://192.168.x.x:7890 或 socks5://..." value="${esc(c.ProxyURL||'')}">
+            </label>
             <div class="bar" style="grid-column:1/-1;justify-content:flex-end;margin-top:8px">
-              <button type="button" class="secondary" id="tmdb-test">测试连通性</button>
+              <button type="button" class="secondary" id="tmdb-test">保存并测试连通性</button>
               <button type="submit">保存 TMDB 配置</button>
             </div>
           </form>
@@ -1093,12 +1110,29 @@
         <div class="item-list" id="match-results"></div>
       `;
 
+      async function saveTMDBForm(){
+        const f=$('#f-tmdb').elements;
+        await api('/admin/tmdb','PUT',{
+          Enabled:f.Enabled.checked,
+          APIKey:f.APIKey.value.trim(),
+          Language:f.Language.value.trim(),
+          BaseURL:f.BaseURL.value.trim(),
+          ImageURL:'https://image.tmdb.org/t/p',
+          ProxyURL:f.ProxyURL.value.trim()
+        });
+      }
+
       $('#f-tmdb').onsubmit=run(async e=>{
-        e.preventDefault();const f=e.target.elements;
-        await api('/admin/tmdb','PUT',{Enabled:f.Enabled.checked,APIKey:f.APIKey.value.trim(),Language:f.Language.value.trim(),BaseURL:f.BaseURL.value.trim(),ImageURL:'https://image.tmdb.org/t/p'});
+        e.preventDefault();
+        await saveTMDBForm();
         toast('TMDB 配置已保存');renderTabTMDB();
       });
-      $('#tmdb-test').onclick=run(async()=>{await api('/admin/tmdb/test','POST',{});toast('TMDB 连通性测试通过！')});
+      $('#tmdb-test').onclick=run(async()=>{
+        toast('正在保存并测试 TMDB 连通性…');
+        await saveTMDBForm();
+        await api('/admin/tmdb/test','POST',{});
+        toast('🎉 TMDB 连通性测试成功！');
+      });
       $('#match-search').onclick=run(async()=>{
         const q=$('#match-q').value.trim(), kind=$('#match-kind').value, year=$('#match-year').value.trim();
         if(!q)throw Error('请输入片名');
@@ -1108,6 +1142,13 @@
         if(!list.length){box.innerHTML='<div class="muted" style="padding:24px;text-align:center">未找到任何匹配候选</div>';return}
         box.innerHTML=list.map(it=>`
           <div class="item-row">
+            <div class="item-info">
+              <strong>${esc(it.title)} ${it.year?`(${it.year})`:''} <span class="badge">TMDB #${it.id}</span></strong>
+              <small>${esc(it.overview||'暂无中文简介')}</small>
+            </div>
+            <button onclick="run(()=>bindTMDB('${it.id}','${esc(kind)}'))()">绑定并刷新</button>
+          </div>`).join('');
+      });
             <div class="item-info">
               <strong>${esc(it.title)} ${it.year?`(${it.year})`:''} <span class="badge">TMDB #${it.id}</span></strong>
               <small>${esc(it.overview||'暂无中文简介')}</small>

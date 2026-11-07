@@ -73,6 +73,7 @@ type tmdbStoredSettings struct {
 	Language string `json:"language"`
 	BaseURL  string `json:"base_url"`
 	ImageURL string `json:"image_url"`
+	ProxyURL string `json:"proxy_url,omitempty"`
 }
 
 func (a *App) currentTMDBSettings() tmdbStoredSettings {
@@ -81,6 +82,7 @@ func (a *App) currentTMDBSettings() tmdbStoredSettings {
 		Language: "zh-CN",
 		BaseURL:  "https://api.themoviedb.org/3",
 		ImageURL: "https://image.tmdb.org/t/p",
+		ProxyURL: strings.TrimSpace(os.Getenv("TMDB_PROXY")),
 	}
 	if a.cfg != nil {
 		s.Enabled = a.cfg.Metadata.TMDB.Enabled
@@ -116,6 +118,9 @@ func (a *App) currentTMDBSettings() tmdbStoredSettings {
 				if stored.ImageURL != "" {
 					s.ImageURL = stored.ImageURL
 				}
+				if stored.ProxyURL != "" {
+					s.ProxyURL = stored.ProxyURL
+				}
 			}
 		}
 	}
@@ -132,6 +137,7 @@ func (a *App) tmdbClient() *tmdb.Client {
 		Language: s.Language,
 		BaseURL:  s.BaseURL,
 		ImageURL: s.ImageURL,
+		ProxyURL: s.ProxyURL,
 	})
 }
 
@@ -449,6 +455,7 @@ func (a *App) adminTMDB(w http.ResponseWriter, r *http.Request, path string) {
 				"Language":   s.Language,
 				"BaseURL":    s.BaseURL,
 				"ImageURL":   s.ImageURL,
+				"ProxyURL":   s.ProxyURL,
 				"NFOPolicy":  "prefer",
 			})
 			return
@@ -464,6 +471,7 @@ func (a *App) adminTMDB(w http.ResponseWriter, r *http.Request, path string) {
 			Language *string `json:"Language"`
 			BaseURL  *string `json:"BaseURL"`
 			ImageURL *string `json:"ImageURL"`
+			ProxyURL *string `json:"ProxyURL"`
 		}
 		if !body(w, r, &req) {
 			return
@@ -483,6 +491,9 @@ func (a *App) adminTMDB(w http.ResponseWriter, r *http.Request, path string) {
 		if req.ImageURL != nil && strings.TrimSpace(*req.ImageURL) != "" {
 			cur.ImageURL = strings.TrimSpace(*req.ImageURL)
 		}
+		if req.ProxyURL != nil {
+			cur.ProxyURL = strings.TrimSpace(*req.ProxyURL)
+		}
 		raw, _ := json.Marshal(cur)
 		if _, err := a.db.Exec("INSERT INTO settings(k,v) VALUES('tmdb_settings',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", string(raw)); err != nil {
 			fail(w, 500, "保存 TMDB 配置失败")
@@ -500,7 +511,7 @@ func (a *App) adminTMDB(w http.ResponseWriter, r *http.Request, path string) {
 			fail(w, 400, "TMDB 未启用或未配置 API Key")
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
 		if err := cli.TestConnection(ctx); err != nil {
 			fail(w, 502, "TMDB 连通性测试失败: "+err.Error())

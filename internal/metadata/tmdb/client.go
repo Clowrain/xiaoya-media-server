@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ type Options struct {
 	Language    string
 	BaseURL     string
 	ImageURL    string
+	ProxyURL    string
 	HTTPClient  *http.Client
 	MinInterval time.Duration
 }
@@ -91,7 +93,22 @@ func NewClient(opts Options) *Client {
 	}
 	hc := opts.HTTPClient
 	if hc == nil {
-		hc = &http.Client{Timeout: 12 * time.Second}
+		tr := &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+		}
+		proxyStr := strings.TrimSpace(opts.ProxyURL)
+		if proxyStr == "" {
+			proxyStr = strings.TrimSpace(os.Getenv("TMDB_PROXY"))
+		}
+		if proxyStr != "" {
+			if pu, err := url.Parse(proxyStr); err == nil {
+				tr.Proxy = http.ProxyURL(pu)
+			}
+		}
+		hc = &http.Client{
+			Timeout:   15 * time.Second,
+			Transport: tr,
+		}
 	}
 	interval := opts.MinInterval
 	if interval <= 0 {
