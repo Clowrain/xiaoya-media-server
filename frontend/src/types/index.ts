@@ -134,6 +134,11 @@ export interface TmdbSearchResult {
   release_date?: string;
   first_air_date?: string;
   media_type?: string;
+  year?: number;
+  poster_url?: string;
+  backdrop_url?: string;
+  original_title?: string;
+  rating?: number;
 }
 
 export interface LogEntry {
