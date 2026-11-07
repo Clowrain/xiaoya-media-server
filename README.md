@@ -28,23 +28,22 @@ xiaoya-media-server/
 ├── cmd/server/                 # 统一服务入口（装配 Emby + Pipeline + AList + Scheduler + AdminAPI）
 ├── configs/                    # YAML 配置示例 (config.example.yaml)
 ├── deployments/                # 生产多阶段 Dockerfile、compose.yaml 与 .env.example
-├── docs/                       # 技术方案、审计报告、E2E 报告、部署指南与验收清单
-├── file-ui/                    # 内嵌文件管理前端静态资源
+├── docs/                       # 技术方案、架构规划、部署指南与验收清单
+├── frontend/                   # 现代化 React 19 + TypeScript + Vite + TailwindCSS 前端工程
 ├── internal/
 │   ├── adminapi/               # /api/* 统一资源、监控、AList、批次与调度管理接口
 │   ├── config/                 # 配置加载与环境变量覆盖
-│   ├── embyserver/             # Emby 兼容核心、扫描器、字幕、NextUp、直链恢复与 TMDB 协同
+│   ├── embyserver/             # Emby 兼容核心、扫描器、字幕、NextUp、直链解析与 TMDB 协同
 │   ├── integration/            # 监控发现 -> STRM 落地 -> 局部媒体库刷新一体化流水线
 │   ├── metadata/tmdb/          # TMDB v3 客户端与 {tmdb-*} / SxxExx 命名解析器
 │   ├── resource/
-│   │   ├── alist/              # AList v3 客户端、浏览/搜索与单文件/整剧追更入库器
+│   │   ├── alist/              # AList v3 客户端、分页浏览/搜索与单文件/整剧追更入库器
 │   │   ├── discovery/          # 基线快照、增量游标、状态机、keep 保护与统一存储层
 │   │   └── xiaoya/             # 小雅 SQLite 纯 Go 只读驱动与子树遍历器
-│   ├── scheduler/              # 7 类后台周期调度任务与防重入执行器
-│   └── strm/                   # Go 原生 STRM 与附件生成引擎 + Python 黄金对比测试
+│   ├── scheduler/              # 后台周期调度任务与防重入执行器
+│   └── strm/                   # Go 原生 STRM 与附件生成引擎
 ├── migrations/                 # 统一资源发现与管理表结构 SQL
-├── scripts/ref/                # 归档基线脚本 strm.py 与 strm2.py（黄金对照基准）
-└── web/                        # 统一影库与后台管理控制台（含资源监控/AList/批次/TMDB 面板）
+└── web/                        # Go //go:embed 静态资源打包目标（Vite 生产构建产物）
 ```
 
 ---
