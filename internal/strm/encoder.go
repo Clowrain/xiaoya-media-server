@@ -102,7 +102,14 @@ func shouldReplaceOriginHost(schemeHost string) bool {
 		return false
 	}
 	h := strings.ToLower(u.Hostname())
-	return h == "xiaoya.host" || h == "xiaoya" || h == "127.0.0.1" || h == "localhost" || h == "172.17.0.1"
+	if h == "xiaoya.host" || h == "xiaoya" || h == "127.0.0.1" || h == "localhost" || h == "172.17.0.1" {
+		return true
+	}
+	// Docker internal bridge IPs (172.16.x - 172.31.x) or private LAN IPs
+	if strings.HasPrefix(h, "172.") || strings.HasPrefix(h, "10.") || strings.HasPrefix(h, "192.168.") {
+		return true
+	}
+	return false
 }
 
 // BuildSTRMURL constructs or normalizes the playback URL written into a `.strm` file.
