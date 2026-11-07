@@ -21,6 +21,8 @@ go.work.sum
 node_modules/
 web/node_modules/
 web/dist/
+frontend/node_modules/
+frontend/dist/
 .pnpm-store/
 
 # Secrets & Local Configs (Never commit secrets)

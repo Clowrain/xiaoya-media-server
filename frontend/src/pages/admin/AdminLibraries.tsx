@@ -1,0 +1,657 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  Folder, Plus, RefreshCw, Trash2, Edit2, FolderPlus, 
+  Clock, Play, ShieldAlert, Check, X, HardDrive 
+} from 'lucide-react';
+import { AdminLibrary } from '../../types';
+import { 
+  fetchAdminLibraries, createAdminLibrary, updateAdminLibrary, 
+  deleteAdminLibrary, addLibraryFolder, removeLibraryFolder, 
+  scanLibrary, scanAllLibraries, fetchScanSchedule, updateScanSchedule, 
+  notifyToast 
+} from '../../api/client';
+import { DirectoryPickerModal } from '../../components/DirectoryPickerModal';
+
+interface AdminLibrariesProps {
+  onOpenLogs: () => void;
+}
+
+export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) => {
+  const [libraries, setLibraries] = useState<AdminLibrary[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  // Modals state
+  const [showAddModal, setShowAddModal] = useState<boolean>(false);
+  const [showEditModal, setShowEditModal] = useState<AdminLibrary | null>(null);
+  const [showFoldersModal, setShowFoldersModal] = useState<AdminLibrary | null>(null);
+  const [showScheduleModal, setShowScheduleModal] = useState<boolean>(false);
+
+  // Directory picker state
+  const [pickerTarget, setPickerTarget] = useState<'add' | 'folder' | null>(null);
+  const [currentSelectedPath, setCurrentSelectedPath] = useState<string>('/media/strm');
+
+  // Form states
+  const [addName, setAddName] = useState('');
+  const [addKind, setAddKind] = useState('movies');
+  const [addPath, setAddPath] = useState('/media/strm/电影');
+
+  const [editName, setEditName] = useState('');
+  const [editKind, setEditKind] = useState('movies');
+
+  const [newFolderPath, setNewFolderPath] = useState('');
+
+  // Schedule state
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduleFreq, setScheduleFreq] = useState('Daily');
+  const [scheduleTime, setScheduleTime] = useState('03:00');
+  const [scheduleMinutes, setScheduleMinutes] = useState(60);
+
+  const loadLibraries = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchAdminLibraries();
+      setLibraries(data);
+    } catch (err: any) {
+      notifyToast(err.message || '加载媒体库列表失败', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadLibraries();
+  }, []);
+
+  const handleScan = async (id: string, mode: string = 'scan') => {
+    try {
+      await scanLibrary(id, mode);
+      notifyToast('扫描任务已加入队列，可查看实时日志', 'success');
+      onOpenLogs();
+    } catch (err: any) {
+      notifyToast(err.message || '触发扫描失败', 'error');
+    }
+  };
+
+  const handleScanAll = async () => {
+    try {
+      await scanAllLibraries();
+      notifyToast('所有媒体库扫描已加入队列', 'success');
+      onOpenLogs();
+    } catch (err: any) {
+      notifyToast(err.message || '触发全库扫描失败', 'error');
+    }
+  };
+
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`确定删除媒体库「${name}」？底层存储的物理/STRM文件不会被删除。`)) return;
+    try {
+      await deleteAdminLibrary(id);
+      notifyToast(`媒体库「${name}」已删除`, 'success');
+      loadLibraries();
+    } catch (err: any) {
+      notifyToast(err.message || '删除媒体库失败', 'error');
+    }
+  };
+
+  const handleAddSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addName.trim() || !addPath.trim()) {
+      notifyToast('媒体库名称与目录路径不能为空', 'error');
+      return;
+    }
+    try {
+      await createAdminLibrary(addName.trim(), addKind, [addPath.trim()]);
+      notifyToast(`成功创建媒体库「${addName}」`, 'success');
+      setShowAddModal(false);
+      setAddName('');
+      loadLibraries();
+    } catch (err: any) {
+      notifyToast(err.message || '创建媒体库失败', 'error');
+    }
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!showEditModal || !editName.trim()) return;
+    try {
+      await updateAdminLibrary(showEditModal.Id, editName.trim(), editKind);
+      notifyToast('媒体库配置已更新', 'success');
+      setShowEditModal(null);
+      loadLibraries();
+    } catch (err: any) {
+      notifyToast(err.message || '更新媒体库失败', 'error');
+    }
+  };
+
+  const handleAddFolder = async () => {
+    if (!showFoldersModal || !newFolderPath.trim()) return;
+    try {
+      await addLibraryFolder(showFoldersModal.Id, newFolderPath.trim());
+      notifyToast('目录已添加到媒体库', 'success');
+      setNewFolderPath('');
+      const updated = await fetchAdminLibraries();
+      setLibraries(updated);
+      const found = updated.find((l) => l.Id === showFoldersModal.Id);
+      if (found) setShowFoldersModal(found);
+    } catch (err: any) {
+      notifyToast(err.message || '添加目录失败', 'error');
+    }
+  };
+
+  const handleRemoveFolder = async (path: string) => {
+    if (!showFoldersModal) return;
+    if (!confirm(`确定解绑目录 ${path}？`)) return;
+    try {
+      await removeLibraryFolder(showFoldersModal.Id, path);
+      notifyToast('已解绑目录', 'success');
+      const updated = await fetchAdminLibraries();
+      setLibraries(updated);
+      const found = updated.find((l) => l.Id === showFoldersModal.Id);
+      if (found) setShowFoldersModal(found);
+    } catch (err: any) {
+      notifyToast(err.message || '移除目录失败', 'error');
+    }
+  };
+
+  const openScheduleModal = async () => {
+    try {
+      const s = await fetchScanSchedule();
+      setScheduleEnabled(s.Enabled ?? false);
+      setScheduleFreq(s.Frequency || 'Daily');
+      setScheduleTime(s.Time || '03:00');
+      setScheduleMinutes(s.Minutes || 60);
+      setShowScheduleModal(true);
+    } catch (err: any) {
+      notifyToast(err.message || '读取扫描计划失败', 'error');
+    }
+  };
+
+  const handleSaveSchedule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await updateScanSchedule({
+        Enabled: scheduleEnabled,
+        Frequency: scheduleFreq,
+        Time: scheduleTime,
+        Minutes: scheduleMinutes,
+      });
+      notifyToast('扫描计划设置已保存', 'success');
+      setShowScheduleModal(false);
+    } catch (err: any) {
+      notifyToast(err.message || '保存计划失败', 'error');
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Top Action Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-zinc-900/60 border border-zinc-800 p-4 rounded-2xl">
+        <div>
+          <h2 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+            <Folder className="w-5 h-5 text-emerald-400" />
+            媒体库管理
+          </h2>
+          <p className="text-xs text-zinc-400 mt-0.5">
+            管理媒体库分类、多文件夹挂载路径、触发扫描入库与配置定时计划
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={openScheduleModal}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium transition"
+          >
+            <Clock className="w-3.5 h-3.5 text-sky-400" />
+            定时扫描设置
+          </button>
+
+          <button
+            onClick={handleScanAll}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium transition"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+            全库扫描
+          </button>
+
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg shadow-emerald-600/30 transition"
+          >
+            <Plus className="w-4 h-4" />
+            新建媒体库
+          </button>
+        </div>
+      </div>
+
+      {/* Library Cards */}
+      {loading ? (
+        <div className="py-20 text-center text-zinc-500">正在加载媒体库...</div>
+      ) : libraries.length === 0 ? (
+        <div className="py-20 text-center text-zinc-500 bg-zinc-900/30 border border-zinc-800 rounded-2xl p-8">
+          <FolderPlus className="w-12 h-12 mx-auto mb-3 opacity-30 text-zinc-400" />
+          <p className="font-semibold text-zinc-300">暂无媒体库</p>
+          <p className="text-xs text-zinc-500 mt-1">点击右上角「新建媒体库」添加电影或电视剧目录</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {libraries.map((lib) => (
+            <div
+              key={lib.Id}
+              className="p-5 rounded-2xl bg-zinc-900/80 border border-zinc-800 hover:border-zinc-700 transition flex flex-col justify-between space-y-4"
+            >
+              <div>
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-950/80 border border-emerald-500/20 flex items-center justify-center">
+                      <Folder className="w-5 h-5 text-emerald-400" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-sm text-zinc-100">{lib.Name}</h3>
+                      <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">
+                        {lib.Kind}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => {
+                        setShowEditModal(lib);
+                        setEditName(lib.Name);
+                        setEditKind(lib.Kind);
+                      }}
+                      className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition"
+                      title="编辑基本信息"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(lib.Id, lib.Name)}
+                      className="p-1.5 rounded-lg hover:bg-rose-950/50 text-zinc-400 hover:text-rose-400 transition"
+                      title="删除媒体库"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Bound Paths */}
+                <div className="mt-4 space-y-1.5">
+                  <div className="text-[11px] font-semibold text-zinc-500 flex items-center justify-between">
+                    <span>关联存储目录 ({(lib.Paths || []).length}):</span>
+                    <button
+                      onClick={() => setShowFoldersModal(lib)}
+                      className="text-emerald-400 hover:underline text-[11px]"
+                    >
+                      管理路径
+                    </button>
+                  </div>
+                  {(lib.Paths || []).slice(0, 2).map((p, idx) => (
+                    <div
+                      key={idx}
+                      className="text-xs font-mono px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800/80 text-zinc-300 truncate"
+                      title={p}
+                    >
+                      {p}
+                    </div>
+                  ))}
+                  {(lib.Paths || []).length > 2 && (
+                    <div className="text-[10px] text-zinc-500 pl-1">
+                      还有 {(lib.Paths || []).length - 2} 个路径...
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 border-t border-zinc-800/60 flex items-center gap-2">
+                <button
+                  onClick={() => handleScan(lib.Id, 'scan')}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+                  增量扫描
+                </button>
+                <button
+                  onClick={() => handleScan(lib.Id, 'refresh')}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium transition"
+                  title="全量扫描并刷新元数据"
+                >
+                  全量刷新
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add Library Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-4">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <FolderPlus className="w-5 h-5 text-emerald-400" />
+                新建媒体库
+              </h3>
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">媒体库名称</label>
+                <input
+                  type="text"
+                  required
+                  value={addName}
+                  onChange={(e) => setAddName(e.target.value)}
+                  placeholder="例如: 电影、华语剧集、欧美精选"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">内容类型</label>
+                <select
+                  value={addKind}
+                  onChange={(e) => setAddKind(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="movies">电影 (Movies)</option>
+                  <option value="tvshows">剧集/动漫/纪录片 (TV Shows)</option>
+                  <option value="music">音乐 (Music)</option>
+                  <option value="others">其它混合 (Mixed)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                  媒体文件夹路径 (支持手动输入或点选浏览)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    required
+                    value={addPath}
+                    onChange={(e) => setAddPath(e.target.value)}
+                    placeholder="/media/strm/电影"
+                    className="flex-1 px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-emerald-400 focus:outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCurrentSelectedPath(addPath || '/media/strm');
+                      setPickerTarget('add');
+                    }}
+                    className="px-3 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition shrink-0"
+                  >
+                    浏览目录
+                  </button>
+                </div>
+
+                {/* Quick Shortcuts */}
+                <div className="flex items-center gap-1.5 mt-2 flex-wrap text-[11px]">
+                  <span className="text-zinc-500">快捷预设:</span>
+                  {['/media/strm', '/media/strm/电影', '/media/strm/电视剧'].map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setAddPath(p)}
+                      className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono"
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-zinc-800/80">
+                <button
+                  type="button"
+                  onClick={() => setShowAddModal(false)}
+                  className="px-4 py-2.5 rounded-xl border border-zinc-800 text-zinc-400 hover:bg-zinc-800 text-xs transition"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg shadow-emerald-600/30 transition"
+                >
+                  确认创建
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Library Modal */}
+      {showEditModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
+              <h3 className="text-base font-bold text-zinc-100">编辑媒体库</h3>
+              <button
+                onClick={() => setShowEditModal(null)}
+                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={handleEditSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">媒体库名称</label>
+                <input
+                  type="text"
+                  required
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">内容类型</label>
+                <select
+                  value={editKind}
+                  onChange={(e) => setEditKind(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="movies">电影 (Movies)</option>
+                  <option value="tvshows">剧集 (TV Shows)</option>
+                  <option value="music">音乐 (Music)</option>
+                  <option value="others">其它混合 (Mixed)</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEditModal(null)}
+                  className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400 hover:bg-zinc-800 text-xs transition"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg shadow-emerald-600/30 transition"
+                >
+                  保存修改
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Folders Management Modal */}
+      {showFoldersModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-zinc-100">管理媒体库关联路径</h3>
+                <p className="text-xs text-zinc-400">{showFoldersModal.Name}</p>
+              </div>
+              <button
+                onClick={() => setShowFoldersModal(null)}
+                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Existing Paths */}
+            <div className="space-y-2 max-h-48 overflow-y-auto">
+              {(showFoldersModal.Paths || []).map((p) => (
+                <div
+                  key={p}
+                  className="flex items-center justify-between p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono"
+                >
+                  <span className="text-zinc-200 truncate mr-2">{p}</span>
+                  <button
+                    onClick={() => handleRemoveFolder(p)}
+                    className="p-1 rounded text-zinc-500 hover:text-rose-400 transition shrink-0"
+                    title="移除此目录"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* Add new folder */}
+            <div className="pt-2 border-t border-zinc-800/80 space-y-2">
+              <label className="block text-xs font-semibold text-zinc-400">添加新目录</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={newFolderPath}
+                  onChange={(e) => setNewFolderPath(e.target.value)}
+                  placeholder="/media/strm/其他目录"
+                  className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-zinc-200 focus:outline-none focus:border-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCurrentSelectedPath(newFolderPath || '/media/strm');
+                    setPickerTarget('folder');
+                  }}
+                  className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium shrink-0"
+                >
+                  浏览
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddFolder}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shrink-0"
+                >
+                  添加
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Scheduled Scan Modal */}
+      {showScheduleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
+              <h3 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-sky-400" />
+                自动定时扫描计划
+              </h3>
+              <button
+                onClick={() => setShowScheduleModal(false)}
+                className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSchedule} className="space-y-4">
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={scheduleEnabled}
+                  onChange={(e) => setScheduleEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded bg-zinc-950 border-zinc-700 text-emerald-500 focus:ring-0"
+                />
+                <span className="text-sm font-medium text-zinc-200">启用定时自动扫描</span>
+              </label>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">频率模式</label>
+                <select
+                  value={scheduleFreq}
+                  onChange={(e) => setScheduleFreq(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="Daily">每天固定时间 (Daily)</option>
+                  <option value="Interval">按分钟循环间隔 (Interval)</option>
+                </select>
+              </div>
+
+              {scheduleFreq === 'Daily' ? (
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-400 mb-1.5">每天执行时间</label>
+                  <input
+                    type="time"
+                    value={scheduleTime}
+                    onChange={(e) => setScheduleTime(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-400 mb-1.5">间隔分钟数</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={scheduleMinutes}
+                    onChange={(e) => setScheduleMinutes(Number(e.target.value))}
+                    className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-zinc-800/80">
+                <button
+                  type="button"
+                  onClick={() => setShowScheduleModal(false)}
+                  className="px-4 py-2 rounded-xl border border-zinc-800 text-zinc-400 hover:bg-zinc-800 text-xs transition"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg shadow-emerald-600/30 transition"
+                >
+                  保存设置
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Directory Picker Modal */}
+      {pickerTarget && (
+        <DirectoryPickerModal
+          isOpen={!!pickerTarget}
+          initialPath={currentSelectedPath}
+          onSelect={(selected) => {
+            if (pickerTarget === 'add') setAddPath(selected);
+            if (pickerTarget === 'folder') setNewFolderPath(selected);
+          }}
+          onClose={() => setPickerTarget(null)}
+        />
+      )}
+    </div>
+  );
+};

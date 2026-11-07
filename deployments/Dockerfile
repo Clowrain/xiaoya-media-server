@@ -1,11 +1,18 @@
 # syntax=docker/dockerfile:1
 
-FROM --platform=$BUILDPLATFORM node:20-alpine AS ui-builder
-WORKDIR /src/file-ui
-COPY file-ui/package.json ./
-RUN npm install
-COPY file-ui/ ./
-RUN npm run build || true
+FROM --platform=$BUILDPLATFORM node:22-alpine AS ui-builder
+WORKDIR /src
+# Build React frontend
+COPY frontend/package*.json ./frontend/
+RUN cd frontend && npm install
+COPY frontend/ ./frontend/
+RUN cd frontend && npm run build
+
+# Build optional files UI
+COPY file-ui/package*.json ./file-ui/
+RUN cd file-ui && npm install
+COPY file-ui/ ./file-ui/
+RUN cd file-ui && npm run build || true
 
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 ARG TARGETARCH
@@ -17,6 +24,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+COPY --from=ui-builder /src/web/index.html ./web/index.html
+COPY --from=ui-builder /src/web/assets/ ./web/assets/
 COPY --from=ui-builder /src/web/files/ ./web/files/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -ldflags="-s -w" -o /out/xiaoya-media-server ./cmd/server

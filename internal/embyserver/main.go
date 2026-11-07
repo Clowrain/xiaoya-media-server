@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -467,9 +468,37 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		respond(w, []any{})
 		return
 	}
-	if p == "" || l == "/web" || l == "/web/index.html" || l == "/web/dashboard.html" || l == "/index.html" {
+	if p == "" || l == "/web" || l == "/web/index.html" || l == "/web/dashboard.html" || l == "/index.html" || l == "/admin" || l == "/wall" {
 		b, _ := web.Assets.ReadFile("index.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(b)
+		return
+	}
+	if strings.HasPrefix(l, "/assets/") || strings.HasPrefix(l, "/web/assets/") {
+		assetPath := strings.TrimPrefix(l, "/web/")
+		assetPath = strings.TrimPrefix(assetPath, "/")
+		b, err := web.Assets.ReadFile(assetPath)
+		if err != nil {
+			fail(w, 404, "Asset not found")
+			return
+		}
+		ct := mime.TypeByExtension(filepath.Ext(assetPath))
+		if ct == "" {
+			switch filepath.Ext(assetPath) {
+			case ".js":
+				ct = "application/javascript; charset=utf-8"
+			case ".css":
+				ct = "text/css; charset=utf-8"
+			case ".svg":
+				ct = "image/svg+xml"
+			case ".woff2":
+				ct = "font/woff2"
+			default:
+				ct = "application/octet-stream"
+			}
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		w.Write(b)
 		return
 	}

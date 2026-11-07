@@ -1,0 +1,1543 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Xiaoya Media · 影库</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎬</text></svg>">
+  <style>
+    :root{
+      color-scheme:dark;
+      --bg:#090a0f;
+      --surface:#13161f;
+      --surface2:#1a1e2b;
+      --surface-glass:rgba(19,22,31,.82);
+      --border:rgba(255,255,255,.08);
+      --border-focus:rgba(99,102,241,.5);
+      --text:#f3f4f8;
+      --text-muted:#8e96a5;
+      --accent:#3b82f6;
+      --accent-hover:#2563eb;
+      --accent-soft:rgba(59,130,246,.14);
+      --success:#10b981;
+      --warning:#f59e0b;
+      --danger:#ef4444;
+      --radius:16px;
+      --radius-sm:10px;
+    }
+    html[data-theme=light]{
+      color-scheme:light;
+      --bg:#f4f5f8;
+      --surface:#ffffff;
+      --surface2:#f0f2f6;
+      --surface-glass:rgba(255,255,255,.86);
+      --border:rgba(0,0,0,.08);
+      --text:#11141a;
+      --text-muted:#6b7280;
+      --accent:#2563eb;
+      --accent-hover:#1d4ed8;
+      --accent-soft:rgba(37,99,235,.10);
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background:var(--bg);
+      color:var(--text);
+      font:14px -apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;
+      min-height:100vh;
+      -webkit-font-smoothing:antialiased;
+    }
+    a,button,input,select,textarea{font:inherit}
+    button{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:6px;
+      min-height:38px;
+      padding:8px 16px;
+      border-radius:var(--radius-sm);
+      border:0;
+      background:var(--accent);
+      color:#fff;
+      font-weight:600;
+      cursor:pointer;
+      transition:background .15s,opacity .15s,transform .15s;
+    }
+    button:hover{background:var(--accent-hover)}
+    button:active{transform:scale(.98)}
+    button:disabled{opacity:.4;cursor:not-allowed}
+    button.secondary{
+      background:var(--surface2);
+      color:var(--text);
+      border:1px solid var(--border);
+    }
+    button.secondary:hover{background:rgba(255,255,255,.08)}
+    button.danger{background:rgba(239,68,68,.14);color:#f87171;border:1px solid rgba(239,68,68,.25)}
+    button.danger:hover{background:rgba(239,68,68,.25)}
+    .icon-btn{
+      width:38px;
+      height:38px;
+      padding:0;
+      border-radius:50%;
+      background:transparent;
+      color:var(--text-muted);
+      border:1px solid transparent;
+    }
+    .icon-btn:hover{background:var(--surface2);color:var(--text)}
+    .icon-btn svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+    input,select,textarea{
+      height:42px;
+      padding:0 14px;
+      border-radius:var(--radius-sm);
+      background:var(--surface2);
+      border:1px solid var(--border);
+      color:var(--text);
+      outline:none;
+      transition:border-color .15s,box-shadow .15s;
+    }
+    input:focus,select:focus,textarea:focus{
+      border-color:var(--accent);
+      box-shadow:0 0 0 3px var(--accent-soft);
+    }
+    input::placeholder{color:var(--text-muted);opacity:.7}
+
+    /* Header */
+    header{
+      position:sticky;
+      top:0;
+      z-index:30;
+      height:60px;
+      padding:0 clamp(16px,3vw,36px);
+      display:flex;
+      align-items:center;
+      gap:16px;
+      background:var(--surface-glass);
+      backdrop-filter:blur(24px) saturate(180%);
+      -webkit-backdrop-filter:blur(24px) saturate(180%);
+      border-bottom:1px solid var(--border);
+    }
+    .logo-btn{
+      font-size:18px;
+      font-weight:800;
+      letter-spacing:-.04em;
+      background:none;
+      border:0;
+      color:var(--text);
+      padding:0;
+      cursor:pointer;
+    }
+    .header-nav{display:flex;align-items:center;gap:8px;margin-left:auto}
+    .nav-pill{
+      padding:6px 14px;
+      border-radius:20px;
+      background:transparent;
+      color:var(--text-muted);
+      font-size:13px;
+      font-weight:600;
+      border:1px solid transparent;
+    }
+    .nav-pill.active,.nav-pill:hover{
+      background:var(--accent-soft);
+      color:var(--accent);
+      border-color:rgba(59,130,246,.25);
+    }
+
+    /* Common layout */
+    main{max-width:1440px;margin:auto;padding:24px clamp(16px,3vw,36px) 64px}
+    h1{font-size:clamp(26px,3vw,34px);letter-spacing:-.04em;margin:0 0 10px}
+    h2{font-size:20px;letter-spacing:-.03em;margin:0 0 14px}
+    h3{font-size:16px;margin:18px 0 10px}
+    p,.muted{color:var(--text-muted);line-height:1.6}
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      padding:3px 9px;
+      border-radius:999px;
+      font-size:11px;
+      font-weight:600;
+      background:var(--accent-soft);
+      color:var(--accent);
+    }
+    .badge.ok{background:rgba(16,185,129,.14);color:#34d399}
+    .badge.warn{background:rgba(245,158,11,.14);color:#fbbf24}
+    .badge.err{background:rgba(239,68,68,.14);color:#f87171}
+    .panel{
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      padding:24px;
+      margin-bottom:20px;
+    }
+    .bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+    /* Cinema view */
+    .hero-banner{
+      position:relative;
+      min-height:min(54vh,480px);
+      border-radius:22px;
+      overflow:hidden;
+      background:#111;
+      margin-bottom:30px;
+      display:flex;
+      align-items:flex-end;
+      padding:36px;
+    }
+    .hero-bg{
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      filter:brightness(.65);
+    }
+    .hero-mask{
+      position:absolute;
+      inset:0;
+      background:linear-gradient(0deg,rgba(9,10,15,.95) 0%,rgba(9,10,15,.4) 50%,transparent 100%),linear-gradient(90deg,rgba(9,10,15,.85) 0%,transparent 65%);
+    }
+    .hero-copy{position:relative;z-index:2;max-width:560px}
+    .hero-copy h1{font-size:clamp(30px,4.5vw,52px);line-height:1.05;margin:8px 0 12px;color:#fff}
+    .hero-copy p{font-size:14px;color:rgba(255,255,255,.78);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+
+    .shelf-tabs{
+      display:flex;
+      gap:10px;
+      overflow-x:auto;
+      padding:4px 2px 16px;
+      scroll-snap-type:x proximity;
+    }
+    .shelf-card{
+      flex:0 0 clamp(160px,18vw,220px);
+      cursor:pointer;
+      border-radius:14px;
+      overflow:hidden;
+      background:var(--surface);
+      border:1px solid var(--border);
+      transition:transform .18s,border-color .18s;
+    }
+    .shelf-card:hover{transform:translateY(-3px);border-color:var(--accent)}
+    .shelf-card img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block}
+    .shelf-card strong{display:block;padding:10px 12px;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+    .poster-grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+      gap:22px 14px;
+      margin:20px 0;
+    }
+    .poster-card{cursor:pointer;min-width:0;position:relative}
+    .poster-card img{
+      width:100%;
+      aspect-ratio:2/3;
+      object-fit:cover;
+      border-radius:12px;
+      background:var(--surface2);
+      border:1px solid var(--border);
+      box-shadow:0 6px 18px rgba(0,0,0,.25);
+      transition:transform .18s,box-shadow .18s;
+      display:block;
+    }
+    .poster-card:hover img{transform:translateY(-4px);box-shadow:0 12px 28px rgba(0,0,0,.45)}
+    .poster-card strong{display:block;font-size:13.5px;margin:8px 2px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .poster-card .muted{font-size:12px;margin-left:2px}
+
+    /* Admin layout */
+    .admin-shell{
+      display:grid;
+      grid-template-columns:220px minmax(0,1fr);
+      gap:28px;
+      align-items:start;
+    }
+    .admin-sidebar{
+      position:sticky;
+      top:84px;
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      padding:12px;
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+    }
+    .admin-nav-item{
+      width:100%;
+      height:44px;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      padding:0 14px;
+      border-radius:var(--radius-sm);
+      background:transparent;
+      color:var(--text-muted);
+      font-weight:600;
+      font-size:13.5px;
+      justify-content:flex-start;
+      border:0;
+    }
+    .admin-nav-item:hover{background:var(--surface2);color:var(--text)}
+    .admin-nav-item.active{background:var(--accent-soft);color:var(--accent)}
+    .admin-nav-item svg{width:18px;height:18px;flex-shrink:0}
+
+    /* Data table & list */
+    .item-list{display:flex;flex-direction:column;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+    .item-row{
+      display:flex;
+      align-items:center;
+      gap:14px;
+      padding:14px 18px;
+      background:var(--surface);
+      border-bottom:1px solid var(--border);
+    }
+    .item-row:last-child{border-bottom:0}
+    .item-row:hover{background:var(--surface2)}
+    .item-info{flex:1;min-width:0;line-height:1.5}
+    .item-info strong{display:block;font-size:14px;overflow-wrap:anywhere}
+    .item-info small{color:var(--text-muted);font-size:12px;display:block}
+
+    /* Stat Cards */
+    .stat-row{
+      display:grid;
+      grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+      gap:14px;
+      margin-bottom:22px;
+    }
+    .stat-card{
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      padding:16px 20px;
+    }
+    .stat-card small{display:block;font-size:12px;color:var(--text-muted);margin-bottom:6px}
+    .stat-card strong{font-size:24px;display:block}
+
+    /* Progress ring */
+    .scan-circle{
+      --pct:0%;
+      background:conic-gradient(var(--accent) var(--pct),var(--surface2) 0);
+      width:44px;
+      height:44px;
+      border-radius:50%;
+      display:grid;
+      place-items:center;
+      flex-shrink:0;
+    }
+    .scan-circle span{
+      width:34px;
+      height:34px;
+      background:var(--surface);
+      border-radius:50%;
+      display:grid;
+      place-items:center;
+      font-size:10px;
+      font-weight:700;
+    }
+
+    /* Dialogs */
+    dialog{
+      max-width:min(900px,calc(100vw - 24px));
+      background:var(--surface);
+      color:var(--text);
+      border:1px solid var(--border);
+      border-radius:22px;
+      padding:24px;
+      box-shadow:0 24px 80px rgba(0,0,0,.6);
+    }
+    dialog::backdrop{background:rgba(0,0,0,.65);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+    .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .form-grid.single{grid-template-columns:1fr}
+    .form-grid label{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--text-muted)}
+    .form-grid input,.form-grid select{width:100%}
+    .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border)}
+    .toggle-row input[type=checkbox]{appearance:none;width:40px;height:22px;border-radius:99px;background:#444;position:relative;cursor:pointer}
+    .toggle-row input[type=checkbox]:before{content:'';position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}
+    .toggle-row input[type=checkbox]:checked{background:var(--accent)}
+    .toggle-row input[type=checkbox]:checked:before{transform:translateX(18px)}
+
+    /* Detail dialog */
+    dialog.detail-dialog{width:min(1060px,calc(100vw - 20px));padding:0;overflow:hidden;border-radius:24px}
+    .detail-hero{position:relative;min-height:280px;background:#111;overflow:hidden;display:flex;align-items:flex-end;padding:28px}
+    .detail-hero-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:brightness(.5)}
+    .detail-header{position:relative;z-index:2;display:flex;gap:22px;align-items:flex-end}
+    .detail-poster{width:140px;aspect-ratio:2/3;object-fit:cover;border-radius:14px;box-shadow:0 12px 36px rgba(0,0,0,.5);flex-shrink:0}
+    .detail-body{padding:24px 28px 34px}
+    .actors-scroll{display:flex;gap:12px;overflow-x:auto;padding:6px 0 14px}
+    .actor-card{flex:0 0 88px;text-align:center}
+    .actor-card img,.actor-card .placeholder{width:88px;height:120px;border-radius:10px;object-fit:cover;background:var(--surface2);display:block}
+    .actor-card small{display:block;font-size:11px;color:var(--text-muted);margin-top:4px}
+    video{width:100%;max-height:65vh;background:#000;border-radius:14px;margin-top:16px}
+
+    /* Logs & Toast */
+    #toast{
+      position:fixed;
+      bottom:24px;
+      left:50%;
+      transform:translateX(-50%);
+      z-index:99;
+      background:var(--surface2);
+      color:var(--text);
+      border:1px solid var(--border);
+      padding:12px 24px;
+      border-radius:12px;
+      box-shadow:0 10px 40px rgba(0,0,0,.45);
+      display:none;
+      max-width:90%;
+      text-align:center;
+    }
+    #logs{width:min(880px,94vw);height:min(640px,85vh);padding:20px}
+    .log-box{max-height:calc(85vh - 120px);overflow-y:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+    .log-line{padding:10px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere}
+
+    @media(max-width:860px){
+      .admin-shell{grid-template-columns:1fr}
+      .admin-sidebar{position:static;flex-direction:row;overflow-x:auto}
+      .admin-nav-item{white-space:nowrap;width:auto}
+      .hero-banner{padding:20px;min-height:300px}
+      .detail-header{flex-direction:column;align-items:flex-start}
+      .detail-poster{width:110px}
+      .form-grid{grid-template-columns:1fr}
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <button class="logo-btn" onclick="token?showBrowse():showLogin()">Xiaoya Media</button>
+    <div class="header-nav" id="header-nav"></div>
+  </header>
+
+  <main id="app"></main>
+
+  <dialog id="modal"></dialog>
+  <dialog id="dir-modal" style="width:min(640px,calc(100vw - 24px));padding:22px;z-index:105"></dialog>
+  <dialog id="logs" aria-label="全链路运行日志与排错中心" style="width:min(980px,96vw);height:min(720px,90vh);padding:22px">
+    <div class="bar" style="margin-bottom:12px;justify-content:space-between">
+      <div class="bar">
+        <h2 style="margin:0">全链路运行日志</h2>
+        <span class="badge ok" id="log-live-badge">实时更新中</span>
+      </div>
+      <div class="bar">
+        <select id="log-cat" onchange="switchLogCategory(this.value)">
+          <option value="all" selected>🌟 全部链路日志 (All)</option>
+          <option value="playback">🎬 播放与 302 重定向</option>
+          <option value="http">🌐 Emby 客户端请求流</option>
+          <option value="scan">⚡ 媒体扫描与小雅同步</option>
+          <option value="tmdb">🎬 TMDB 刮削记录</option>
+          <option value="error">⚠️ 仅看错误与异常</option>
+        </select>
+        <input id="log-kw" placeholder="搜索片名、路径、IP、状态码、错误…" style="width:200px" oninput="debounceLogs()">
+        <button class="secondary" title="复制所有当前日志" onclick="copyLogs()">复制日志</button>
+        <button class="secondary icon-btn" title="清空日志" onclick="run(clearCurrentLogs)()">
+          <svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+        <button class="secondary icon-btn" title="关闭" onclick="$('#logs').close()">
+          <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="muted bar" id="log-summary" style="font-size:12px;margin-bottom:10px;justify-content:space-between"></div>
+    <div class="log-box" id="log-content" style="max-height:calc(90vh - 140px)"></div>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    let token=sessionStorage.token||'', user=JSON.parse(sessionStorage.user||'null'), device=localStorage.device||(localStorage.device=crypto.randomUUID?crypto.randomUUID():String(Math.random()).slice(2));
+    let currentView='browse', adminTab=0, heartbeat, activePlaybackId, wallCursors=[""], wallPage=0, wallKey="", currentFilterParent='', currentSearchTerm='';
+    let xyPrefillMatch=null, logCategory='scan', logTimer, logGen=0;
+
+    function toast(s){const t=$('#toast');t.textContent=s;t.style.display='block';clearTimeout(t.timer);t.timer=setTimeout(()=>t.style.display='none',4000)}
+    async function api(path,method='GET',data){
+      const res=await fetch(path,{method,headers:{'Content-Type':'application/json','X-Emby-Token':token,'X-Emby-Authorization':`Emby Client="Xiaoya Web", Device="Browser", DeviceId="${device}", Version="2.0"`},body:data===undefined?undefined:JSON.stringify(data)});
+      let b=await res.text();try{b=JSON.parse(b)}catch{}
+      if(!res.ok)throw Error(b.Message||b.error||`HTTP ${res.status}`);
+      return b;
+    }
+    function run(fn){return async(...args)=>{try{await fn(...args)}catch(e){toast(e.message)}}}
+
+    /* Theme */
+    function toggleTheme(){const h=document.documentElement,m=h.dataset.theme==='light'?'dark':'light';h.dataset.theme=m;localStorage.setItem('theme',m);renderNav()}
+    document.documentElement.dataset.theme=localStorage.getItem('theme')||'dark';
+
+    /* Nav */
+    function renderNav(){
+      const n=$('#header-nav');if(!n)return;
+      if(!token){n.innerHTML=`<button class="icon-btn" title="切换深浅主题" onclick="toggleTheme()">${themeSvg()}</button>`;return}
+      n.innerHTML=`
+        <button class="nav-pill ${currentView==='browse'?'active':''}" onclick="showBrowse()">影库</button>
+        ${user?.Policy?.IsAdministrator?`<button class="nav-pill ${currentView==='admin'?'active':''}" onclick="showAdmin()">控制台</button>`:''}
+        ${user?.Policy?.IsAdministrator?`<button class="icon-btn" title="运行日志" onclick="openLogs()"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5"/></svg></button>`:''}
+        <button class="icon-btn" title="修改密码" onclick="showPasswordDialog()"><svg viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>
+        <button class="icon-btn" title="退出登录" onclick="logout()"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>
+        <button class="icon-btn" title="切换深浅主题" onclick="toggleTheme()">${themeSvg()}</button>
+      `;
+    }
+    function themeSvg(){
+      return document.documentElement.dataset.theme==='light'
+        ?'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M2 12h2M20 12h2M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5"/></svg>'
+        :'<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>';
+    }
+
+    /* Auth */
+    function showLogin(){
+      currentView='login';renderNav();
+      $('#app').innerHTML=`
+        <div style="min-height:70vh;display:grid;place-items:center">
+          <div class="panel" style="width:min(360px,90vw);padding:32px 28px;text-align:center">
+            <h1 style="font-size:24px;margin-bottom:6px">Xiaoya Media</h1>
+            <p class="muted" style="margin-bottom:24px;font-size:13px">登录你的家庭影院服务</p>
+            <form id="f-login" style="display:grid;gap:12px;text-align:left">
+              <input name="u" placeholder="用户名" required autocomplete="username">
+              <input name="p" type="password" placeholder="密码" required autocomplete="current-password">
+              <button style="height:44px;margin-top:6px">登录</button>
+            </form>
+          </div>
+        </div>`;
+      $('#f-login').onsubmit=run(async e=>{
+        e.preventDefault();
+        const f=new FormData(e.target), res=await api('/emby/Users/AuthenticateByName','POST',{Username:f.get('u'),Pw:f.get('p')});
+        token=res.AccessToken;user=res.User;sessionStorage.token=token;sessionStorage.user=JSON.stringify(user);
+        showBrowse();
+      });
+    }
+    async function logout(){
+      try{await stopVideo();await api('/Sessions/Logout','POST',{})}catch{}
+      token='';user=null;sessionStorage.clear();showLogin();
+    }
+    function showPasswordDialog(){
+      const d=$('#modal');d.innerHTML=`
+        <h2>修改密码</h2>
+        <form id="f-pw" class="form-grid single" style="margin-top:16px">
+          <label>当前原密码<input type="password" name="old" required></label>
+          <label>新密码（至少 10 位）<input type="password" name="new" minlength="10" required></label>
+          <div class="bar" style="justify-content:flex-end;margin-top:12px">
+            <button type="button" class="secondary" onclick="$('#modal').close()">取消</button>
+            <button type="submit">保存并重登</button>
+          </div>
+        </form>`;
+      d.showModal();
+      $('#f-pw').onsubmit=run(async e=>{
+        e.preventDefault();const f=new FormData(e.target);
+        await api(`/Users/${user.Id}/Password`,'POST',{CurrentPw:f.get('old'),NewPw:f.get('new')});
+        $('#modal').close();toast('密码已修改，请重新登录');await logout();
+      });
+    }
+
+    /* Browse view */
+    async function showBrowse(){
+      currentView='browse';renderNav();
+      try{
+        const [libs,enh]=await Promise.all([api(`/emby/Users/${user.Id}/Views`),api('/enhancements')]);
+        const heroItem=libs.Items[0];
+        $('#app').innerHTML=`
+          <section class="hero-banner" id="hero-banner">
+            <img class="hero-bg" id="hero-bg" src="" style="display:none" alt="">
+            <div class="hero-mask"></div>
+            <div class="hero-copy">
+              <span class="badge" style="background:#fff;color:#000">XIAOYA · CINEMA</span>
+              <h1 id="hero-title">你的私人影库</h1>
+              <p id="hero-desc">直接串流播放你的小雅与全网媒体收藏。</p>
+              <div class="bar" style="margin-top:16px">
+                <button onclick="$('#wall-section').scrollIntoView({behavior:'smooth'})">▶&nbsp;&nbsp;浏览影视</button>
+              </div>
+            </div>
+          </section>
+
+          <div class="bar" style="margin-bottom:20px;justify-content:space-between">
+            <div class="shelf-tabs" style="flex:1">
+              <button class="secondary" style="border-radius:20px;flex-shrink:0" onclick="filterByLib('')">全部</button>
+              ${libs.Items.map(l=>`<button class="secondary" style="border-radius:20px;flex-shrink:0" onclick="filterByLib('${esc(l.Id)}')">${esc(l.Name)}</button>`).join('')}
+            </div>
+            <div class="bar" style="min-width:260px">
+              <input id="kw-search" placeholder="${enh.SearchByInitials?'搜索片名或拼音首字母…':'搜索片名…'}" value="${esc(currentSearchTerm)}" style="width:180px">
+              <button class="secondary icon-btn" id="btn-search" title="搜索"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></button>
+            </div>
+          </div>
+
+          <section id="wall-section">
+            <h2 id="wall-title" style="margin-bottom:18px">全部影视</h2>
+            <div class="poster-grid" id="poster-grid"></div>
+            <div class="bar" style="justify-content:center;margin:30px 0" id="paging-bar"></div>
+          </section>`;
+
+        $('#btn-search').onclick=()=>{currentSearchTerm=$('#kw-search').value.trim();wallPage=0;loadWall()};
+        $('#kw-search').onkeydown=e=>{if(e.key==='Enter')$('#btn-search').click()};
+        await loadWall();
+      }catch(e){toast(e.message)}
+    }
+
+    function filterByLib(id){currentFilterParent=id;currentSearchTerm='';$('#kw-search').value='';wallPage=0;loadWall()}
+    async function loadWall(){
+      const key=currentFilterParent+"|"+currentSearchTerm;
+      if(wallPage===0||key!==wallKey){wallCursors=[""];wallKey=key}
+      const params=new URLSearchParams({Limit:48,Cursor:wallCursors[wallPage]||"",EnableTotalRecordCount:"false",SearchTerm:currentSearchTerm,ParentId:currentFilterParent});
+      if(currentSearchTerm)params.set('Recursive','true');
+      if(!currentFilterParent)params.set('IncludeItemTypes','Movie,Series');
+      const b=await api('/emby/Items?'+params);
+      wallCursors[wallPage+1]=b.NextCursor||'';
+
+      $('#wall-title').textContent=currentSearchTerm?`搜索：“${currentSearchTerm}”`:currentFilterParent?'当前媒体分类':'全部影视';
+      const grid=$('#poster-grid');
+      if(!b.Items.length){
+        grid.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:60px 0" class="muted">暂无匹配的影视资源</div>';
+      }else{
+        grid.innerHTML=b.Items.map(it=>`
+          <article class="poster-card" data-id="${esc(it.Id)}" data-folder="${it.IsFolder}">
+            <img loading="lazy" decoding="async" src="/emby/Items/${esc(it.Id)}/Images/Primary?MaxWidth=420&api_key=${encodeURIComponent(token)}" alt="${esc(it.Name)}">
+            <strong>${esc(it.Name)}</strong>
+            <span class="muted">${it.IsFolder?'文件夹':(it.ProductionYear||'直接播放')}</span>
+          </article>`).join('');
+      }
+
+      // Hero background
+      const first=b.Items.find(x=>!x.IsFolder)||b.Items[0];
+      if(first){
+        const bg=$('#hero-bg');
+        if(bg){
+          bg.src=`/emby/Items/${esc(first.Id)}/Images/Primary?MaxWidth=1400&api_key=${encodeURIComponent(token)}`;
+          bg.style.display='block';
+        }
+        if($('#hero-title'))$('#hero-title').textContent=first.Name;
+        if($('#hero-desc'))$('#hero-desc').textContent=first.Overview||'小雅智能 STRM 直链即点即播。';
+      }
+
+      // Bind clicks & Context Menu
+      grid.querySelectorAll('.poster-card').forEach(el=>{
+        el.onclick=run(async()=>{
+          if(el.dataset.folder==='true'){currentFilterParent=el.dataset.id;wallPage=0;await loadWall()}
+          else await openDetail(el.dataset.id);
+        });
+        if(user?.Policy?.IsAdministrator){
+          el.oncontextmenu=e=>{e.preventDefault();openPosterActionMenu(el.dataset.id,el.querySelector('strong').textContent)};
+        }
+      });
+
+      // Paging
+      $('#paging-bar').innerHTML=`
+        <button class="secondary" ${wallPage===0?'disabled':''} id="page-prev">上一页</button>
+        <span class="muted" style="font-size:13px">第 ${wallPage+1} 页</span>
+        <button class="secondary" ${!b.HasMore?'disabled':''} id="page-next">下一页</button>
+      `;
+      $('#page-prev').onclick=()=>{wallPage--;loadWall()};
+      $('#page-next').onclick=()=>{wallPage++;loadWall()};
+    }
+
+    /* Detail & Player */
+    async function openDetail(id){
+      const x=await api(`/emby/Users/${user.Id}/Items/${id}`);
+      const primary=`/emby/Items/${id}/Images/Primary?MaxWidth=480&api_key=${encodeURIComponent(token)}`;
+      const backdrop=`/emby/Items/${id}/Images/Backdrop?MaxWidth=1600&api_key=${encodeURIComponent(token)}`;
+      const versions=x.MediaSources||[];
+      let selectedVersion=id;
+
+      const d=$('#modal');d.className='detail-dialog';
+      d.innerHTML=`
+        <section class="detail-hero">
+          <img class="detail-hero-bg" src="${backdrop}" onerror="this.src='${primary}'" alt="">
+          <div class="hero-mask"></div>
+          <div class="detail-header">
+            <img class="detail-poster" src="${primary}" alt="${esc(x.Name)}">
+            <div style="flex:1">
+              <span class="badge ok">DIRECT STREAM</span>
+              <h2 style="font-size:clamp(24px,3.5vw,36px);margin:8px 0 6px;color:#fff">${esc(x.Name)}</h2>
+              <div class="muted" style="color:rgba(255,255,255,.75);font-size:13px;margin-bottom:12px">
+                ${x.ProductionYear||''} ${x.RunTimeTicks?`· ${Math.round(x.RunTimeTicks/6e8)} 分钟`:''}
+              </div>
+              <div class="bar">
+                <button id="btn-play">▶ 播放视频</button>
+                ${versions.length>1?`<select id="sel-ver" style="height:38px">${versions.map((v,i)=>`<option value="${esc(v.Id)}">版本 ${i+1}: ${esc(v.Name)}</option>`).join('')}</select>`:''}
+                ${user?.Policy?.IsAdministrator?`<button class="secondary" id="btn-probe">提取媒体信息</button>`:''}
+                <button class="secondary" onclick="closeModal()">关闭</button>
+              </div>
+            </div>
+          </div>
+        </section>
+        <div class="detail-body">
+          <p style="font-size:14px;margin-top:0">${esc(x.Overview||'暂无剧情介绍。')}</p>
+          <div id="video-container"></div>
+          ${(x.People||[]).length?`
+            <h3>演职员</h3>
+            <div class="actors-scroll">
+              ${(x.People||[]).slice(0,12).map(p=>`
+                <div class="actor-card">
+                  ${p.PrimaryImageTag?`<img src="/emby/Items/${p.Id}/Images/Primary?tag=${p.PrimaryImageTag}&api_key=${encodeURIComponent(token)}" alt="">`:'<div class="placeholder"></div>'}
+                  <strong style="display:block;font-size:12px;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.Name)}</strong>
+                  <small>${esc(p.Role||'')}</small>
+                </div>`).join('')}
+            </div>`:''}
+        </div>`;
+      d.showModal();
+
+      async function startPlay(){
+        await stopVideo();
+        const pb=await api(`/emby/Items/${selectedVersion}/PlaybackInfo`,'POST',{});
+        const src=pb.MediaSources?.find(v=>v.Id===selectedVersion)||pb.MediaSources?.[0];
+        if(!src?.DirectStreamUrl)throw Error('无法获取直链播放地址');
+        activePlaybackId=selectedVersion;
+        const box=$('#video-container');
+        box.innerHTML='<video controls autoplay playsinline controlsList="nodownload"></video>';
+        const v=box.querySelector('video');
+        v.src=src.DirectStreamUrl;
+        v.onerror=()=>toast('浏览器无法直接解码此视频流，建议使用外部 Emby 客户端直连播放。');
+        clearInterval(heartbeat);
+        heartbeat=setInterval(()=>{
+          api('/Sessions/Playing/Progress','POST',{ItemId:activePlaybackId,PositionTicks:Math.floor(v.currentTime*1e7),RunTimeTicks:Number.isFinite(v.duration)?Math.floor(v.duration*1e7):0}).catch(()=>{});
+        },25000);
+        v.onended=()=>stopVideo();
+      }
+      $('#btn-play').onclick=run(startPlay);
+      $('#sel-ver')?.addEventListener('change',e=>{selectedVersion=e.target.value;startPlay()});
+      $('#btn-probe')?.addEventListener('click',run(async()=>{
+        await api(`/emby/Items/${id}/RefreshMediaInfo`,'POST',{});
+        toast('媒体信息提取任务已下发');
+      }));
+    }
+
+    async function stopVideo(){
+      clearInterval(heartbeat);
+      const v=$('video');
+      if(v){v.pause();v.removeAttribute('src');v.load()}
+      if(activePlaybackId){
+        const i=activePlaybackId;activePlaybackId=null;
+        try{await api('/Sessions/Playing/Stopped','POST',{ItemId:i,PositionTicks:0})}catch{}
+      }
+    }
+    function closeModal(){stopVideo();$('#modal').close();$('#modal').innerHTML='';$('#modal').className=''}
+    $('#modal').addEventListener('cancel',()=>stopVideo());
+
+    /* Poster Right-Click Action */
+    function openPosterActionMenu(id,name){
+      const d=$('#modal');d.className='';
+      d.innerHTML=`
+        <h2>条目管理 · ${esc(name)}</h2>
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px">
+          <button class="secondary" style="justify-content:flex-start" id="act-rename">✏️&nbsp;&nbsp;修改显示名称</button>
+          <button class="secondary" style="justify-content:flex-start" id="act-tmdb">🎬&nbsp;&nbsp;手动搜索并修正 TMDB 匹配</button>
+          <button class="danger" style="justify-content:flex-start" id="act-del">🗑️&nbsp;&nbsp;删除此媒体及 STRM 资源</button>
+          <button class="secondary" onclick="closeModal()">取消</button>
+        </div>`;
+      d.showModal();
+      $('#act-rename').onclick=()=>{
+        d.close();
+        const n=prompt('请输入新的显示名称：',name);
+        if(n&&n.trim()){run(async()=>{await api('/admin/media-item','PUT',{ID:id,Name:n.trim()});toast('已重命名');loadWall()})()}
+      };
+      $('#act-tmdb').onclick=()=>{
+        d.close();
+        xyPrefillMatch={id,name};
+        showAdmin(2);
+      };
+      $('#act-del').onclick=()=>{
+        if(confirm(`确定删除 ${name} 及其 STRM 文件？`)){
+          run(async()=>{await api('/admin/media-item','DELETE',{ID:id,DeleteDirectory:false});closeModal();toast('已删除');loadWall()})();
+        }
+      };
+    }
+
+    /* =========================================================================
+       Unified Modern Admin Console (4 Core Tabs)
+       ========================================================================= */
+    async function showAdmin(tab=adminTab){
+      if(!user?.Policy?.IsAdministrator)return showBrowse();
+      currentView='admin';adminTab=tab;renderNav();
+
+      $('#app').innerHTML=`
+        <div class="admin-shell">
+          <aside class="admin-sidebar">
+            <button class="admin-nav-item ${tab===0?'active':''}" onclick="showAdmin(0)">
+              <svg viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/><path d="M6 6h10M6 10h10"/></svg>
+              媒体库管理
+            </button>
+            <button class="admin-nav-item ${tab===1?'active':''}" onclick="showAdmin(1)">
+              <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+              小雅同步入库
+            </button>
+            <button class="admin-nav-item ${tab===2?'active':''}" onclick="showAdmin(2)">
+              <svg viewBox="0 0 24 24"><rect width="20" height="15" x="2" y="7" rx="2"/><path d="m10 15 5-3-5-3v6Z"/></svg>
+              TMDB 刮削
+            </button>
+            <button class="admin-nav-item ${tab===3?'active':''}" onclick="showAdmin(3)">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              系统与用户
+            </button>
+            <button class="admin-nav-item" onclick="openLogs()">
+              <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5"/></svg>
+              全链路日志
+            </button>
+          </aside>
+          <section id="admin-main"></section>
+        </div>`;
+
+      if(tab===0)await renderTabLibraries();
+      else if(tab===1)await renderTabXiaoyaSync();
+      else if(tab===2)await renderTabTMDB();
+      else if(tab===3)await renderTabSystemUsers();
+    }
+
+    /* Tab 0: Libraries & Folders & Ordering (Consolidated) */
+    let adminLibs=[];
+    async function renderTabLibraries(){
+      adminLibs=await api('/admin/libraries');
+      const box=$('#admin-main');if(!box)return;
+      box.innerHTML=`
+        <div class="bar" style="margin-bottom:20px;justify-content:space-between">
+          <div>
+            <h2>媒体库管理</h2>
+            <p class="muted" style="margin:0">配置 Emby 逻辑分类、挂载本地 STRM 目录、排序与扫描更新。</p>
+          </div>
+          <div class="bar">
+            <button onclick="dialogNewLibrary()">＋ 新建媒体库</button>
+            <button class="secondary" onclick="run(scanAllLibs)()">全量更新全部</button>
+            <button class="secondary" onclick="dialogSchedule()">定时扫描</button>
+            ${adminLibs.length?`<button class="danger" style="background:transparent;border:1px solid rgba(239,68,68,.3)" onclick="run(resetAllLibraries)()">清空全部</button>`:''}
+            <div class="scan-circle" id="admin-scan-ring" title="扫描进度"><span>0%</span></div>
+          </div>
+        </div>
+        <div class="item-list">
+          ${adminLibs.map((lib,idx)=>`
+            <div class="item-row" data-id="${esc(lib.Id)}">
+              <span class="badge ${lib.Status==='idle'?'ok':lib.Status==='error'?'err':'warn'}">●</span>
+              <div class="item-info">
+                <strong>${esc(lib.Name)} · <span class="muted" style="font-size:13px">${lib.CollectionType==='tvshows'?'电视剧':'电影'} · ${lib.Count} 部/集</span></strong>
+                <small>${(lib.Locations||[lib.Path]).join('、')||'未绑定目录'}</small>
+              </div>
+              <div class="bar" style="margin:0">
+                <button class="secondary" title="编辑名称" onclick="dialogEditLibrary('${lib.Id}')">编辑</button>
+                <button class="secondary" title="增量刷新" onclick="run(()=>scanLib('${lib.Id}','update'))()">刷新</button>
+                <button class="secondary" title="全量扫描" onclick="run(()=>scanLib('${lib.Id}','scan'))()">全量</button>
+                <button class="secondary" title="管理目录" onclick="dialogManageFolders('${lib.Id}')">目录</button>
+                <button class="secondary" title="上移" ${idx===0?'disabled':''} onclick="moveLibOrder(${idx},-1)">↑</button>
+                <button class="secondary" title="下移" ${idx===adminLibs.length-1?'disabled':''} onclick="moveLibOrder(${idx},1)">↓</button>
+                <button class="danger" title="删除" onclick="run(()=>deleteLib('${lib.Id}','${esc(lib.Name)}'))()">✕</button>
+              </div>
+            </div>`).join('')||'<div class="muted" style="text-align:center;padding:40px">暂无媒体库，点击上方新建</div>'}
+        </div>`;
+      pollAdminScan();
+    }
+    async function scanLib(id,mode){await api('/admin/scan','POST',{ID:id,Mode:mode});toast('扫描任务已加入队列');openLogs()}
+    async function scanAllLibs(){await api('/admin/scan-all','POST',{});toast('全部媒体库已加入扫描队列');openLogs()}
+    async function moveLibOrder(idx,dir){
+      const target=idx+dir;if(target<0||target>=adminLibs.length)return;
+      [adminLibs[idx],adminLibs[target]]=[adminLibs[target],adminLibs[idx]];
+      await api('/admin/order','PUT',{IDs:adminLibs.map(x=>x.Id)});
+      renderTabLibraries();toast('排序已保存');
+    }
+    async function deleteLib(id,name){
+      if(!confirm(`确定彻底删除媒体库“${name||id}”？\n此操作将清空该媒体库的所有影视索引（磁盘上的源视频和 STRM 文件会安全保留）。`))return;
+      toast('正在删除媒体库…');
+      await api('/admin/libraries?id='+encodeURIComponent(id),'DELETE',{ID:id});
+      toast('媒体库已成功删除');
+      await renderTabLibraries();
+    }
+    async function resetAllLibraries(){
+      if(!adminLibs.length){toast('当前没有媒体库');return}
+      if(!confirm(`⚠️ 危险操作：确认清空并删除全部 ${adminLibs.length} 个媒体库？\n所有库的影视索引将被彻底删除，源视频与 STRM 磁盘文件安全保留。您随后可以完全重新开始配置。`))return;
+      toast('正在清空媒体库…');
+      for(const lib of adminLibs){
+        await api('/admin/libraries?id='+encodeURIComponent(lib.Id),'DELETE',{ID:lib.Id});
+      }
+      toast('全部媒体库已清空，可重新开始配置');
+      await renderTabLibraries();
+    }
+
+    function dialogEditLibrary(id){
+      const lib=adminLibs.find(x=>x.Id===id);if(!lib)return;
+      const d=$('#modal');d.className='';
+      d.innerHTML=`
+        <h2>编辑媒体库</h2>
+        <form id="f-editlib" class="form-grid single" style="margin-top:14px">
+          <label>媒体类型
+            <select name="kind">
+              <option value="movies" ${lib.CollectionType==='movies'?'selected':''}>电影 (Movies)</option>
+              <option value="tvshows" ${lib.CollectionType==='tvshows'?'selected':''}>电视剧 (TV Shows)</option>
+            </select>
+          </label>
+          <label>媒体库名称<input name="name" required value="${esc(lib.Name)}"></label>
+          <div class="bar" style="justify-content:flex-end;margin-top:10px">
+            <button type="button" class="secondary" onclick="closeModal()">取消</button>
+            <button type="submit">保存更改</button>
+          </div>
+        </form>`;
+      d.showModal();
+      $('#f-editlib').onsubmit=run(async e=>{
+        e.preventDefault();const f=new FormData(e.target);
+        await api('/admin/libraries','PUT',{ID:id,Name:f.get('name').trim(),Kind:f.get('kind')});
+        closeModal();toast('媒体库已更新');renderTabLibraries();
+      });
+    }
+
+    function dialogNewLibrary(){
+      const d=$('#modal');d.className='';
+      d.innerHTML=`
+        <h2>新建媒体库</h2>
+        <form id="f-newlib" class="form-grid single" style="margin-top:14px">
+          <label>媒体类型
+            <select name="kind"><option value="movies">电影 (Movies)</option><option value="tvshows">电视剧 (TV Shows)</option></select>
+          </label>
+          <label>媒体库名称<input name="name" required placeholder="如：国产剧、华语电影"></label>
+          <label>STRM 本地挂载目录
+            <div class="bar" style="margin:0;gap:8px">
+              <input name="path" id="lib-path-input" required placeholder="/media/strm" value="/media/strm" style="flex:1">
+              <button type="button" class="secondary" id="btn-browse-dir" style="white-space:nowrap">📂 浏览目录</button>
+            </div>
+            <div class="bar" style="gap:6px;margin-top:8px;flex-wrap:wrap">
+              <span class="muted" style="font-size:12px">快捷填入:</span>
+              <button type="button" class="secondary" style="height:26px;font-size:11.5px;padding:0 8px" onclick="$('#lib-path-input').value='/media/strm'">/media/strm</button>
+              <button type="button" class="secondary" style="height:26px;font-size:11.5px;padding:0 8px" onclick="$('#lib-path-input').value='/media/strm/电影'">/media/strm/电影</button>
+              <button type="button" class="secondary" style="height:26px;font-size:11.5px;padding:0 8px" onclick="$('#lib-path-input').value='/media/strm/电视剧'">/media/strm/电视剧</button>
+            </div>
+          </label>
+          <div class="bar" style="justify-content:flex-end;margin-top:12px">
+            <button type="button" class="secondary" onclick="closeModal()">取消</button>
+            <button type="submit">创建并扫描</button>
+          </div>
+        </form>`;
+      d.showModal();
+      $('#btn-browse-dir').onclick=()=>{
+        pickLocalDir(p=>{$('#lib-path-input').value=p}, $('#lib-path-input').value||'/media/strm');
+      };
+      $('#f-newlib').onsubmit=run(async e=>{
+        e.preventDefault();const f=new FormData(e.target);
+        const name=f.get('name').trim(), p=f.get('path').trim();
+        if(!name)throw Error('请输入媒体库名称');
+        if(!p)throw Error('请输入 STRM 本地挂载目录');
+        await api('/admin/libraries','POST',{Name:name,Kind:f.get('kind'),Paths:[p]});
+        closeModal();toast('媒体库已创建');renderTabLibraries();
+      });
+    }
+
+    async function dialogManageFolders(id){
+      const lib=adminLibs.find(x=>x.Id===id);if(!lib)return;
+      const d=$('#modal');d.className='';
+      const locs=lib.Locations||(lib.Path?[lib.Path]:[]);
+      d.innerHTML=`
+        <h2>管理媒体目录 · ${esc(lib.Name)}</h2>
+        <div style="display:flex;flex-direction:column;gap:8px;margin:16px 0">
+          ${locs.map((p,i)=>`
+            <div class="bar" style="background:var(--surface2);padding:10px 14px;border-radius:10px;justify-content:space-between">
+              <code>${esc(p)}</code>
+              <button class="danger" style="height:32px;padding:0 10px" data-path="${esc(p)}" onclick="removeFolderFromLib('${id}',this.dataset.path)">移除</button>
+            </div>`).join('')||'<p class="muted">未挂载任何目录</p>'}
+        </div>
+        <form id="f-addfolder" class="bar" style="gap:8px;margin-bottom:16px">
+          <input name="path" id="add-folder-input" placeholder="/media/strm 或手动键入路径" style="flex:1" required>
+          <button type="button" class="secondary" onclick="pickLocalDir(p=>{$('#add-folder-input').value=p}, $('#add-folder-input').value||'/media/strm')">📂 浏览</button>
+          <button type="submit">＋ 绑定目录</button>
+        </form>
+        <div class="bar" style="justify-content:flex-end">
+          <button type="button" class="secondary" onclick="closeModal()">关闭</button>
+        </div>`;
+      d.showModal();
+      $('#f-addfolder').onsubmit=run(async e=>{
+        e.preventDefault();
+        const p=$('#add-folder-input').value.trim();
+        if(!p)throw Error('请输入目录路径');
+        await api('/admin/library-folders','POST',{ID:id,Path:p});
+        toast('目录已添加并触发扫描');dialogManageFolders(id);renderTabLibraries();
+      });
+    }
+    async function removeFolderFromLib(id,path){
+      if(!confirm(`移除目录 ${path} 的索引？`))return;
+      await api('/admin/library-folders','DELETE',{ID:id,Path:path});
+      toast('目录已移除');dialogManageFolders(id);renderTabLibraries();
+    }
+
+    let dirPickerCb=null, currentPickedPath='/media/strm';
+    async function pickLocalDir(cb,path='/media/strm'){
+      dirPickerCb=cb;
+      currentPickedPath=path||'/media/strm';
+      const dm=$('#dir-modal');if(!dm)return;
+      if(!dm.open)dm.showModal();
+      await renderDirPickerContent(currentPickedPath);
+    }
+    async function renderDirPickerContent(path){
+      const dm=$('#dir-modal');if(!dm)return;
+      currentPickedPath=path||'/media';
+      dm.innerHTML=`
+        <div class="bar" style="margin-bottom:12px;justify-content:space-between">
+          <h2 style="margin:0;font-size:18px">选择服务器媒体目录</h2>
+          <button class="secondary icon-btn" onclick="$('#dir-modal').close()">✕</button>
+        </div>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">
+          当前浏览：<code style="color:var(--accent);font-size:13px">${esc(currentPickedPath)}</code>
+        </div>
+        <div class="bar" style="margin-bottom:12px;gap:6px;flex-wrap:wrap">
+          <button class="secondary" style="height:28px;font-size:12px;padding:0 8px" onclick="renderDirPickerContent('/media')">/media</button>
+          <button class="secondary" style="height:28px;font-size:12px;padding:0 8px" onclick="renderDirPickerContent('/media/strm')">/media/strm</button>
+          <button class="secondary" style="height:28px;font-size:12px;padding:0 8px" ${currentPickedPath==='/media'||currentPickedPath==='/'?'disabled':''} onclick="navDirPickerUp('${esc(currentPickedPath)}')">⬆ 上一级</button>
+        </div>
+        <div id="dir-picker-list" class="item-list" style="max-height:300px;overflow-y:auto;margin-bottom:16px">
+          <div class="muted" style="padding:20px;text-align:center">正在读取目录…</div>
+        </div>
+        <div class="bar" style="justify-content:space-between;align-items:center">
+          <span class="muted" style="font-size:12px">选定后将填入表单</span>
+          <div class="bar">
+            <button type="button" class="secondary" onclick="$('#dir-modal').close()">取消</button>
+            <button type="button" onclick="confirmDirPicker('${esc(currentPickedPath)}')">选择当前目录</button>
+          </div>
+        </div>
+      `;
+      try{
+        const b=await api('/admin/directories?'+new URLSearchParams({Path:currentPickedPath}));
+        const box=$('#dir-picker-list');if(!box)return;
+        const dirs=b.Directories||[];
+        if(!dirs.length){
+          box.innerHTML='<div class="muted" style="padding:24px;text-align:center">此目录下无更多子文件夹，可直接点击右下角「选择当前目录」</div>';
+        }else{
+          box.innerHTML=dirs.map(x=>`
+            <div class="item-row" style="padding:8px 12px">
+              <span style="font-size:18px">📁</span>
+              <div class="item-info">
+                <strong>${esc(x.Name)}</strong>
+                <small class="muted">${esc(x.Path)}</small>
+              </div>
+              <div class="bar" style="margin:0;gap:6px">
+                <button class="secondary" style="height:30px;font-size:12px;padding:0 10px" data-path="${esc(x.Path)}" onclick="renderDirPickerContent(this.dataset.path)">进入 ➔</button>
+                <button style="height:30px;font-size:12px;padding:0 10px" data-path="${esc(x.Path)}" onclick="confirmDirPicker(this.dataset.path)">选择此目录 ✓</button>
+              </div>
+            </div>`).join('');
+        }
+      }catch(e){
+        const box=$('#dir-picker-list');
+        if(box)box.innerHTML=`<div class="muted" style="padding:20px;text-align:center;color:var(--danger)">无法读取目录：${esc(e.message)}<br><small class="muted" style="margin-top:6px;display:block">如目录尚未创建，可直接在输入框中手动输入路径</small></div>`;
+      }
+    }
+    function navDirPickerUp(p){
+      if(!p||p==='/media'||p==='/')return;
+      const idx=p.lastIndexOf('/');
+      const parent=idx>0?p.slice(0,idx):'/media';
+      renderDirPickerContent(parent);
+    }
+    function confirmDirPicker(p){
+      $('#dir-modal')?.close();
+      if(dirPickerCb)dirPickerCb(p);
+      toast('已选择目录：'+p);
+    }
+    async function dialogSchedule(){
+      const c=await api('/admin/scan-schedule');
+      const d=$('#modal');d.className='';
+      d.innerHTML=`
+        <h2>定时全量扫描设置</h2>
+        <form id="f-sch" class="form-grid single" style="margin-top:14px">
+          <label class="toggle-row">启用定时扫描<input type="checkbox" name="en" ${c.Enabled?'checked':''}></label>
+          <label>扫描周期
+            <select name="freq" id="sch-freq">
+              <option value="daily" ${c.Frequency==='daily'?'selected':''}>每天</option>
+              <option value="weekly" ${c.Frequency==='weekly'?'selected':''}>每周</option>
+              <option value="minutes" ${c.Frequency==='minutes'?'selected':''}>每隔几分钟</option>
+            </select>
+          </label>
+          <label>执行时间（UTC）<input type="time" name="t" value="${esc(c.Time||'04:00')}"></label>
+          <label>间隔分钟<input type="number" name="m" min="10" max="1440" value="${c.Minutes||60}"></label>
+          <div class="bar" style="justify-content:flex-end;margin-top:12px">
+            <button type="button" class="secondary" onclick="closeModal()">取消</button>
+            <button type="submit">保存</button>
+          </div>
+        </form>`;
+      d.showModal();
+      $('#f-sch').onsubmit=run(async e=>{
+        e.preventDefault();const f=new FormData(e.target);
+        await api('/admin/scan-schedule','PUT',{Enabled:f.has('en'),Frequency:f.get('freq'),Time:f.get('t'),Minutes:Number(f.get('m'))});
+        closeModal();toast('定时扫描配置已保存');
+      });
+    }
+
+    /* Tab 1: Xiaoya Sync & AList Import (Integrated) */
+    let alistPath='/', alistSearch='', alistPage=1, alistPerPage=25, alistTotal=0;
+    async function renderTabXiaoyaSync(){
+      const box=$('#admin-main');if(!box)return;
+      const [ov,roots]=await Promise.all([api('/api/system/overview'),api('/api/monitor/roots')]);
+      box.innerHTML=`
+        <div class="stat-row">
+          <div class="stat-card">
+            <small>小雅 SQLite 数据源</small>
+            <strong style="color:${ov.sqlite_connected?'var(--success)':'var(--warning)'};font-size:18px">
+              ${ov.sqlite_connected?'已连接 (只读)':'未就绪'}
+            </strong>
+            <span class="muted" style="font-size:11px;overflow-wrap:anywhere">${esc(ov.sqlite_path||'')}</span>
+          </div>
+          <div class="stat-card">
+            <small>活跃 STRM 文件数</small>
+            <strong>${ov.resources?.active_files??0}</strong>
+            <span class="muted" style="font-size:11px">输出: ${esc(ov.strm_output_root||'')}</span>
+          </div>
+          <div class="stat-card">
+            <small>源缺失保护 (keep)</small>
+            <strong>${ov.resources?.missing_files??0}</strong>
+            <span class="muted" style="font-size:11px">异常待重试: ${ov.resources?.failed_files??0}</span>
+          </div>
+        </div>
+
+        <div class="bar" style="margin-bottom:12px;justify-content:space-between">
+          <h2 style="margin:0">小雅监控目录 (${roots.total||0})</h2>
+          <div class="bar">
+            <button onclick="dialogAddMonitorRoot()">＋ 添加监控目录</button>
+            <button class="secondary" onclick="run(()=>triggerSync('',false))()">增量同步全部</button>
+            <button class="secondary" onclick="run(()=>triggerSync('',true))()">全量同步全部</button>
+          </div>
+        </div>
+        <div class="item-list" style="margin-bottom:28px">
+          ${(roots.items||[]).map(r=>`
+            <div class="item-row">
+              <span class="badge ${r.enabled?'ok':'warn'}">${r.enabled?'已启用':'已停用'}</span>
+              <div class="item-info">
+                <strong>${esc(r.root_path)}</strong>
+                <small>扫描周期: ${r.interval_sec}s · 上次: ${r.last_scanned_at?new Date(r.last_scanned_at*1000).toLocaleString():'从未'}${r.last_error?` · 错误: ${esc(r.last_error)}`:''}</small>
+              </div>
+              <div class="bar" style="margin:0">
+                <button class="secondary" data-id="${esc(r.id)}" onclick="triggerSync(this.dataset.id,false)">增量</button>
+                <button class="secondary" data-id="${esc(r.id)}" onclick="triggerSync(this.dataset.id,true)">全量</button>
+                <button class="secondary" data-id="${esc(r.id)}" data-enabled="${!r.enabled}" data-interval="${r.interval_sec}" onclick="toggleMonitorRoot(this.dataset.id,this.dataset.enabled==='true',Number(this.dataset.interval))">${r.enabled?'停用':'启用'}</button>
+                <button class="danger" data-id="${esc(r.id)}" data-path="${esc(r.root_path)}" onclick="deleteMonitorRoot(this.dataset.id,this.dataset.path)">移除</button>
+              </div>
+            </div>`).join('')||'<div class="muted" style="padding:28px;text-align:center">暂无监控目录，请点击上方添加或通过下方 AList 目录直览选择入库</div>'}
+        </div>
+
+        <div class="bar" style="margin-bottom:12px;justify-content:space-between">
+          <div>
+            <h2 style="margin:0">AList 目录直览与入库</h2>
+            <p class="muted" style="margin:0">直接浏览或搜索小雅网盘，一键单次或追更入库。</p>
+          </div>
+          <div class="bar">
+            <button class="secondary" id="alist-btn-up" onclick="goUpAList()">⬆ 上一级</button>
+            <input id="alist-kw" placeholder="在当前目录下搜索小雅资源…" value="${esc(alistSearch)}" style="width:200px">
+            <button class="secondary" id="alist-btn-search">搜索</button>
+          </div>
+        </div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">当前路径：<code>${esc(alistPath)}</code></div>
+        <div class="item-list" id="alist-list"></div>
+        <div id="alist-pagination" style="margin-top:10px"></div>
+      `;
+
+      $('#alist-btn-search').onclick=()=>{alistSearch=$('#alist-kw').value.trim();alistPage=1;loadAListItems()};
+      $('#alist-kw').onkeydown=e=>{if(e.key==='Enter')$('#alist-btn-search').click()};
+      await loadAListItems();
+    }
+
+    async function loadAListItems(){
+      const box=$('#alist-list');if(!box)return;
+      box.innerHTML='<div class="muted" style="padding:24px;text-align:center">正在加载 AList 资源…</div>';
+      try{
+        const qs=alistSearch
+          ?new URLSearchParams({keywords:alistSearch,parent:alistPath,page:String(alistPage),per_page:String(alistPerPage)})
+          :new URLSearchParams({path:alistPath,page:String(alistPage),per_page:String(alistPerPage)});
+        const data=alistSearch
+          ?await api('/api/alist/search?'+qs)
+          :await api('/api/alist/browse?'+qs);
+        const items=data.items||[];
+        alistTotal=data.total||items.length;
+        const totalPages=Math.max(1,Math.ceil(alistTotal/alistPerPage));
+        if(alistPage>totalPages)alistPage=totalPages;
+
+        if(!items.length){
+          box.innerHTML='<div class="muted" style="padding:28px;text-align:center">当前目录无项目或无搜索结果</div>';
+          $('#alist-pagination').innerHTML='';
+          return;
+        }
+        box.innerHTML=items.map(it=>{
+          const full=it.full_path||(alistPath==='/'?'/'+it.name:alistPath+'/'+it.name);
+          return `
+            <div class="item-row">
+              <span style="font-size:20px">${it.is_dir?'📁':'🎬'}</span>
+              <div class="item-info">
+                ${it.is_dir?`<button style="background:none;border:0;padding:0;color:inherit;font-weight:700;cursor:pointer" data-path="${esc(full)}" onclick="enterAListDir(this.dataset.path)">${esc(it.name)}</button>`:`<strong>${esc(it.name)}</strong>`}
+                <small>${esc(full)} ${it.size?`· ${(it.size/1048576).toFixed(1)} MB`:''}</small>
+              </div>
+              <div class="bar" style="margin:0">
+                ${it.is_dir
+                  ?`<button data-path="${esc(full)}" onclick="doImportAList(this,this.dataset.path,true,true)">整剧追更入库</button><button class="secondary" data-path="${esc(full)}" onclick="doImportAList(this,this.dataset.path,true,false)">单次入库</button>`
+                  :`<button data-path="${esc(full)}" onclick="doImportAList(this,this.dataset.path,false,false)">入库</button>`}
+              </div>
+            </div>`;
+        }).join('');
+        renderAListPagination(totalPages);
+      }catch(e){
+        box.innerHTML=`<div class="muted" style="padding:28px;text-align:center;color:var(--danger)">AList 读取失败：${esc(e.message)}</div>`;
+        $('#alist-pagination').innerHTML='';
+      }
+    }
+    function renderAListPagination(totalPages){
+      const pbox=$('#alist-pagination');if(!pbox)return;
+      pbox.innerHTML=`
+        <div class="bar" style="justify-content:space-between;align-items:center;padding:12px 4px;font-size:13px;flex-wrap:wrap;gap:10px">
+          <span class="muted">共 <strong>${alistTotal}</strong> 项 · 每页 ${alistPerPage} 项</span>
+          <div class="bar" style="margin:0;gap:8px">
+            <button class="secondary" style="height:32px;padding:0 12px" ${alistPage<=1?'disabled':''} onclick="changeAListPage(${alistPage-1})">‹ 上一页</button>
+            <span style="font-weight:600;padding:0 4px">第 ${alistPage} / ${totalPages} 页</span>
+            <button class="secondary" style="height:32px;padding:0 12px" ${alistPage>=totalPages?'disabled':''} onclick="changeAListPage(${alistPage+1})">下一页 ›</button>
+          </div>
+        </div>`;
+    }
+    function changeAListPage(p){
+      if(p<1)return;
+      alistPage=p;
+      loadAListItems();
+      $('#alist-list')?.scrollIntoView({behavior:'smooth',block:'start'});
+    }
+    function enterAListDir(p){alistPath=p;alistPage=1;alistSearch='';$('#alist-kw').value='';loadAListItems()}
+    function goUpAList(){
+      if(alistPath==='/'||alistPath==='')return;
+      const idx=alistPath.lastIndexOf('/');
+      alistPath=idx>0?alistPath.slice(0,idx):'/';
+      alistPage=1;alistSearch='';$('#alist-kw').value='';loadAListItems();
+    }
+    async function doImportAList(btn,path,isDir,track){
+      if(!path)return;
+      const oldText=btn?btn.textContent:'入库';
+      if(btn){btn.disabled=true;btn.textContent='入库中…'}
+      toast(`正在入库：${path}（媒体较多时可能需数秒）…`);
+      try{
+        const s=await api('/api/resources/import','POST',{path,is_dir:isDir,track_updates:track});
+        const cnt=s.imported_files??(s.ImportedFiles??0);
+        if(btn){btn.disabled=false;btn.textContent='已入库';btn.style.borderColor='var(--success)'}
+        toast(`🎉 入库完成：已生成 ${cnt} 个媒体 STRM${s.tracking_enabled?'（已开启追更）':''}`);
+        if(track){
+          setTimeout(renderTabXiaoyaSync,800);
+        }
+      }catch(e){
+        if(btn){btn.disabled=false;btn.textContent=oldText}
+        toast('入库失败：'+e.message);
+      }
+    }
+    const importAList=(p,d,t)=>doImportAList(null,p,d,t);
+    function dialogAddMonitorRoot(){
+      const d=$('#modal');d.className='';
+      d.innerHTML=`
+        <h2>添加小雅指定监控目录</h2>
+        <form id="f-addroot" class="form-grid single" style="margin-top:14px">
+          <label>小雅网盘目录绝对路径（如：/电视剧 或 /电影）
+            <input name="path" required placeholder="/电视剧/...">
+          </label>
+          <label>扫描同步周期（秒）
+            <input name="interval" type="number" min="60" value="600" required>
+          </label>
+          <label class="toggle-row">立即启用监控<input type="checkbox" name="en" checked></label>
+          <div class="bar" style="justify-content:flex-end;margin-top:12px">
+            <button type="button" class="secondary" onclick="closeModal()">取消</button>
+            <button type="submit">保存并同步</button>
+          </div>
+        </form>`;
+      d.showModal();
+      $('#f-addroot').onsubmit=run(async e=>{
+        e.preventDefault();const f=new FormData(e.target);
+        await api('/api/monitor/roots','POST',{root_path:f.get('path').trim(),interval_sec:Number(f.get('interval')),enabled:f.has('en')});
+        closeModal();toast('监控目录已添加');renderTabXiaoyaSync();
+      });
+    }
+    async function toggleMonitorRoot(id,enabled,interval){await api('/api/monitor/roots/'+encodeURIComponent(id),'PUT',{enabled,interval_sec:interval});renderTabXiaoyaSync();toast(enabled?'已启用':'已停用')}
+    async function deleteMonitorRoot(id,p){if(!confirm(`移除监控 ${p}？已生成的本地 STRM 文件将受到 keep 保护继续保留。`))return;await api('/api/monitor/roots/'+encodeURIComponent(id),'DELETE');renderTabXiaoyaSync();toast('已移除监控')}
+    async function triggerSync(id,full){toast(full?'全量同步中…':'增量同步中…');const r=await api(full?'/api/sync/full':'/api/sync/incremental','POST',{root_id:id});renderTabXiaoyaSync();toast(`同步完成：已处理 ${(r.batches||[]).length} 个批次`)}
+
+    /* Tab 2: TMDB Scraper & Correction (Cleaned) */
+    async function renderTabTMDB(){
+      const box=$('#admin-main');if(!box)return;
+      const c=await api('/admin/tmdb');
+      box.innerHTML=`
+        <h2>TMDB 刮削与修正</h2>
+        <p class="muted" style="margin-bottom:16px">配置官方 TMDB v3 刮削凭据。当资源无本地有效 NFO 时，将自动刮削海报、剧照、演职员与中文简介。</p>
+        
+        <div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.25);border-radius:12px;padding:12px 16px;margin-bottom:20px;font-size:13px;line-height:1.6">
+          <strong style="color:var(--warning)">网络连接提示：</strong><br>
+          国内宽带直连 <code>api.themoviedb.org</code> 官方域名通常会被网络拦截导致 <code>context deadline exceeded</code>（超时）。<br>
+          👉 <strong>解决方案</strong>：配置<strong>网络代理</strong>（如局域网 Clash/V2Ray 地址），或使用 <strong>TMDB 国内反代镜像源</strong>（例如下方一键填入镜像）。
+        </div>
+
+        <div class="panel">
+          <form id="f-tmdb" class="form-grid" style="margin:0">
+            <label class="toggle-row" style="grid-column:1/-1">
+              启用自动刮削 TMDB (无 NFO 时触发)
+              <input type="checkbox" name="Enabled" ${c.Enabled?'checked':''}>
+            </label>
+            <label style="grid-column:1/-1">TMDB v3 API Key（当前: ${esc(c.MaskedKey||'未设置')}）
+              <input type="password" name="APIKey" placeholder="留空保持原有 Key 不变">
+            </label>
+            <label>刮削语言代码<input name="Language" value="${esc(c.Language||'zh-CN')}" required></label>
+            <label>API 基础地址 (BaseURL)
+              <input name="BaseURL" id="tmdb-base-url" value="${esc(c.BaseURL||'https://api.themoviedb.org/3')}" required>
+            </label>
+            <div style="grid-column:1/-1;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span class="muted" style="font-size:12px">快捷填入常用源：</span>
+              <button type="button" class="secondary" style="height:28px;padding:0 10px;font-size:12px" onclick="$('#tmdb-base-url').value='https://api.themoviedb.org/3'">官方直连</button>
+              <button type="button" class="secondary" style="height:28px;padding:0 10px;font-size:12px" onclick="$('#tmdb-base-url').value='https://tmdb.api.951013.xyz/3'">公共反代 1</button>
+            </div>
+            <label style="grid-column:1/-1">HTTP/SOCKS5 代理地址（可选，如 http://192.168.1.100:7890）
+              <input name="ProxyURL" placeholder="http://192.168.x.x:7890 或 socks5://..." value="${esc(c.ProxyURL||'')}">
+            </label>
+            <div class="bar" style="grid-column:1/-1;justify-content:flex-end;margin-top:8px">
+              <button type="button" class="secondary" id="tmdb-test">保存并测试连通性</button>
+              <button type="submit">保存 TMDB 配置</button>
+            </div>
+          </form>
+        </div>
+
+        <h3>手动搜索并校正条目匹配</h3>
+        <p class="muted" style="margin-bottom:12px;font-size:13px">在影库长按/右键任意海报可直接带入。绑定后将强制覆盖并刷新该条目元数据。</p>
+        <div class="bar" style="margin-bottom:16px">
+          <input id="match-id" placeholder="条目 ItemId" value="${esc(xyPrefillMatch?.id||'')}" style="width:200px">
+          <select id="match-kind"><option value="tv">电视剧 (TV)</option><option value="movie">电影 (Movie)</option></select>
+          <input id="match-q" placeholder="输入准确片名搜索…" value="${esc(xyPrefillMatch?.name||'')}" style="flex:1">
+          <input id="match-year" type="number" placeholder="年份(可选)" style="width:100px">
+          <button id="match-search">搜索候选</button>
+        </div>
+        <div class="item-list" id="match-results"></div>
+      `;
+
+      async function saveTMDBForm(){
+        const f=$('#f-tmdb').elements;
+        await api('/admin/tmdb','PUT',{
+          Enabled:f.Enabled.checked,
+          APIKey:f.APIKey.value.trim(),
+          Language:f.Language.value.trim(),
+          BaseURL:f.BaseURL.value.trim(),
+          ImageURL:'https://image.tmdb.org/t/p',
+          ProxyURL:f.ProxyURL.value.trim()
+        });
+      }
+
+      $('#f-tmdb').onsubmit=run(async e=>{
+        e.preventDefault();
+        await saveTMDBForm();
+        toast('TMDB 配置已保存');renderTabTMDB();
+      });
+      $('#tmdb-test').onclick=run(async()=>{
+        toast('正在保存并测试 TMDB 连通性…');
+        await saveTMDBForm();
+        await api('/admin/tmdb/test','POST',{});
+        toast('🎉 TMDB 连通性测试成功！');
+      });
+      $('#match-search').onclick=run(async()=>{
+        const q=$('#match-q').value.trim(), kind=$('#match-kind').value, year=$('#match-year').value.trim();
+        if(!q)throw Error('请输入片名');
+        const r=await api('/admin/tmdb/search?'+new URLSearchParams({q,kind,year}));
+        const box=$('#match-results');
+        const list=r.Items||[];
+        if(!list.length){box.innerHTML='<div class="muted" style="padding:24px;text-align:center">未找到任何匹配候选</div>';return}
+        box.innerHTML=list.map(it=>`
+          <div class="item-row">
+            <div class="item-info">
+              <strong>${esc(it.title)} ${it.year?`(${it.year})`:''} <span class="badge">TMDB #${it.id}</span></strong>
+              <small>${esc(it.overview||'暂无中文简介')}</small>
+            </div>
+            <button onclick="run(()=>bindTMDB('${it.id}','${esc(kind)}'))()">绑定并刷新</button>
+          </div>`).join('');
+      });
+
+      if(xyPrefillMatch?.name){
+        setTimeout(()=>{$('#match-search')?.click();xyPrefillMatch=null},120);
+      }
+    }
+    async function bindTMDB(tmdbId,kind){
+      const itemId=$('#match-id').value.trim();
+      if(!itemId)throw Error('请先指定媒体库 ItemId');
+      await api('/admin/tmdb/match','POST',{ItemId:itemId,TmdbId:String(tmdbId),MediaType:kind});
+      toast(`已绑定 TMDB #${tmdbId}，元数据与海报刷新中`);
+    }
+
+    /* Tab 3: System & Users (All-in-One Settings) */
+    async function renderTabSystemUsers(){
+      const box=$('#admin-main');if(!box)return;
+      const [users,enh,med]=await Promise.all([api('/admin/users'),api('/admin/enhancements'),api('/admin/media-info')]);
+      box.innerHTML=`
+        <div class="bar" style="margin-bottom:14px;justify-content:space-between">
+          <div>
+            <h2 style="margin:0">用户与播放权限</h2>
+            <p class="muted" style="margin:0">管理家庭成员账号、播放权限及并发设备配额。</p>
+          </div>
+          <button onclick="dialogAddUser()">＋ 添加用户</button>
+        </div>
+        <div class="item-list" style="margin-bottom:30px">
+          ${users.map(u=>`
+            <div class="item-row">
+              <span class="badge ${u.Policy?.EnableMediaPlayback?'ok':'warn'}">${u.Policy?.EnableMediaPlayback?'允许播放':'禁止播放'}</span>
+              <div class="item-info">
+                <strong>${esc(u.Name)} ${u.FirstAdmin?'<span class="badge" style="margin-left:6px">首位管理员</span>':''}</strong>
+                <small>设备上限: ${u.MaxDevices} 台 · 上次登录: ${u.LastLoginDate?new Date(u.LastLoginDate*1000).toLocaleString():'从未'}</small>
+              </div>
+              <div class="bar" style="margin:0">
+                <button class="secondary" onclick="editUserModal('${u.Id}')">设置</button>
+                ${!u.FirstAdmin&&u.Id!==user.Id?`<button class="danger" onclick="deleteUser('${u.Id}')">删除</button>`:''}
+              </div>
+            </div>`).join('')}
+        </div>
+
+        <h2>服务运行与性能设置</h2>
+        <div class="panel">
+          <form id="f-sys" class="form-grid">
+            <label>服务器对外显示名称<input name="serverName" required value="${esc(enh.ServerName)}"></label>
+            <label>第三方反代端口（如 NanShare 7799）<input name="proxyPorts" placeholder="7799" value="${esc((enh.ThirdPartyProxyPorts||[]).join(','))}"></label>
+            <label>媒体库全量扫描并发<input type="number" name="scanConcurrency" min="1" max="32" value="${enh.ScanConcurrency}"></label>
+            <label>媒体库增量更新并发<input type="number" name="updateConcurrency" min="1" max="32" value="${enh.UpdateConcurrency}"></label>
+            <label class="toggle-row" style="grid-column:1/-1">
+              自动监听本地文件变动刷新索引
+              <input type="checkbox" name="watchEnabled" ${enh.WatchEnabled?'checked':''}>
+            </label>
+            <label class="toggle-row" style="grid-column:1/-1">
+              按首字母或拼音快速搜索视频
+              <input type="checkbox" name="initials" ${enh.SearchByInitials?'checked':''}>
+            </label>
+            <label class="toggle-row" style="grid-column:1/-1">
+              浏览剧集简介时后台自动提取媒体编码信息
+              <input type="checkbox" name="medBrowse" ${med.Browse?'checked':''}>
+            </label>
+            <label class="toggle-row" style="grid-column:1/-1">
+              播放剧集时预加载下一集媒体信息
+              <input type="checkbox" name="medPreload" ${med.PreloadNext?'checked':''}>
+            </label>
+            <div class="bar" style="grid-column:1/-1;justify-content:flex-end;margin-top:10px">
+              <button type="submit">保存服务设置</button>
+            </div>
+          </form>
+        </div>`;
+
+      $('#f-sys').onsubmit=run(async e=>{
+        e.preventDefault();const f=e.target.elements;
+        const ports=f.proxyPorts.value.split(',').map(s=>Number(s.trim())).filter(n=>n>0);
+        await api('/admin/enhancements','PUT',{
+          ServerName:f.serverName.value.trim(),
+          ThirdPartyProxyPorts:ports,
+          ScanConcurrency:Number(f.scanConcurrency.value),
+          UpdateConcurrency:Number(f.updateConcurrency.value),
+          WatchEnabled:f.watchEnabled.checked,
+          WatchDelaySeconds:30,
+          SearchByInitials:f.initials.checked,
+          HideMissingActorImages:true,
+          MergeVersionsInFolder:true,
+          MergeVersionsAcrossLibraries:true,
+          FastCDN:true
+        });
+        await api('/admin/media-info','PUT',{
+          Browse:f.medBrowse.checked,
+          PreloadNext:f.medPreload.checked,
+          Persistent:true,
+          Directory:med.Directory,
+          Concurrency:med.Concurrency||2
+        });
+        toast('系统配置已成功保存');renderTabSystemUsers();
+      });
+    }
+
+    function dialogAddUser(){
+      const d=$('#modal');d.className='';
+      d.innerHTML=`
+        <h2>添加新用户</h2>
+        <form id="f-newuser" class="form-grid single" style="margin-top:14px">
+          <label>用户名<input name="name" required></label>
+          <label>密码（至少 10 位）<input name="pw" type="password" minlength="10" required></label>
+          <label>同时播放设备上限<input name="max" type="number" min="1" max="100" value="2"></label>
+          <label class="toggle-row">允许串流播放<input type="checkbox" name="allow" checked></label>
+          <div class="bar" style="justify-content:flex-end;margin-top:12px">
+            <button type="button" class="secondary" onclick="closeModal()">取消</button>
+            <button type="submit">创建用户</button>
+          </div>
+        </form>`;
+      d.showModal();
+      $('#f-newuser').onsubmit=run(async e=>{
+        e.preventDefault();const f=new FormData(e.target);
+        await api('/admin/users','POST',{Name:f.get('name'),Password:f.get('pw'),MaxDevices:Number(f.get('max')),AllowPlayback:f.has('allow')});
+        closeModal();toast('用户已创建');renderTabSystemUsers();
+      });
+    }
+    async function editUserModal(id){
+      const list=await api('/admin/users');const u=list.find(x=>x.Id===id);if(!u)return;
+      const d=$('#modal');d.className='';
+      d.innerHTML=`
+        <h2>编辑用户 · ${esc(u.Name)}</h2>
+        <form id="f-edituser" class="form-grid single" style="margin-top:14px">
+          <label>重置密码（留空保持不变）<input name="pw" type="password" minlength="10" placeholder="留空不变"></label>
+          <label>同时播放设备上限<input name="max" type="number" min="1" max="100" value="${u.MaxDevices}"></label>
+          <label class="toggle-row">允许串流播放<input type="checkbox" name="allow" ${u.Policy?.EnableMediaPlayback?'checked':''}></label>
+          <div class="bar" style="justify-content:flex-end;margin-top:12px">
+            <button type="button" class="secondary" onclick="closeModal()">取消</button>
+            <button type="submit">保存更改</button>
+          </div>
+        </form>`;
+      d.showModal();
+      $('#f-edituser').onsubmit=run(async e=>{
+        e.preventDefault();const f=new FormData(e.target);
+        if(f.get('pw'))await api('/admin/user-identity','PUT',{ID:id,Name:u.Name,Password:f.get('pw')});
+        await api('/admin/users','PUT',{ID:id,MaxDevices:Number(f.get('max')),Admin:u.Policy?.IsAdministrator,AllowPlayback:f.has('allow')});
+        closeModal();toast('用户设置已保存');renderTabSystemUsers();
+      });
+    }
+    async function deleteUser(id){if(confirm('确定删除该用户？')){await api('/admin/users','DELETE',{ID:id});toast('已删除用户');renderTabSystemUsers()}}
+
+    /* Global Polling for Scans */
+    let scanTimer;
+    async function pollAdminScan(){
+      clearTimeout(scanTimer);if(currentView!=='admin'||adminTab!==0)return;
+      try{
+        const b=await api('/admin/logs');
+        const jobs=b.Entries.filter(x=>['scan','update'].includes(x.Category));
+        const active=jobs.find(x=>x.State==='running')||jobs[0];
+        const ring=$('#admin-scan-ring');
+        if(ring){
+          const pct=active?(active.State==='complete'?100:active.Total?Math.min(95,Math.floor(active.Done/active.Total*95)):0):0;
+          ring.style.setProperty('--pct',pct+'%');
+          ring.firstElementChild.textContent=pct+'%';
+          ring.title=active?`${active.Name} · ${active.State} (${active.Done}/${active.Total})`:'空闲就绪';
+        }
+      }catch{}
+      scanTimer=setTimeout(pollAdminScan,2000);
+    }
+
+    /* Logs Dialog */
+    logCategory='all';
+    let logSearchKw='', logDebounceTimer, currentLogItems=[];
+    function openLogs(){$('#logs').showModal();refreshLogsNow()}
+    function switchLogCategory(cat){logCategory=cat;refreshLogsNow()}
+    function debounceLogs(){clearTimeout(logDebounceTimer);logDebounceTimer=setTimeout(()=>{logSearchKw=$('#log-kw').value.trim();refreshLogsNow()},250)}
+    async function clearCurrentLogs(){await api('/admin/logs','DELETE');currentLogItems=[];refreshLogsNow();toast('运行日志已清空')}
+    async function refreshLogsNow(){
+      clearTimeout(logTimer);if(!$('#logs').open)return;
+      try{
+        const qs=new URLSearchParams({category:logCategory,q:logSearchKw,limit:'300'});
+        const data=await api('/admin/logs?'+qs);
+        const list=data.Items||[];
+        currentLogItems=list;
+        $('#log-summary').innerHTML=`<span>总记录数: <strong>${data.Total||list.length}</strong> 条 · 在线播放: <strong>${data.OnlinePlayback||0}</strong> 台</span><span>最后刷新: ${new Date().toLocaleTimeString()}</span>`;
+        const box=$('#log-content');
+        if(!list.length){
+          box.innerHTML='<div class="muted" style="padding:40px 20px;text-align:center">暂无匹配的运行日志，可在客户端发起播放或刷新媒体后查看</div>';
+        }else{
+          box.innerHTML=list.map(it=>{
+            const isErr=it.level==='ERROR'||it.status>=400||Boolean(it.error);
+            const is302=it.level==='302'||it.status===302||it.status===301;
+            const badgeCls=isErr?'err':is302?'ok':'ok';
+            const badgeTxt=is302?'302 直链':isErr?`ERR ${it.status||''}`:`${it.method||'INFO'} ${it.status||''}`;
+            const timeStr=it.time?new Date(it.time).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'})+' .'+String(new Date(it.time).getMilliseconds()).padStart(3,'0'):'';
+            return `
+              <div class="log-line" style="background:${isErr?'rgba(239,68,68,.08)':is302?'rgba(59,130,246,.08)':'transparent'};padding:10px 12px;border-radius:8px;margin-bottom:6px">
+                <div class="bar" style="margin-bottom:4px;font-size:12px;justify-content:space-between">
+                  <div class="bar">
+                    <span class="badge ${badgeCls}">${badgeTxt}</span>
+                    <strong style="font-size:13px">${esc(it.title||it.path||'系统事件')}</strong>
+                    <span class="muted">${timeStr}</span>
+                    ${it.duration_ms?`<span class="muted">· ${it.duration_ms.toFixed(1)}ms</span>`:''}
+                  </div>
+                  <span class="muted" style="font-size:11px">${esc(it.client||'')} ${it.ip?`(${esc(it.ip)})`:''}</span>
+                </div>
+                ${it.path?`<div style="font-size:12px;color:var(--text);margin-bottom:4px"><code>${esc(it.method||'GET')} ${esc(it.path)}</code></div>`:''}
+                <div style="font-size:12px;overflow-wrap:anywhere;color:${isErr?'#fca5a5':is302?'#93c5fd':'var(--text)'}">${esc(it.message||'')}</div>
+                ${it.target?`<div style="font-size:11px;color:#60a5fa;margin-top:3px;overflow-wrap:anywhere">↳ 302 目标 CDN: <code>${esc(it.target)}</code></div>`:''}
+                ${it.error?`<div style="font-size:11px;color:#f87171;margin-top:4px;overflow-wrap:anywhere;background:rgba(239,68,68,.12);padding:6px 10px;border-radius:6px">错误信息: ${esc(it.error)}</div>`:''}
+                ${it.detail&&it.detail!==it.error?`<div class="muted" style="font-size:11px;margin-top:4px;overflow-wrap:anywhere">详情: ${esc(it.detail)}</div>`:''}
+              </div>`;
+          }).join('');
+        }
+      }catch(e){
+        $('#log-summary').textContent='日志拉取失败: '+e.message;
+      }
+      logTimer=setTimeout(refreshLogsNow,2000);
+    }
+    function copyLogs(){
+      if(!currentLogItems.length){toast('当前无日志可复制');return}
+      const text=currentLogItems.map(it=>`[${it.time||''}] [${it.level||'INFO'}] ${it.method||''} ${it.path||''} -> ${it.status||''} | ${it.client||''} (${it.ip||''}) | ${it.message||''} ${it.target?`-> Location: `+it.target:''} ${it.error?`[Err: `+it.error+`]`:''}`).join('\n');
+      navigator.clipboard?.writeText(text).then(()=>toast('已复制全部日志到剪贴板')).catch(()=>toast('复制失败，请手动选取'));
+    }
+
+    // Init App
+    if(token&&user){renderNav();showBrowse()}
+    else showLogin();
+  </script>
+</body>
+</html>

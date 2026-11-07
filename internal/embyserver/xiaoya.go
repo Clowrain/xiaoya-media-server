@@ -187,6 +187,9 @@ func tryXiaoyaDirectGet(r *http.Request, target *url.URL) (string, bool, error) 
 			ct := strings.ToLower(res.Header.Get("Content-Type"))
 			if strings.Contains(ct, "video/") || strings.Contains(ct, "audio/") {
 				res.Body.Close()
+				if hop == 0 {
+					return "", false, fmt.Errorf("resolver returned media body directly on initial URL")
+				}
 				return currentURL, false, nil
 			}
 
