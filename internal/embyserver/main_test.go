@@ -120,3 +120,62 @@ func TestGatewayRejectsVideoBodyAndUnauthenticatedRequests(t *testing.T) {
 		t.Fatalf("video fallback was not blocked: %d", w.Code)
 	}
 }
+
+func TestStaticWebAssets(t *testing.T) {
+	a := &App{}
+
+	// Test index.html
+	req := httptest.NewRequest("GET", "/index.html", nil)
+	rec := httptest.NewRecorder()
+	a.serve(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200 for /index.html, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("expected text/html for /index.html, got %s", rec.Header().Get("Content-Type"))
+	}
+
+	// Test JS asset (exact case)
+	reqJS := httptest.NewRequest("GET", "/assets/index-OJAEotM7.js", nil)
+	recJS := httptest.NewRecorder()
+	a.serve(recJS, reqJS)
+	if recJS.Code != 200 {
+		t.Fatalf("expected 200 for JS asset, got %d (body: %s)", recJS.Code, recJS.Body.String())
+	}
+	if !strings.Contains(recJS.Header().Get("Content-Type"), "application/javascript") {
+		t.Fatalf("expected application/javascript, got %s", recJS.Header().Get("Content-Type"))
+	}
+
+	// Test CSS asset
+	reqCSS := httptest.NewRequest("GET", "/assets/index-Cp0LXop1.css", nil)
+	recCSS := httptest.NewRecorder()
+	a.serve(recCSS, reqCSS)
+	if recCSS.Code != 200 {
+		t.Fatalf("expected 200 for CSS asset, got %d (body: %s)", recCSS.Code, recCSS.Body.String())
+	}
+	if !strings.Contains(recCSS.Header().Get("Content-Type"), "text/css") {
+		t.Fatalf("expected text/css, got %s", recCSS.Header().Get("Content-Type"))
+	}
+
+	// Test JS asset (lowercase fallback)
+	reqJSLower := httptest.NewRequest("GET", "/assets/index-ojaeotm7.js", nil)
+	recJSLower := httptest.NewRecorder()
+	a.serve(recJSLower, reqJSLower)
+	if recJSLower.Code != 200 {
+		t.Fatalf("expected 200 for lowercase JS asset, got %d", recJSLower.Code)
+	}
+	if !strings.Contains(recJSLower.Header().Get("Content-Type"), "application/javascript") {
+		t.Fatalf("expected application/javascript, got %s", recJSLower.Header().Get("Content-Type"))
+	}
+
+	// Test /web/assets/ prefix
+	reqWebJS := httptest.NewRequest("GET", "/web/assets/index-OJAEotM7.js", nil)
+	recWebJS := httptest.NewRecorder()
+	a.serve(recWebJS, reqWebJS)
+	if recWebJS.Code != 200 {
+		t.Fatalf("expected 200 for /web/assets/ JS, got %d", recWebJS.Code)
+	}
+	if !strings.Contains(recWebJS.Header().Get("Content-Type"), "application/javascript") {
+		t.Fatalf("expected application/javascript, got %s", recWebJS.Header().Get("Content-Type"))
+	}
+}

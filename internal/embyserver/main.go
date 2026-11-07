@@ -475,28 +475,62 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(l, "/assets/") || strings.HasPrefix(l, "/web/assets/") {
-		assetPath := strings.TrimPrefix(l, "/web/")
+		assetPath := p
+		if strings.HasPrefix(l, "/web/assets/") {
+			assetPath = strings.TrimPrefix(assetPath, "/web")
+		}
 		assetPath = strings.TrimPrefix(assetPath, "/")
+
 		b, err := web.Assets.ReadFile(assetPath)
 		if err != nil {
-			fail(w, 404, "Asset not found")
+			// Case-insensitive fallback lookup
+			entries, _ := web.Assets.ReadDir("assets")
+			baseName := filepath.Base(assetPath)
+			for _, entry := range entries {
+				if strings.EqualFold(entry.Name(), baseName) {
+					assetPath = "assets/" + entry.Name()
+					b, err = web.Assets.ReadFile(assetPath)
+					break
+				}
+			}
+		}
+		if err != nil {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("Asset not found"))
 			return
 		}
-		ct := mime.TypeByExtension(filepath.Ext(assetPath))
-		if ct == "" {
-			switch filepath.Ext(assetPath) {
-			case ".js":
-				ct = "application/javascript; charset=utf-8"
-			case ".css":
-				ct = "text/css; charset=utf-8"
-			case ".svg":
-				ct = "image/svg+xml"
-			case ".woff2":
-				ct = "font/woff2"
-			default:
+
+		ext := strings.ToLower(filepath.Ext(assetPath))
+		var ct string
+		switch ext {
+		case ".js", ".mjs":
+			ct = "application/javascript; charset=utf-8"
+		case ".css":
+			ct = "text/css; charset=utf-8"
+		case ".svg":
+			ct = "image/svg+xml"
+		case ".woff2":
+			ct = "font/woff2"
+		case ".woff":
+			ct = "font/woff"
+		case ".ttf":
+			ct = "font/ttf"
+		case ".png":
+			ct = "image/png"
+		case ".jpg", ".jpeg":
+			ct = "image/jpeg"
+		case ".ico":
+			ct = "image/x-icon"
+		case ".json":
+			ct = "application/json; charset=utf-8"
+		default:
+			ct = mime.TypeByExtension(ext)
+			if ct == "" {
 				ct = "application/octet-stream"
 			}
 		}
+
 		w.Header().Set("Content-Type", ct)
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		w.Write(b)
