@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Xiaoya Media · 影库</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎬</text></svg>">
   <style>
     :root{
       color-scheme:dark;
@@ -1196,13 +1197,6 @@
         if(!list.length){box.innerHTML='<div class="muted" style="padding:24px;text-align:center">未找到任何匹配候选</div>';return}
         box.innerHTML=list.map(it=>`
           <div class="item-row">
-            <div class="item-info">
-              <strong>${esc(it.title)} ${it.year?`(${it.year})`:''} <span class="badge">TMDB #${it.id}</span></strong>
-              <small>${esc(it.overview||'暂无中文简介')}</small>
-            </div>
-            <button onclick="run(()=>bindTMDB('${it.id}','${esc(kind)}'))()">绑定并刷新</button>
-          </div>`).join('');
-      });
             <div class="item-info">
               <strong>${esc(it.title)} ${it.year?`(${it.year})`:''} <span class="badge">TMDB #${it.id}</span></strong>
               <small>${esc(it.overview||'暂无中文简介')}</small>

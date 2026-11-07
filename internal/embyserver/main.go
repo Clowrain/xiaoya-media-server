@@ -457,6 +457,12 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		respond(w, M{"name": a.displayName(), "short_name": "Emby", "start_url": "index.html", "display": "standalone", "icons": []M{}})
 		return
 	}
+	if l == "/favicon.ico" {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🎬</text></svg>`))
+		return
+	}
 	if l == "/users/public" {
 		respond(w, []any{})
 		return
