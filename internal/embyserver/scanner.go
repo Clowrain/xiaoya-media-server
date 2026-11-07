@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"xiaoya-media-server/internal/metadata/tmdb"
 )
 
 type nfo struct {
@@ -165,7 +167,7 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 			return e
 		}
 		current[path] = fileStamp{fi.Size(), fi.ModTime().UnixNano()}
-		if strings.EqualFold(filepath.Ext(path), ".strm") {
+		if isScannableMediaFile(path) {
 			total++
 		}
 		return nil
@@ -245,7 +247,7 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 			}
 			return nil
 		}
-		if !strings.EqualFold(filepath.Ext(path), ".strm") {
+		if !isScannableMediaFile(path) {
 			return nil
 		}
 		a.changeActivity(job, func(v *activityEntry) { v.Current = d.Name() })
@@ -254,7 +256,11 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 		if e != nil {
 			return e
 		}
-		x := Item{ID: digest(path)[:32], Lib: lib, Parent: lib, Name: strings.TrimSuffix(d.Name(), filepath.Ext(d.Name())), Kind: "Movie", Path: path, Mtime: fi.ModTime().UnixNano(), Size: fi.Size()}
+		cleanTitle, parsedYear := tmdb.ParseTitleAndYear(strings.TrimSuffix(d.Name(), filepath.Ext(d.Name())))
+		x := Item{ID: digest(path)[:32], Lib: lib, Parent: lib, Name: strings.TrimSuffix(d.Name(), filepath.Ext(d.Name())), Kind: "Movie", Path: path, Year: parsedYear, Mtime: fi.ModTime().UnixNano(), Size: fi.Size()}
+		if kind != "tvshows" && cleanTitle != "" {
+			x.Name = cleanTitle
+		}
 		a.waitScan(job)
 		if (incremental || len(scopes) > 0) && previous[path] == current[path] && !dependencyChanged(path, dirtyDirs) {
 			var exists int
@@ -266,16 +272,24 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 		}
 		if kind == "tvshows" {
 			x.Kind = "Episode"
-			if m := epPattern.FindStringSubmatch(x.Name); len(m) == 3 {
-				x.Season, _ = strconv.Atoi(m[1])
-				x.Episode, _ = strconv.Atoi(m[2])
-			}
+			seasonHint := 0
 			rel, _ := filepath.Rel(root, filepath.Dir(path))
 			if rel != "." {
 				seriesPath := seriesDirectory(root, path)
-				series := Item{ID: digest(seriesPath)[:32], Lib: lib, Parent: lib, Name: filepath.Base(seriesPath), Kind: "Series", Path: seriesPath}
+				seriesTitle, seriesYear := tmdb.ParseTitleAndYear(filepath.Base(seriesPath))
+				if seriesTitle == "" {
+					seriesTitle = filepath.Base(seriesPath)
+				}
+				series := Item{ID: digest(seriesPath)[:32], Lib: lib, Parent: lib, Name: seriesTitle, Kind: "Series", Path: seriesPath, Year: seriesYear}
 				if lastSeries != seriesPath {
 					localInfo(filepath.Join(seriesPath, "tvshow.strm"), &series)
+					if entries, rErr := os.ReadDir(seriesPath); rErr == nil && series.Overview == "" {
+						for _, ent := range entries {
+							if ent.IsDir() && tmdb.IsPureMetadataTagDir(ent.Name()) {
+								localInfo(filepath.Join(seriesPath, ent.Name(), "tvshow.strm"), &series)
+							}
+						}
+					}
 					if series.Poster == "" {
 						series.Poster = seriesFallbackPoster(seriesPath)
 					}
@@ -285,14 +299,20 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 					lastSeries = seriesPath
 				}
 				x.Parent = series.ID
-				if filepath.Dir(path) != seriesPath {
+				if filepath.Dir(path) != seriesPath && !tmdb.IsPureMetadataTagDir(filepath.Base(filepath.Dir(path))) {
 					seasonPath := filepath.Dir(path)
-					season := Item{ID: digest(seasonPath)[:32], Lib: lib, Parent: series.ID, Name: filepath.Base(seasonPath), Kind: "Season", Path: seasonPath, Season: x.Season, Episode: x.Season}
 					if m := seasonDirPattern.FindStringSubmatch(filepath.Base(seasonPath)); len(m) == 2 {
-						season.Season, _ = strconv.Atoi(m[1])
-						season.Episode = season.Season
+						seasonHint, _ = strconv.Atoi(m[1])
+					}
+					sNum, epNum, _ := tmdb.ParseSeasonEpisode(x.Name, seasonHint)
+					x.Season = sNum
+					x.Episode = epNum
+					season := Item{ID: digest(seasonPath)[:32], Lib: lib, Parent: series.ID, Name: filepath.Base(seasonPath), Kind: "Season", Path: seasonPath, Season: x.Season, Episode: x.Season}
+					if seasonHint > 0 {
+						season.Season = seasonHint
+						season.Episode = seasonHint
 						if x.Season == 0 {
-							x.Season = season.Season
+							x.Season = seasonHint
 						}
 					}
 					if lastSeason != seasonPath {
@@ -306,27 +326,41 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 					x.Parent = season.ID
 				}
 			}
-		}
-		// Reuse unchanged STRM payload; sidecar changes are picked up on refresh.
-
-		f, e := os.Open(path)
-		if e != nil {
-			return e
-		}
-		b, e := io.ReadAll(io.LimitReader(f, 65537))
-		f.Close()
-		if e != nil {
-			return e
-		}
-		if len(b) > 65536 {
-			return fmt.Errorf("STRM 超过 64KB: %s", path)
-		}
-		for _, line := range strings.Split(strings.TrimPrefix(string(b), "\ufeff"), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" && !strings.HasPrefix(line, "#") {
-				x.URL = line
-				break
+			if x.Episode == 0 {
+				if sNum, epNum, ok := tmdb.ParseSeasonEpisode(x.Name, seasonHint); ok {
+					if x.Season == 0 {
+						x.Season = sNum
+					}
+					x.Episode = epNum
+				} else if m := epPattern.FindStringSubmatch(x.Name); len(m) == 3 {
+					x.Season, _ = strconv.Atoi(m[1])
+					x.Episode, _ = strconv.Atoi(m[2])
+				}
 			}
+		}
+		// Reuse unchanged STRM payload; local media files use file:// URL.
+		if isSTRMFile(path) {
+			f, e := os.Open(path)
+			if e != nil {
+				return e
+			}
+			b, e := io.ReadAll(io.LimitReader(f, 65537))
+			f.Close()
+			if e != nil {
+				return e
+			}
+			if len(b) > 65536 {
+				return fmt.Errorf("STRM 超过 64KB: %s", path)
+			}
+			for _, line := range strings.Split(strings.TrimPrefix(string(b), "\ufeff"), "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" && !strings.HasPrefix(line, "#") {
+					x.URL = line
+					break
+				}
+			}
+		} else {
+			x.URL = "file://" + path
 		}
 		localInfo(path, &x)
 		return save(x)

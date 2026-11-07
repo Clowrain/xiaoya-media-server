@@ -74,7 +74,7 @@ func (a *App) indexMetadataGeneration(lib, generation string, jobs ...string) er
 		metas := make([]sidecar, len(batch))
 		for j, x := range batch {
 			a.waitScan(job)
-			metas[j] = readSidecar(x)
+			metas[j] = a.resolveItemSidecar(x, false)
 		}
 		tx, e := a.db.Begin()
 		if e != nil {
@@ -89,6 +89,26 @@ func (a *App) indexMetadataGeneration(lib, generation string, jobs ...string) er
 			}
 			if _, e = tx.Exec("INSERT INTO item_metadata VALUES(?,?) ON CONFLICT(item) DO UPDATE SET data=excluded.data", x.ID, string(b)); e != nil {
 				break
+			}
+			if n.Title != "" || n.Plot != "" || n.Year > 0 {
+				newName := x.Name
+				if n.Title != "" && x.Kind != "Season" {
+					var manual string
+					if tx.QueryRow("SELECT name FROM media_display_names WHERE item=?", x.ID).Scan(&manual) != nil {
+						newName = n.Title
+					}
+				}
+				newOverview := x.Overview
+				if n.Plot != "" {
+					newOverview = n.Plot
+				}
+				newYear := x.Year
+				if n.Year > 0 {
+					newYear = n.Year
+				}
+				if _, e = tx.Exec("UPDATE items SET name=?,overview=?,year=? WHERE id=?", newName, newOverview, newYear, x.ID); e != nil {
+					break
+				}
 			}
 			if _, e = tx.Exec("DELETE FROM item_people WHERE item=?", x.ID); e != nil {
 				break
@@ -218,6 +238,21 @@ func (a *App) imagePath(i, kind string) string {
 					return p
 				}
 			}
+		}
+	}
+	meta := a.metadata(x)
+	switch kind {
+	case "Primary":
+		if strings.HasPrefix(meta.PosterURL, "https://image.tmdb.org/") {
+			return meta.PosterURL
+		}
+	case "Backdrop":
+		if strings.HasPrefix(meta.BackdropURL, "https://image.tmdb.org/") {
+			return meta.BackdropURL
+		}
+	case "Thumb":
+		if strings.HasPrefix(meta.ThumbURL, "https://image.tmdb.org/") {
+			return meta.ThumbURL
 		}
 	}
 	if kind == "Primary" && x.Parent != x.Lib && x.Parent != x.ID {

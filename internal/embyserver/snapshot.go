@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"xiaoya-media-server/internal/metadata/tmdb"
 )
 
 type fileStamp struct{ Size, Mtime int64 }
@@ -76,7 +78,7 @@ func (a *App) commitSnapshot(lib string, current fileSnapshot, allowEmpty bool, 
 	}
 	count := 0
 	for p := range current {
-		if strings.EqualFold(filepath.Ext(p), ".strm") {
+		if isScannableMediaFile(p) {
 			count++
 			if _, e = stmt.Exec(p); e != nil {
 				stmt.Close()
@@ -134,10 +136,18 @@ func seriesDirectory(root, path string) string {
 	dir := filepath.Dir(path)
 	for p := dir; p != root && p != "/" && p != "."; p = filepath.Dir(p) {
 		if seasonDirPattern.MatchString(filepath.Base(p)) {
-			return filepath.Dir(p)
+			cand := filepath.Dir(p)
+			for cand != root && cand != "/" && cand != "." && tmdb.IsPureMetadataTagDir(filepath.Base(cand)) {
+				cand = filepath.Dir(cand)
+			}
+			return cand
 		}
 		if st, e := os.Stat(filepath.Join(p, "tvshow.nfo")); e == nil && !st.IsDir() {
-			return p
+			cand := p
+			for cand != root && cand != "/" && cand != "." && tmdb.IsPureMetadataTagDir(filepath.Base(cand)) {
+				cand = filepath.Dir(cand)
+			}
+			return cand
 		}
 	}
 	rel, _ := filepath.Rel(root, dir)
@@ -145,8 +155,24 @@ func seriesDirectory(root, path string) string {
 }
 func seasonPoster(path string, n int) string {
 	candidates := []string{}
+	parentDir := filepath.Dir(path)
+	grandDir := ""
+	if tmdb.IsPureMetadataTagDir(filepath.Base(parentDir)) {
+		grandDir = filepath.Dir(parentDir)
+	}
 	for _, ext := range []string{".jpg", ".png", ".webp", ".jpeg"} {
-		candidates = append(candidates, filepath.Join(path, "poster"+ext), filepath.Join(path, "folder"+ext), filepath.Join(filepath.Dir(path), fmt.Sprintf("season%02d-poster%s", n, ext)), filepath.Join(filepath.Dir(path), fmt.Sprintf("season%d-poster%s", n, ext)))
+		candidates = append(candidates,
+			filepath.Join(path, "poster"+ext),
+			filepath.Join(path, "folder"+ext),
+			filepath.Join(parentDir, fmt.Sprintf("season%02d-poster%s", n, ext)),
+			filepath.Join(parentDir, fmt.Sprintf("season%d-poster%s", n, ext)),
+		)
+		if grandDir != "" {
+			candidates = append(candidates,
+				filepath.Join(grandDir, fmt.Sprintf("season%02d-poster%s", n, ext)),
+				filepath.Join(grandDir, fmt.Sprintf("season%d-poster%s", n, ext)),
+			)
+		}
 	}
 	for _, p := range candidates {
 		if st, e := os.Stat(p); e == nil && st.Mode().IsRegular() {
@@ -174,6 +200,11 @@ func seriesFallbackPoster(path string) string {
 			if m := seasonDirPattern.FindStringSubmatch(d.Name()); len(m) == 2 {
 				n, _ := strconv.Atoi(m[1])
 				if p := seasonPoster(filepath.Join(path, d.Name()), n); p != "" {
+					return p
+				}
+			}
+			if tmdb.IsPureMetadataTagDir(d.Name()) {
+				if p := seriesFallbackPoster(filepath.Join(path, d.Name())); p != "" {
 					return p
 				}
 			}

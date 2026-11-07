@@ -10,10 +10,17 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"xiaoya-media-server/internal/metadata/tmdb"
 )
 
 type sidecar struct {
-	Plot    string   `xml:"plot"`
+	Title       string   `xml:"title" json:"Title,omitempty"`
+	Year        int      `xml:"year" json:"Year,omitempty"`
+	PosterURL   string   `xml:"-" json:"PosterURL,omitempty"`
+	BackdropURL string   `xml:"-" json:"BackdropURL,omitempty"`
+	ThumbURL    string   `xml:"-" json:"ThumbURL,omitempty"`
+	Plot        string   `xml:"plot"`
 	Runtime float64  `xml:"runtime"`
 	Rating  float64  `xml:"rating"`
 	Genres  []string `xml:"genre"`
@@ -55,6 +62,11 @@ type sidecar struct {
 }
 
 func readSidecar(x Item) sidecar {
+	n, _ := readSidecarStatus(x)
+	return n
+}
+
+func readSidecarStatus(x Item) (sidecar, bool) {
 	base := strings.TrimSuffix(x.Path, filepath.Ext(x.Path))
 	dir := filepath.Dir(x.Path)
 	paths := []string{base + ".nfo", filepath.Join(dir, "movie.nfo")}
@@ -63,10 +75,21 @@ func readSidecar(x Item) sidecar {
 	}
 	if x.Kind == "Series" {
 		paths = []string{filepath.Join(x.Path, "tvshow.nfo")}
+		if entries, err := os.ReadDir(x.Path); err == nil {
+			for _, ent := range entries {
+				if ent.IsDir() && tmdb.IsPureMetadataTagDir(ent.Name()) {
+					paths = append(paths, filepath.Join(x.Path, ent.Name(), "tvshow.nfo"))
+				}
+			}
+		}
 	}
 	for _, p := range paths {
 		real, e := filepath.EvalSymlinks(p)
 		if e != nil || !allowedMediaPath(real) {
+			continue
+		}
+		st, e := os.Stat(real)
+		if e != nil || st.IsDir() || st.Size() == 0 {
 			continue
 		}
 		f, e := os.Open(real)
@@ -77,10 +100,10 @@ func readSidecar(x Item) sidecar {
 		e = xml.NewDecoder(io.LimitReader(f, 2<<20)).Decode(&n)
 		f.Close()
 		if e == nil {
-			return n
+			return n, true
 		}
 	}
-	return sidecar{}
+	return sidecar{}, false
 }
 func (a *App) enrich(x Item, m M) {
 	n := a.metadata(x)
@@ -124,6 +147,8 @@ func (a *App) enrich(x Item, m M) {
 	ids := M{}
 	if n.TMDB != "" {
 		ids["Tmdb"] = n.TMDB
+	} else if extracted := tmdb.ExtractTMDBID(x.Path); extracted != "" {
+		ids["Tmdb"] = extracted
 	}
 	if n.IMDB != "" {
 		ids["Imdb"] = n.IMDB

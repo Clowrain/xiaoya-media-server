@@ -92,6 +92,7 @@ func (a *App) init() {
 	must(a.postgresSchema())
 	must(a.versionsSchema())
 	must(a.initialsSchema())
+	must(a.tmdbSchema())
 	mustExecLogin := `CREATE TABLE IF NOT EXISTS user_logins(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, last_login BIGINT NOT NULL)`
 	_, loginErr := a.db.Exec(mustExecLogin)
 	must(loginErr)
@@ -603,7 +604,11 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 					fail(w, 403, "无权限")
 					return
 				}
-				go a.scanAll()
+				go func(targetID string) {
+					if err := a.refreshSingleItemMetadata(targetID, true); err != nil {
+						a.scanAll()
+					}
+				}(s[2])
 				w.WriteHeader(204)
 				return
 			}
@@ -698,6 +703,8 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u User, p string) {
 		defer a.write.Unlock()
 	}
 	switch p {
+	case "/admin/tmdb", "/admin/tmdb/test", "/admin/tmdb/search", "/admin/tmdb/match":
+		a.adminTMDB(w, r, p)
 	case "/admin/media-info/restore":
 		a.restoreMediaInfo(w, r)
 	case "/admin/media-item":
@@ -1404,6 +1411,9 @@ func OpenApp(ctx context.Context, cfg *config.Config, extraMigrate func(*sql.DB)
 	}
 	if cfg.AList.BaseURL != "" && os.Getenv("XIAOYA_URL") == "" {
 		_ = os.Setenv("XIAOYA_URL", cfg.AList.BaseURL)
+	}
+	if cfg.STRM.OutputRoot != "" {
+		RegisterMediaRoot(cfg.STRM.OutputRoot)
 	}
 	db, err := openDatabase(dsn)
 	if err != nil {
