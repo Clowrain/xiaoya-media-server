@@ -40,16 +40,66 @@ func xiaoyaSource(raw string) bool {
 	return false
 }
 
+func shouldRewriteInternalHost(h string, ip net.IP, target *url.URL) bool {
+	if target == nil || target.Host == "" {
+		return false
+	}
+	if h == "localhost" || h == "xiaoya.host" || h == "xiaoya" {
+		return true
+	}
+	if ip != nil && ip.IsLoopback() {
+		return true
+	}
+	// If the IP is in Docker bridge range (172.16.0.0/12) and target is not in that range (e.g. target is LAN IP 192.168.x.x or domain)
+	if ip != nil {
+		if v4 := ip.To4(); v4 != nil && v4[0] == 172 && (v4[1] >= 16 && v4[1] <= 31) {
+			targetIP := net.ParseIP(target.Hostname())
+			if targetIP == nil || targetIP.To4() == nil || targetIP.To4()[0] != 172 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func validateResolvedLink(link string, target *url.URL) (string, error) {
-	u, err := url.Parse(link)
-	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") || strings.ContainsAny(link, "\r\n") {
+	link = strings.TrimSpace(link)
+	if link == "" || strings.ContainsAny(link, "\r\n") {
 		return "", fmt.Errorf("resolver did not return an HTTP link")
 	}
+	u, err := url.Parse(link)
+	if err != nil || u.User != nil {
+		return "", fmt.Errorf("resolver did not return an HTTP link")
+	}
+
+	// Resolve relative redirects against target (must start with / e.g. /p/...)
+	if !u.IsAbs() || u.Host == "" {
+		if strings.HasPrefix(link, "/") && target != nil && target.Host != "" {
+			u = target.ResolveReference(u)
+		} else {
+			return "", fmt.Errorf("resolver did not return an HTTP link")
+		}
+	}
+
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return "", fmt.Errorf("resolver did not return an HTTP link")
+	}
+
 	h := strings.ToLower(u.Hostname())
 	ip := net.ParseIP(h)
-	if h == "localhost" || h == "xiaoya.host" || h == strings.ToLower(target.Hostname()) || (ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast())) {
+
+	// Block cloud metadata services and unspecified IPs (SSRF protection)
+	if h == "metadata.google.internal" || h == "instance-data" || (ip != nil && (ip.IsUnspecified() || ip.IsLinkLocalUnicast())) {
 		return "", fmt.Errorf("resolver returned an internal address")
 	}
+
+	// If resolved URL points to container loopback, internal docker host, or docker bridge network,
+	// LAN clients won't be able to reach it. Rewrite host and scheme to target's reachable endpoint.
+	if shouldRewriteInternalHost(h, ip, target) {
+		u.Scheme = target.Scheme
+		u.Host = target.Host
+	}
+
 	return u.String(), nil
 }
 
