@@ -286,6 +286,75 @@ func (a *App) serverInfo() M {
 	return M{"Id": a.serverID, "ServerName": a.displayName(), "Version": "4.8.0.80", "OperatingSystem": "Linux", "ProductName": "Xiaoya Media Server", "LocalAddress": os.Getenv("PUBLIC_URL"), "WanAddress": os.Getenv("PUBLIC_URL"), "LocalAddresses": []string{os.Getenv("PUBLIC_URL")}, "RemoteAddresses": []string{os.Getenv("PUBLIC_URL")}, "StartupWizardCompleted": true, "SupportsLibraryMonitor": false, "HasUpdateAvailable": false}
 }
 func (a *App) serve(w http.ResponseWriter, r *http.Request) {
+	if !shouldSkipLog(r.URL.Path) {
+		reqStarted := time.Now()
+		tracked := &fullChainResponseWriter{ResponseWriter: w, status: 200}
+		w = tracked
+		defer func() {
+			elapsed := time.Since(reqStarted)
+			durMs := float64(elapsed.Microseconds()) / 1000.0
+			status := tracked.status
+			if status == 0 {
+				status = 200
+			}
+			level := "INFO"
+			category := "http"
+			title := "客户端请求"
+			target := tracked.location
+			errStr := ""
+			msg := fmt.Sprintf("%s %s · HTTP %d (%.1fms)", r.Method, r.URL.Path, status, durMs)
+
+			pLower := strings.ToLower(r.URL.Path)
+			isVideo := isVideoRequest(r.URL.Path) || strings.Contains(pLower, "/playbackinfo") || strings.HasSuffix(pLower, "/stream.mp4")
+
+			if isVideo {
+				category = "playback"
+				if status == http.StatusFound || status == http.StatusMovedPermanently || status == http.StatusTemporaryRedirect {
+					level = "302"
+					title = "播放直链 302 重定向"
+					msg = fmt.Sprintf("播放重定向成功 -> 目标 CDN: %s (耗时 %.1fms)", target, durMs)
+				} else if status >= 400 {
+					level = "ERROR"
+					title = "播放请求失败"
+					errStr = tracked.bodyBuf.String()
+					msg = fmt.Sprintf("播放请求失败 · HTTP %d · %s", status, errStr)
+				} else {
+					title = "播放链路处理"
+				}
+			} else if strings.HasPrefix(pLower, "/admin/scan") || strings.HasPrefix(pLower, "/api/sync") {
+				category = "scan"
+				title = "媒体库扫描/同步"
+			} else if strings.HasPrefix(pLower, "/admin/tmdb") {
+				category = "tmdb"
+				title = "TMDB 元数据"
+			}
+
+			if status >= 400 && level != "ERROR" {
+				level = "ERROR"
+				errStr = tracked.bodyBuf.String()
+			}
+
+			entry := &LogEntry{
+				ID:         fmt.Sprintf("%d-%s", reqStarted.UnixNano(), id()[:6]),
+				Time:       reqStarted,
+				Level:      level,
+				Category:   category,
+				Title:      title,
+				Method:     r.Method,
+				Path:       r.URL.Path,
+				Status:     status,
+				DurationMs: durMs,
+				Client:     r.UserAgent(),
+				IP:         clientIP(r),
+				Target:     target,
+				Message:    msg,
+				Detail:     tracked.bodyBuf.String(),
+				Error:      errStr,
+			}
+			sysLogger.add(entry)
+		}()
+	}
+
 	if done := a.beginProxyDebug(&w, r); done != nil {
 		defer done()
 	}
@@ -975,7 +1044,7 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u User, p string) {
 		}
 		respond(w, M{"Path": path})
 	case "/admin/logs":
-		a.activitySnapshot(w, r)
+		a.handleUnifiedLogs(w, r)
 	case "/admin/status":
 		var n int
 		a.db.QueryRow("SELECT count(*) FROM items").Scan(&n)

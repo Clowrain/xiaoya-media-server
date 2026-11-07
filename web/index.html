@@ -407,27 +407,33 @@
   <main id="app"></main>
 
   <dialog id="modal"></dialog>
-  <dialog id="logs" aria-label="实时运行日志">
-    <div class="bar" style="margin-bottom:14px">
-      <h2 style="margin:0;flex:1">实时运行日志</h2>
-      <select id="log-cat" onchange="switchLogCategory(this.value)">
-        <option value="scan">媒体扫描</option>
-        <option value="update">媒体更新</option>
-        <option value="playback">播放会话</option>
-        <option value="probe">媒体信息提取</option>
-        <option value="redirect">302 播放跳转</option>
-        <option value="error">错误日志</option>
-        <option value="proxy">反代调试</option>
-      </select>
-      <button class="secondary icon-btn" title="清空日志" onclick="run(clearCurrentLogs)()">
-        <svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-      </button>
-      <button class="secondary icon-btn" title="关闭" onclick="$('#logs').close()">
-        <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
-      </button>
+  <dialog id="logs" aria-label="全链路运行日志与排错中心" style="width:min(980px,96vw);height:min(720px,90vh);padding:22px">
+    <div class="bar" style="margin-bottom:12px;justify-content:space-between">
+      <div class="bar">
+        <h2 style="margin:0">全链路运行日志</h2>
+        <span class="badge ok" id="log-live-badge">实时更新中</span>
+      </div>
+      <div class="bar">
+        <select id="log-cat" onchange="switchLogCategory(this.value)">
+          <option value="all" selected>🌟 全部链路日志 (All)</option>
+          <option value="playback">🎬 播放与 302 重定向</option>
+          <option value="http">🌐 Emby 客户端请求流</option>
+          <option value="scan">⚡ 媒体扫描与小雅同步</option>
+          <option value="tmdb">🎬 TMDB 刮削记录</option>
+          <option value="error">⚠️ 仅看错误与异常</option>
+        </select>
+        <input id="log-kw" placeholder="搜索片名、路径、IP、状态码、错误…" style="width:200px" oninput="debounceLogs()">
+        <button class="secondary" title="复制所有当前日志" onclick="copyLogs()">复制日志</button>
+        <button class="secondary icon-btn" title="清空日志" onclick="run(clearCurrentLogs)()">
+          <svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+        <button class="secondary icon-btn" title="关闭" onclick="$('#logs').close()">
+          <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
     </div>
-    <div class="muted" id="log-summary" style="font-size:12px;margin-bottom:8px"></div>
-    <div class="log-box" id="log-content"></div>
+    <div class="muted bar" id="log-summary" style="font-size:12px;margin-bottom:10px;justify-content:space-between"></div>
+    <div class="log-box" id="log-content" style="max-height:calc(90vh - 140px)"></div>
   </dialog>
 
   <div id="toast" role="status" aria-live="polite"></div>
@@ -751,6 +757,10 @@
             <button class="admin-nav-item ${tab===3?'active':''}" onclick="showAdmin(3)">
               <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               系统与用户
+            </button>
+            <button class="admin-nav-item" onclick="openLogs()">
+              <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5"/></svg>
+              全链路日志
             </button>
           </aside>
           <section id="admin-main"></section>
@@ -1360,23 +1370,58 @@
     }
 
     /* Logs Dialog */
+    logCategory='all';
+    let logSearchKw='', logDebounceTimer, currentLogItems=[];
     function openLogs(){$('#logs').showModal();refreshLogsNow()}
     function switchLogCategory(cat){logCategory=cat;refreshLogsNow()}
-    async function clearCurrentLogs(){await api('/admin/logs'+(logCategory==='proxy'?'?category=proxy':''),'DELETE');refreshLogsNow()}
+    function debounceLogs(){clearTimeout(logDebounceTimer);logDebounceTimer=setTimeout(()=>{logSearchKw=$('#log-kw').value.trim();refreshLogsNow()},250)}
+    async function clearCurrentLogs(){await api('/admin/logs','DELETE');currentLogItems=[];refreshLogsNow();toast('运行日志已清空')}
     async function refreshLogsNow(){
       clearTimeout(logTimer);if(!$('#logs').open)return;
       try{
-        const data=await api('/admin/logs'+(logCategory==='proxy'?'?category=proxy':''));
-        $('#log-summary').textContent=logCategory==='playback'?`当前在线播放设备数: ${data.OnlinePlayback}`:logCategory==='probe'?`并发提取中: ${data.ProbeRunning} · 等待中: ${data.ProbeWaiting}`:`最后刷新: ${new Date().toLocaleTimeString()}`;
-        const entries=data.Entries.filter(x=>logCategory==='error'?(x.Category==='error'||x.State==='error'):x.Category===logCategory);
-        $('#log-content').innerHTML=entries.map(x=>`
-          <div class="log-line">
-            <strong>${esc(x.Name)}</strong> · <span class="badge">${esc(x.State)}</span> <span class="muted">${esc(new Date(x.Started).toLocaleTimeString())}</span>
-            ${x.Current?`<div class="muted" style="margin-top:3px">${esc(x.Current)}</div>`:''}
-            ${x.Error?`<div style="color:var(--danger);margin-top:3px">${esc(x.Error)}</div>`:''}
-          </div>`).join('')||'<div class="muted" style="padding:20px;text-align:center">暂无记录</div>';
-      }catch{}
+        const qs=new URLSearchParams({category:logCategory,q:logSearchKw,limit:'300'});
+        const data=await api('/admin/logs?'+qs);
+        const list=data.Items||[];
+        currentLogItems=list;
+        $('#log-summary').innerHTML=`<span>总记录数: <strong>${data.Total||list.length}</strong> 条 · 在线播放: <strong>${data.OnlinePlayback||0}</strong> 台</span><span>最后刷新: ${new Date().toLocaleTimeString()}</span>`;
+        const box=$('#log-content');
+        if(!list.length){
+          box.innerHTML='<div class="muted" style="padding:40px 20px;text-align:center">暂无匹配的运行日志，可在客户端发起播放或刷新媒体后查看</div>';
+        }else{
+          box.innerHTML=list.map(it=>{
+            const isErr=it.level==='ERROR'||it.status>=400||Boolean(it.error);
+            const is302=it.level==='302'||it.status===302||it.status===301;
+            const badgeCls=isErr?'err':is302?'ok':'ok';
+            const badgeTxt=is302?'302 直链':isErr?`ERR ${it.status||''}`:`${it.method||'INFO'} ${it.status||''}`;
+            const timeStr=it.time?new Date(it.time).toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'})+' .'+String(new Date(it.time).getMilliseconds()).padStart(3,'0'):'';
+            return `
+              <div class="log-line" style="background:${isErr?'rgba(239,68,68,.08)':is302?'rgba(59,130,246,.08)':'transparent'};padding:10px 12px;border-radius:8px;margin-bottom:6px">
+                <div class="bar" style="margin-bottom:4px;font-size:12px;justify-content:space-between">
+                  <div class="bar">
+                    <span class="badge ${badgeCls}">${badgeTxt}</span>
+                    <strong style="font-size:13px">${esc(it.title||it.path||'系统事件')}</strong>
+                    <span class="muted">${timeStr}</span>
+                    ${it.duration_ms?`<span class="muted">· ${it.duration_ms.toFixed(1)}ms</span>`:''}
+                  </div>
+                  <span class="muted" style="font-size:11px">${esc(it.client||'')} ${it.ip?`(${esc(it.ip)})`:''}</span>
+                </div>
+                ${it.path?`<div style="font-size:12px;color:var(--text);margin-bottom:4px"><code>${esc(it.method||'GET')} ${esc(it.path)}</code></div>`:''}
+                <div style="font-size:12px;overflow-wrap:anywhere;color:${isErr?'#fca5a5':is302?'#93c5fd':'var(--text)'}">${esc(it.message||'')}</div>
+                ${it.target?`<div style="font-size:11px;color:#60a5fa;margin-top:3px;overflow-wrap:anywhere">↳ 302 目标 CDN: <code>${esc(it.target)}</code></div>`:''}
+                ${it.error?`<div style="font-size:11px;color:#f87171;margin-top:4px;overflow-wrap:anywhere;background:rgba(239,68,68,.12);padding:6px 10px;border-radius:6px">错误信息: ${esc(it.error)}</div>`:''}
+                ${it.detail&&it.detail!==it.error?`<div class="muted" style="font-size:11px;margin-top:4px;overflow-wrap:anywhere">详情: ${esc(it.detail)}</div>`:''}
+              </div>`;
+          }).join('');
+        }
+      }catch(e){
+        $('#log-summary').textContent='日志拉取失败: '+e.message;
+      }
       logTimer=setTimeout(refreshLogsNow,2000);
+    }
+    function copyLogs(){
+      if(!currentLogItems.length){toast('当前无日志可复制');return}
+      const text=currentLogItems.map(it=>`[${it.time||''}] [${it.level||'INFO'}] ${it.method||''} ${it.path||''} -> ${it.status||''} | ${it.client||''} (${it.ip||''}) | ${it.message||''} ${it.target?`-> Location: `+it.target:''} ${it.error?`[Err: `+it.error+`]`:''}`).join('\n');
+      navigator.clipboard?.writeText(text).then(()=>toast('已复制全部日志到剪贴板')).catch(()=>toast('复制失败，请手动选取'));
     }
 
     // Init App

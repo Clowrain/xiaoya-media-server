@@ -1,6 +1,7 @@
 package embyserver
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -44,9 +45,11 @@ func (a *App) resolveSTRM(w http.ResponseWriter, r *http.Request, x Item, endpoi
 	}
 	link, err := xiaoyaLinkWithToken(r, x.URL, endpoint, a.alistTokenForPlayback())
 	if err != nil {
+		RecordGlobalLog("ERROR", "playback", "STRM 直链解析失败", fmt.Sprintf("影片: %s (ID: %s) · 原始 STRM: %s", x.Name, x.ID, x.URL), "", err.Error())
 		fail(w, http.StatusBadGateway, "STRM 直链解析失败: "+err.Error())
 		return
 	}
+	RecordGlobalLog("302", "playback", "STRM 直链解析成功", fmt.Sprintf("影片: %s · 目标 CDN: %s", x.Name, link), "", "")
 	strmLinks.Lock()
 	now := time.Now()
 	for k, v := range strmLinks.entries {
