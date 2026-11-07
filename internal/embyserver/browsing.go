@@ -488,6 +488,9 @@ func setQuery(r *http.Request, k, v string) {
 	r.URL.RawQuery = qv.Encode()
 }
 func (a *App) browseRoute(w http.ResponseWriter, r *http.Request, u User, p string) bool {
+	if a.handleUserActionRoutes(w, r, u, p) {
+		return true
+	}
 	l := strings.ToLower(p)
 	if l == "/enhancements" && r.Method == "GET" {
 		respond(w, a.enhancementValues())
@@ -744,16 +747,29 @@ func (a *App) browseFilters(r *http.Request, u User, where string, args []any, l
 		where += " AND id NOT IN (SELECT item FROM userdata WHERE user_id=? AND played=1)"
 		args = append(args, u.ID)
 	}
+	if strings.EqualFold(q(r, "IsFavorite"), "true") || strings.Contains(filters, "isfavorite") {
+		where += " AND id IN (SELECT item FROM user_favorites WHERE user_id=?)"
+		args = append(args, u.ID)
+	}
+	if strings.EqualFold(q(r, "IsFavorite"), "false") {
+		where += " AND id NOT IN (SELECT item FROM user_favorites WHERE user_id=?)"
+		args = append(args, u.ID)
+	}
 	if strings.Contains(strings.ToLower(r.URL.Path), "/shows/nextup") {
+		// 严密约束：必须该电视剧有播放历史（played=1 或 position>0）才允许出现 NextUp
 		where += ` AND id IN (
- SELECT pick.id FROM (SELECT id FROM items WHERE kind='Series' UNION ALL SELECT id FROM libraries) s
+ SELECT pick.id FROM (SELECT id FROM items WHERE kind='Series' AND id IN (
+   SELECT CASE WHEN p.kind='Season' THEN p.parent ELSE ep.parent END
+   FROM items ep LEFT JOIN items p ON p.id=ep.parent JOIN userdata ud ON ud.item=ep.id AND ud.user_id=?
+   WHERE (ud.played=1 OR ud.position>0)
+ )) s
  CROSS JOIN LATERAL (
  SELECT e.id FROM (SELECT s.id UNION ALL SELECT id FROM items WHERE parent=s.id AND kind='Season') parents
  CROSS JOIN LATERAL (SELECT i.id,i.season,i.episode FROM items i WHERE i.parent=parents.id AND i.kind='Episode'
  AND NOT EXISTS (SELECT 1 FROM userdata d WHERE d.user_id=? AND d.item=i.id AND d.played=1)
  ORDER BY i.season,i.episode,i.id LIMIT 1) e
  ORDER BY e.season,e.episode,e.id LIMIT 1) pick)`
-		args = append(args, u.ID)
+		args = append(args, u.ID, u.ID)
 	}
 	if latest && q(r, "IncludeItemTypes") == "" {
 		where += " AND kind IN ('Movie','Series')"

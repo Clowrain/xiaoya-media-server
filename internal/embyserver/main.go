@@ -91,7 +91,9 @@ func (a *App) init() {
  CREATE INDEX IF NOT EXISTS items_kind ON items(kind);
  CREATE INDEX IF NOT EXISTS items_seen ON items(lib,seen);
  CREATE TABLE IF NOT EXISTS plays(user_id TEXT REFERENCES users(id) ON DELETE CASCADE,device TEXT NOT NULL,item TEXT NOT NULL,updated BIGINT NOT NULL,PRIMARY KEY(user_id,device));
- CREATE TABLE IF NOT EXISTS userdata(user_id TEXT REFERENCES users(id) ON DELETE CASCADE,item TEXT REFERENCES items(id) ON DELETE CASCADE,position BIGINT NOT NULL DEFAULT 0,played BIGINT NOT NULL DEFAULT 0,PRIMARY KEY(user_id,item));`)
+ CREATE TABLE IF NOT EXISTS userdata(user_id TEXT REFERENCES users(id) ON DELETE CASCADE,item TEXT REFERENCES items(id) ON DELETE CASCADE,position BIGINT NOT NULL DEFAULT 0,played BIGINT NOT NULL DEFAULT 0,PRIMARY KEY(user_id,item));
+ CREATE TABLE IF NOT EXISTS user_favorites(user_id TEXT REFERENCES users(id) ON DELETE CASCADE,item TEXT REFERENCES items(id) ON DELETE CASCADE,created_at BIGINT NOT NULL DEFAULT 0,PRIMARY KEY(user_id,item));
+ CREATE INDEX IF NOT EXISTS user_favorites_user ON user_favorites(user_id);`)
 	must(e)
 	must(a.extraSchema())
 	must(a.browseSchema())
@@ -1249,8 +1251,12 @@ func (a *App) single(w http.ResponseWriter, r *http.Request, u User, i string) {
 	if !u.API {
 		var pos int64
 		var played bool
-		a.db.QueryRow("SELECT position,played FROM userdata WHERE user_id=? AND item=?", u.ID, i).Scan(&pos, &played)
-		m["UserData"] = M{"PlaybackPositionTicks": pos, "Played": played, "IsFavorite": false}
+		var fav int
+		if a.db != nil {
+			a.db.QueryRow("SELECT position,played FROM userdata WHERE user_id=? AND item=?", u.ID, i).Scan(&pos, &played)
+			a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", u.ID, i).Scan(&fav)
+		}
+		m["UserData"] = M{"PlaybackPositionTicks": pos, "Played": played, "IsFavorite": fav > 0}
 	}
 	respond(w, m)
 	_ = http.NewResponseController(w).Flush()

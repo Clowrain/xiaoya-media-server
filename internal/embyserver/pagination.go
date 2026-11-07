@@ -290,7 +290,7 @@ func (a *App) listDTOs(items []Item, r *http.Request, u User) []M {
 		}
 		out = append(out, m)
 	}
-	if !u.API && len(items) > 0 && !strings.EqualFold(q(r, "EnableUserData"), "false") {
+	if !u.API && len(items) > 0 && !strings.EqualFold(q(r, "EnableUserData"), "false") && a.db != nil {
 		rows, e := a.db.Query("SELECT item,position,played FROM userdata WHERE user_id=? AND item IN ("+strings.TrimRight(strings.Repeat("?,", len(items)), ",")+")", args...)
 		if e == nil {
 			defer rows.Close()
@@ -301,6 +301,22 @@ func (a *App) listDTOs(items []Item, r *http.Request, u User) []M {
 				if rows.Scan(&item, &pos, &played) == nil {
 					if i, ok := positions[item]; ok {
 						out[i]["UserData"] = M{"Played": played, "IsFavorite": false, "PlaybackPositionTicks": pos, "Key": item}
+					}
+				}
+			}
+		}
+		favRows, fe := a.db.Query("SELECT item FROM user_favorites WHERE user_id=? AND item IN ("+strings.TrimRight(strings.Repeat("?,", len(items)), ",")+")", args...)
+		if fe == nil {
+			defer favRows.Close()
+			for favRows.Next() {
+				var item string
+				if favRows.Scan(&item) == nil {
+					if i, ok := positions[item]; ok {
+						if ud, ok := out[i]["UserData"].(M); ok {
+							ud["IsFavorite"] = true
+						} else {
+							out[i]["UserData"] = M{"Played": false, "IsFavorite": true, "PlaybackPositionTicks": 0, "Key": item}
+						}
 					}
 				}
 			}
