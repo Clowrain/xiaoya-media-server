@@ -99,10 +99,12 @@ export interface AListFileItem {
   name: string;
   size: number;
   is_dir: boolean;
-  modified: string;
+  modified?: string;
   sign?: string;
   thumb?: string;
   type?: number;
+  full_path?: string;
+  parent?: string;
 }
 
 export interface AListBrowseResult {

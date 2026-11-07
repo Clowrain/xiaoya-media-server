@@ -33,7 +33,8 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
   const [alistTotal, setAlistTotal] = useState<number>(0);
   const [alistPage, setAlistPage] = useState<number>(1);
   const [alistPerPage] = useState<number>(25);
-  const [alistSearch, setAlistSearch] = useState<string>('');
+  const [searchInput, setSearchInput] = useState<string>('');
+  const [activeSearch, setActiveSearch] = useState<string>('');
   const [alistLoading, setAlistLoading] = useState<boolean>(false);
 
   // Load Overview & Roots
@@ -53,17 +54,17 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
     }
   };
 
-  // Load AList Directory or Search
-  const loadAList = async (targetPath: string = alistPath, page: number = alistPage, keyword: string = alistSearch) => {
+  // Browse AList Directory
+  const loadDirectory = async (targetPath: string = alistPath, page: number = 1) => {
     setAlistLoading(true);
     try {
-      const res = keyword.trim()
-        ? await searchAList(keyword.trim(), targetPath, page, alistPerPage)
-        : await browseAList(targetPath, page, alistPerPage);
-
-      setAlistItems(res.items || []);
-      setAlistTotal(res.total ?? (res.items || []).length);
+      const res = await browseAList(targetPath, page, alistPerPage);
+      const items = res.items || [];
+      setAlistItems(items);
+      const total = typeof res.total === 'number' && res.total > 0 ? res.total : items.length;
+      setAlistTotal(total);
       setAlistPath(res.path || targetPath);
+      setAlistPage(page);
     } catch (err: any) {
       notifyToast(err.message || '读取 AList 目录失败', 'error');
     } finally {
@@ -71,24 +72,59 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
     }
   };
 
-  useEffect(() => {
-    loadSystemInfo();
-  }, []);
+  // Execute AList Search
+  const executeSearch = async (kw: string, targetPath: string = alistPath, page: number = 1) => {
+    setAlistLoading(true);
+    try {
+      const res = await searchAList(kw, targetPath, page, alistPerPage);
+      const items = res.items || [];
+      setAlistItems(items);
+      const total = typeof res.total === 'number' && res.total > 0 ? res.total : items.length;
+      setAlistTotal(total);
+      setAlistPage(page);
+    } catch (err: any) {
+      notifyToast(err.message || '搜索 AList 资源失败', 'error');
+    } finally {
+      setAlistLoading(false);
+    }
+  };
+
+  // Navigate to a directory (always clears active search)
+  const navigateTo = (targetPath: string) => {
+    setActiveSearch('');
+    setSearchInput('');
+    loadDirectory(targetPath, 1);
+  };
 
   useEffect(() => {
-    loadAList(alistPath, alistPage, alistSearch);
-  }, [alistPath, alistPage]);
+    loadSystemInfo();
+    loadDirectory('/', 1);
+  }, []);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setAlistPage(1);
-    loadAList(alistPath, 1, alistSearch);
+    const kw = searchInput.trim();
+    if (!kw) {
+      notifyToast('请输入搜索关键词', 'info');
+      return;
+    }
+    setActiveSearch(kw);
+    executeSearch(kw, alistPath, 1);
   };
 
   const handleClearSearch = () => {
-    setAlistSearch('');
-    setAlistPage(1);
-    loadAList(alistPath, 1, '');
+    setSearchInput('');
+    setActiveSearch('');
+    loadDirectory(alistPath, 1);
+  };
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage < 1 || newPage > totalPages || alistLoading) return;
+    if (activeSearch.trim()) {
+      executeSearch(activeSearch.trim(), alistPath, newPage);
+    } else {
+      loadDirectory(alistPath, newPage);
+    }
   };
 
   // Monitor Root Actions
@@ -140,7 +176,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
 
   // AList Import Resource
   const handleImport = async (item: AListFileItem, track: boolean) => {
-    const itemPath = alistPath === '/' ? `/${item.name}` : `${alistPath}/${item.name}`;
+    const itemPath = item.full_path || (item.parent ? `${item.parent.replace(/\/$/, '')}/${item.name}` : (alistPath === '/' ? `/${item.name}` : `${alistPath}/${item.name}`));
     notifyToast(track ? `正在整剧追更入库「${item.name}」…` : `正在单次入库「${item.name}」…`, 'info');
     try {
       const res = await importResource(itemPath, item.is_dir, track);
@@ -331,40 +367,58 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
               <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-2.5" />
               <input
                 type="text"
-                value={alistSearch}
-                onChange={(e) => setAlistSearch(e.target.value)}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
                 placeholder="在当前路径下检索..."
                 className="pl-8 pr-3 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 w-52 sm:w-64"
               />
             </div>
             <button
               type="submit"
-              className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium"
+              className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium cursor-pointer"
             >
               检索
             </button>
-            {alistSearch && (
+            {(activeSearch || searchInput) && (
               <button
                 type="button"
                 onClick={handleClearSearch}
                 className="px-2 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs cursor-pointer"
               >
-                清空
+                重置
               </button>
             )}
           </form>
         </div>
 
+        {/* Active Search Banner */}
+        {activeSearch && (
+          <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-300">
+            <div className="flex items-center gap-2">
+              <Search className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>
+                正在检索关键词：<span className="font-bold text-white font-mono">{activeSearch}</span>
+                {alistPath !== '/' && <span>（目录: <span className="font-mono text-zinc-300">{alistPath}</span>）</span>}
+                ，共找到 <span className="font-bold text-white">{alistTotal}</span> 项结果
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleClearSearch}
+              className="text-xs text-zinc-400 hover:text-white underline cursor-pointer"
+            >
+              退出搜索并返回目录
+            </button>
+          </div>
+        )}
+
         {/* Path Breadcrumbs */}
         <div className="flex items-center gap-1.5 p-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs overflow-x-auto">
           <button
             type="button"
-            onClick={() => {
-              setAlistPath('/');
-              setAlistPage(1);
-            }}
+            onClick={() => navigateTo('/')}
             className={`px-2 py-0.5 rounded font-mono cursor-pointer ${
-              alistPath === '/' ? 'bg-emerald-950 text-emerald-400 font-bold' : 'text-zinc-400 hover:text-white'
+              alistPath === '/' && !activeSearch ? 'bg-emerald-950 text-emerald-400 font-bold' : 'text-zinc-400 hover:text-white'
             }`}
           >
             根目录 /
@@ -377,12 +431,9 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                 <ChevronRight className="w-3.5 h-3.5 text-zinc-600 shrink-0" />
                 <button
                   type="button"
-                  onClick={() => {
-                    setAlistPath(currentSubPath);
-                    setAlistPage(1);
-                  }}
+                  onClick={() => navigateTo(currentSubPath)}
                   className={`px-2 py-0.5 rounded font-mono shrink-0 cursor-pointer ${
-                    isLast
+                    isLast && !activeSearch
                       ? 'bg-emerald-950 text-emerald-400 font-bold'
                       : 'text-zinc-400 hover:text-white'
                   }`}
@@ -410,7 +461,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                 <tr>
                   <td colSpan={4} className="py-12 text-center text-zinc-500">
                     <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-emerald-500" />
-                    正在读取 AList 目录...
+                    正在读取 AList 资源...
                   </td>
                 </tr>
               ) : alistList.length === 0 ? (
@@ -422,7 +473,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
               ) : (
                 alistList.map((item) => (
                   <tr
-                    key={item.name}
+                    key={item.full_path || (item.parent ? `${item.parent}/${item.name}` : item.name)}
                     className="hover:bg-zinc-900/50 transition group"
                   >
                     <td className="px-4 py-2.5 font-medium text-zinc-200">
@@ -436,16 +487,22 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                           <button
                             type="button"
                             onClick={() => {
-                              const next = alistPath === '/' ? `/${item.name}` : `${alistPath}/${item.name}`;
-                              setAlistPath(next);
-                              setAlistPage(1);
+                              const target = item.full_path || (item.parent ? `${item.parent.replace(/\/$/, '')}/${item.name}` : (alistPath === '/' ? `/${item.name}` : `${alistPath}/${item.name}`));
+                              navigateTo(target);
                             }}
                             className="text-left font-mono hover:text-emerald-400 transition truncate max-w-md cursor-pointer"
                           >
                             {item.name}
                           </button>
                         ) : (
-                          <span className="font-mono text-zinc-300 truncate max-w-md">{item.name}</span>
+                          <div className="flex flex-col">
+                            <span className="font-mono text-zinc-300 truncate max-w-md">{item.name}</span>
+                            {activeSearch && item.parent && (
+                              <span className="text-[10px] text-zinc-500 font-mono truncate max-w-md">
+                                路径: {item.parent}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
                     </td>
@@ -496,7 +553,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setAlistPage((p) => Math.max(1, p - 1))}
+              onClick={() => handlePageChange(alistPage - 1)}
               disabled={alistPage <= 1 || alistLoading}
               className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-40 transition cursor-pointer"
             >
@@ -504,7 +561,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
             </button>
             <button
               type="button"
-              onClick={() => setAlistPage((p) => Math.min(totalPages, p + 1))}
+              onClick={() => handlePageChange(alistPage + 1)}
               disabled={alistPage >= totalPages || alistLoading}
               className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-40 transition cursor-pointer"
             >

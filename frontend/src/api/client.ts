@@ -269,7 +269,15 @@ export async function browseAList(path: string, page: number = 1, perPage: numbe
 }
 
 export async function searchAList(keyword: string, path: string = '/', page: number = 1, perPage: number = 25): Promise<AListBrowseResult> {
-  const qs = new URLSearchParams({ keyword, path, page: String(page), per_page: String(perPage) });
+  const qs = new URLSearchParams({
+    keywords: keyword,
+    keyword: keyword,
+    q: keyword,
+    parent: path,
+    path: path,
+    page: String(page),
+    per_page: String(perPage),
+  });
   return request(`/api/alist/search?${qs.toString()}`);
 }
 

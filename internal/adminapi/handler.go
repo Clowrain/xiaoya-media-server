@@ -401,13 +401,19 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 		qv := r.URL.Query()
 		kw := strings.TrimSpace(qv.Get("keywords"))
 		if kw == "" {
+			kw = strings.TrimSpace(qv.Get("keyword"))
+		}
+		if kw == "" {
 			kw = strings.TrimSpace(qv.Get("q"))
 		}
 		if kw == "" {
 			writeErr(w, http.StatusBadRequest, "请输入搜索关键词 keywords")
 			return true
 		}
-		parent := qv.Get("parent")
+		parent := strings.TrimSpace(qv.Get("parent"))
+		if parent == "" {
+			parent = strings.TrimSpace(qv.Get("path"))
+		}
 		if parent == "" {
 			parent = "/"
 		}
@@ -419,7 +425,7 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			writeErr(w, http.StatusBadGateway, err.Error())
 			return true
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
+		writeJSON(w, http.StatusOK, map[string]any{"path": parent, "items": items, "total": total})
 		return true
 
 	case p == "/api/tasks":

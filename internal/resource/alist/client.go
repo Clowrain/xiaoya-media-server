@@ -230,7 +230,26 @@ func (c *Client) List(ctx context.Context, dirPath string, page, perPage int, re
 	for i := range data.Content {
 		data.Content[i].FullPath = joinAListPath(normDir, data.Content[i].Name)
 	}
-	return data.Content, data.Total, nil
+	total := data.Total
+	if total < len(data.Content) {
+		total = len(data.Content)
+	}
+	// If AList driver did not paginate on server-side and returned all items, slice in-memory
+	if len(data.Content) > perPage {
+		start := (page - 1) * perPage
+		if start < 0 {
+			start = 0
+		}
+		if start >= len(data.Content) {
+			return []Entry{}, total, nil
+		}
+		end := start + perPage
+		if end > len(data.Content) {
+			end = len(data.Content)
+		}
+		return data.Content[start:end], total, nil
+	}
+	return data.Content, total, nil
 }
 
 // Search searches AList resources by keyword via POST /api/fs/search.
@@ -264,7 +283,26 @@ func (c *Client) Search(ctx context.Context, parentPath, keywords string, scope,
 	for i := range data.Content {
 		data.Content[i].FullPath = joinAListPath(data.Content[i].Parent, data.Content[i].Name)
 	}
-	return data.Content, data.Total, nil
+	total := data.Total
+	if total < len(data.Content) {
+		total = len(data.Content)
+	}
+	// If AList driver did not paginate on server-side and returned all items, slice in-memory
+	if len(data.Content) > perPage {
+		start := (page - 1) * perPage
+		if start < 0 {
+			start = 0
+		}
+		if start >= len(data.Content) {
+			return []SearchItem{}, total, nil
+		}
+		end := start + perPage
+		if end > len(data.Content) {
+			end = len(data.Content)
+		}
+		return data.Content[start:end], total, nil
+	}
+	return data.Content, total, nil
 }
 
 // Get fetches single resource metadata and sign/raw_url via POST /api/fs/get.
