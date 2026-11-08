@@ -673,14 +673,38 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 			RunTimeTicks  clientTicks
 			MediaSourceId string
 		}
-		if !body(w, r, &b) {
-			return
+		// 官方 Emby 允许把播放参数放在查询串里；空/坏报文不直接拒绝，回退到查询参数。
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&b)
+		if b.ItemId == "" {
+			b.ItemId = q(r, "ItemId")
+		}
+		if b.MediaSourceId == "" {
+			b.MediaSourceId = q(r, "MediaSourceId")
 		}
 		if b.ItemId == "" {
 			b.ItemId = b.MediaSourceId
 		}
+		if b.PositionTicks == nil {
+			if v := q(r, "PositionTicks"); v != "" {
+				if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+					t := clientTicks(n)
+					b.PositionTicks = &t
+				}
+			}
+		}
+		if b.RunTimeTicks == 0 {
+			if v := q(r, "RunTimeTicks"); v != "" {
+				if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+					b.RunTimeTicks = clientTicks(n)
+				}
+			}
+		}
 		if b.ItemId == "" {
 			a.db.QueryRow("SELECT item FROM plays WHERE user_id=? AND device=?", u.ID, u.Device).Scan(&b.ItemId)
+		}
+		if b.ItemId == "" && b.PositionTicks == nil && l != "/sessions/playing/stopped" {
+			fail(w, 400, "缺少播放参数")
+			return
 		}
 		if l == "/sessions/playing/stopped" {
 			a.db.Exec("DELETE FROM plays WHERE user_id=? AND device=?", u.ID, u.Device)
@@ -1549,8 +1573,12 @@ func (a *App) reserve(u User, item string) error {
 }
 func (a *App) playback(w http.ResponseWriter, r *http.Request, u User, i string) {
 	x, e := a.item(i)
-	if e != nil || x.URL == "" {
-		fail(w, 404, "无可播放源")
+	if e != nil {
+		fail(w, 404, "媒体不存在")
+		return
+	}
+	if x.URL == "" {
+		respond(w, M{"MediaSources": []M{}, "PlaySessionId": id(), "ErrorCode": "NoCompatibleStreams"})
 		return
 	}
 	if !u.API {
@@ -1570,6 +1598,15 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request, u User, i string) {
 	if e != nil || x.URL == "" {
 		fail(w, 404, "无可播放源")
 		return
+	}
+	// 客户端可能在 MediaSourceId 中指定同一版本的另一条目；无效值静默回退到路径条目。
+	if ms := q(r, "MediaSourceId"); ms != "" && ms != x.ID {
+		for _, v := range a.versions(x) {
+			if v.ID == ms && v.URL != "" {
+				x = v
+				break
+			}
+		}
 	}
 	if !u.API {
 		if e = a.reserve(u, i); e != nil {

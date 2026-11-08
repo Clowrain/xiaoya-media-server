@@ -3,6 +3,7 @@ package embyserver
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"os/exec"
 	"regexp"
@@ -89,10 +90,19 @@ func (a *App) loginSuccess(r *http.Request, u User, d string) {
 
 type clientTicks int64
 
+// UnmarshalJSON tolerates JSON null, empty values, quoted/bare integers and
+// fractional numbers; anything unparsable becomes 0 instead of failing the request.
 func (t *clientTicks) UnmarshalJSON(b []byte) error {
-	n, e := strconv.ParseInt(strings.Trim(string(b), "\""), 10, 64)
-	if e == nil {
-		*t = clientTicks(n)
+	s := strings.Trim(strings.TrimSpace(string(b)), "\"")
+	if s == "" || s == "null" {
+		return nil
 	}
-	return e
+	if n, e := strconv.ParseInt(s, 10, 64); e == nil {
+		*t = clientTicks(n)
+		return nil
+	}
+	if f, e := strconv.ParseFloat(s, 64); e == nil {
+		*t = clientTicks(math.Trunc(f))
+	}
+	return nil
 }

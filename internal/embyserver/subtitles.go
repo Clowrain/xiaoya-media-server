@@ -331,9 +331,9 @@ func subtitleContentType(ext string) string {
 	case "vtt", "webvtt":
 		return "text/vtt; charset=utf-8"
 	case "srt":
-		return "application/x-subrip; charset=utf-8"
+		return "application/x-subrip"
 	case "ass", "ssa":
-		return "text/x-ssa; charset=utf-8"
+		return "text/x-ssa"
 	default:
 		return "application/octet-stream"
 	}
@@ -404,17 +404,14 @@ func (a *App) serveVideoSubtitles(w http.ResponseWriter, r *http.Request, parts 
 			}
 		}
 	}
-	var chosen *externalSubtitle
+	// 外挂字幕的 Index 恒为 embeddedCount+i（与 DeliveryUrl 一致）；
+	// 索引小于 embeddedCount 会被内嵌音轨占用，直接拒绝，避免错发字幕。
 	extIdx := reqIndex - embeddedCount
-	if extIdx >= 0 && extIdx < len(subs) {
-		chosen = &subs[extIdx]
-	} else if reqIndex >= 0 && reqIndex < len(subs) {
-		chosen = &subs[reqIndex]
-	}
-	if chosen == nil {
+	if extIdx < 0 || extIdx >= len(subs) {
 		fail(w, http.StatusNotFound, "字幕索引超出范围")
 		return
 	}
+	chosen := &subs[extIdx]
 
 	real, err := filepath.EvalSymlinks(chosen.Path)
 	if err != nil || !allowedMediaPath(real) {
