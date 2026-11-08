@@ -259,11 +259,16 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
             <Database className="w-5 h-5" />
           </div>
           <div>
-            <div className="text-xs text-zinc-400">缓存 DB 体积</div>
+            <div className="text-xs text-zinc-400">缓存 DB 与清单</div>
             <div className="text-sm font-semibold font-mono text-zinc-200">
               {cacheSizeMb} MB
             </div>
-            <div className="text-[10px] text-zinc-500">SQLite 只读加速</div>
+            <div className="text-[10px] text-zinc-500 flex items-center gap-1 mt-0.5">
+              <span>SQLite 只读加速</span>
+              {overview?.manifest_available && (
+                <span className="text-emerald-400 font-medium font-mono">• strm.txt 就绪</span>
+              )}
+            </div>
           </div>
         </div>
 

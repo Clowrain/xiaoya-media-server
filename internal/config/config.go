@@ -38,8 +38,9 @@ type DatabaseConfig struct {
 }
 
 type XiaoyaConfig struct {
-	SQLitePath string `yaml:"sqlite_path"`
-	ReadOnly   bool   `yaml:"read_only"`
+	SQLitePath   string `yaml:"sqlite_path"`
+	StrmTextPath string `yaml:"strm_text_path"`
+	ReadOnly     bool   `yaml:"read_only"`
 }
 
 type MonitorConfig struct {
@@ -178,6 +179,9 @@ func (c *Config) applyEnv() {
 	}
 	if v := strings.TrimSpace(os.Getenv("XIAOYA_SQLITE_PATH")); v != "" {
 		c.Xiaoya.SQLitePath = v
+	}
+	if v := strings.TrimSpace(os.Getenv("XIAOYA_STRM_TEXT_PATH")); v != "" {
+		c.Xiaoya.StrmTextPath = v
 	}
 	if v := strings.TrimSpace(os.Getenv("MONITOR_ENABLED")); v != "" {
 		c.Monitor.Enabled = strings.EqualFold(v, "true") || v == "1"

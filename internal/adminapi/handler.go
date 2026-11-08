@@ -572,6 +572,36 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 		})
 		return true
 
+	case p == "/api/xiaoya/manifest/search":
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "GET required")
+			return true
+		}
+		if h.pipeline == nil || h.pipeline.ManifestScanner() == nil || !h.pipeline.ManifestScanner().Available() {
+			writeErr(w, http.StatusNotFound, "strm.txt 清单文件未配置或不可用")
+			return true
+		}
+		qv := r.URL.Query()
+		kw := qv.Get("q")
+		if kw == "" {
+			kw = qv.Get("keywords")
+		}
+		limit, _ := strconv.Atoi(qv.Get("limit"))
+		if limit <= 0 || limit > 1000 {
+			limit = 100
+		}
+		entries, err := h.pipeline.ManifestScanner().FindMatching(ctx, kw, limit)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return true
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"query": kw,
+			"items": entries,
+			"total": len(entries),
+		})
+		return true
+
 	case p == "/api/alist/browse":
 		if r.Method != http.MethodGet {
 			writeErr(w, http.StatusMethodNotAllowed, "GET required")
@@ -782,6 +812,13 @@ func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWrite
 		writeErr(w, 500, countErr.Error())
 		return
 	}
+	manifestAvail := false
+	manifestPath := ""
+	if h.pipeline != nil && h.pipeline.ManifestScanner() != nil {
+		manifestAvail = h.pipeline.ManifestScanner().Available()
+		manifestPath = h.pipeline.ManifestScanner().FilePath()
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":              "ok",
 		"service":             "xiaoya-media-server",
@@ -789,6 +826,8 @@ func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWrite
 		"git_commit":          version.GitCommit,
 		"build_number":        version.GitCommit,
 		"build_time":          version.BuildTime,
+		"manifest_available":  manifestAvail,
+		"manifest_path":       manifestPath,
 		"nfo_policy":          "prefer",
 		"deletion_policy":     "keep",
 		"sqlite_path":         sqlitePath,

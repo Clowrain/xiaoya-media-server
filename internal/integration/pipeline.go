@@ -32,6 +32,7 @@ type Pipeline struct {
 
 	readerMu sync.Mutex
 	reader   *xiaoya.Reader
+	manifest *xiaoya.ManifestScanner
 
 	dirtyDirsMu sync.Mutex
 	dirtyDirs   map[string]bool
@@ -65,6 +66,8 @@ func NewPipeline(ctx context.Context, cfg *config.Config, app *embyserver.App, s
 	})
 
 	_ = p.EnsureSQLiteReader(ctx)
+	manifestPath := xiaoya.AutoDetectStrmText(cfg.Xiaoya.StrmTextPath, cfg.Xiaoya.SQLitePath)
+	p.manifest = xiaoya.NewManifestScanner(manifestPath)
 	p.discovery = discovery.NewService(store, p.reader, p.strmEng)
 
 	if cfg.Monitor.Enabled && len(cfg.Monitor.Roots) > 0 {
@@ -149,6 +152,10 @@ func (p *Pipeline) Discovery() *discovery.Service {
 	return p.discovery
 }
 
+func (p *Pipeline) ManifestScanner() *xiaoya.ManifestScanner {
+	return p.manifest
+}
+
 func (p *Pipeline) STRMEngine() *strm.Engine {
 	return p.strmEng
 }
@@ -202,10 +209,33 @@ func (p *Pipeline) ImportSQLitePath(ctx context.Context, rootPath, libraryID, ou
 		return err
 	})
 	if err != nil {
+		// Fallback to strm.txt manifest scanner if available
+		if p.manifest != nil && p.manifest.Available() {
+			cleanName := filepath.Base(strings.TrimRight(rootPath, "/"))
+			entries, mErr := p.manifest.FindMatching(ctx, cleanName, 2000)
+			if mErr == nil && len(entries) > 0 {
+				nodes = append(nodes, discovery.ManualNode{
+					Path: rootPath, RelPath: strings.TrimPrefix(rootPath, "/"), Name: cleanName,
+					IsDir: true,
+				})
+				for _, e := range entries {
+					nodes = append(nodes, discovery.ManualNode{
+						Path:    "/" + e.RelPath,
+						RelPath: e.RelPath,
+						Name:    filepath.Base(e.RelPath),
+						IsDir:   false,
+						Content: e.PlayURL,
+					})
+				}
+				err = nil
+			}
+		}
+	}
+	if err != nil {
 		return discovery.SyncBatch{}, err
 	}
 	if len(nodes) == 0 {
-		return discovery.SyncBatch{}, errors.New("SQLite 路径没有可入库的节点")
+		return discovery.SyncBatch{}, errors.New("小雅 SQLite 与 strm.txt 清单中均没有找到可入库的节点")
 	}
 	mode := discovery.ManageManualSeriesDir
 	if !nodes[0].IsDir {
