@@ -59,6 +59,7 @@ func main() {
 			Password: cfg.AList.Password,
 			Token:    cfg.AList.Token,
 		})
+		app.SetAListPlayback(alistCli.BaseURL(), alistCli.PlaybackFile)
 
 		imp := alist.NewImporter(alistCli, pipe.Discovery(), pipe.STRMEngine(), func(paths []string) {
 			pipe.FlushScopedLibraryScans(paths...)

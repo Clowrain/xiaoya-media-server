@@ -51,13 +51,13 @@ func TestSTRMMediaInfoPreservesRawContentAndKeepsPlaybackGateway(t *testing.T) {
 		t.Errorf("DirectStreamUrl 未正确指向本服务流网关: got %v", directURL)
 	}
 
-	// 2. 验证 versionSources（PlaybackInfo 接口底层调用的核心函数）
+	// 2. 验证 versionSources（PlaybackInfo 接口底层调用的核心函数，必须走服务端流网关确保 SenPlayer / Infuse 正常出流）
 	vSources := a.versionSources(item, req, u, false)
 	if len(vSources) == 0 {
 		t.Fatalf("versionSources 返回为空")
 	}
-	if vSources[0]["Path"] != rawSTRM {
-		t.Errorf("versionSources MediaSources[0].Path 未保留原始 STRM 内容: got %v, want %v", vSources[0]["Path"], rawSTRM)
+	if !strings.Contains(vSources[0]["Path"].(string), "/Videos/"+item.ID+"/stream.") {
+		t.Errorf("versionSources 播放路径未正确指向本服务流网关: got %v", vSources[0]["Path"])
 	}
 
 	// 3. 验证本地文件依然使用服务网关流地址，并隐藏本地物理存储路径
