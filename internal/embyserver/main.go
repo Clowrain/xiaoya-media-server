@@ -110,6 +110,18 @@ func (a *App) init() {
 		return
 	}
 	a.db.Exec("UPDATE libraries SET status='interrupted',error='服务重启，请重新扫描' WHERE status='scanning'")
+	var libCount int
+	if a.db.QueryRow("SELECT count(*) FROM libraries").Scan(&libCount) == nil && libCount == 0 {
+		strmRoot := os.Getenv("MEDIA_ROOT_PATH")
+		if strmRoot == "" {
+			strmRoot = "/media/strm"
+		}
+		libID := id()
+		if _, err := a.db.Exec("INSERT INTO libraries(id,name,path,kind,status) VALUES(?,?,?,?,'idle') ON CONFLICT DO NOTHING", libID, "小雅影视", strmRoot, "tvshows"); err == nil {
+			rawPaths, _ := json.Marshal([]string{strmRoot})
+			_, _ = a.db.Exec("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT (k) DO UPDATE SET v=excluded.v", "library-paths:"+libID, string(rawPaths))
+		}
+	}
 	var n int
 	must(a.db.QueryRow("SELECT count(*) FROM users").Scan(&n))
 	if n == 0 {

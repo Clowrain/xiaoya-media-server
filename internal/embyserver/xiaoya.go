@@ -151,6 +151,9 @@ func tryXiaoyaDirectGet(r *http.Request, target *url.URL) (string, bool, error) 
 		}
 		req.Header.Set("User-Agent", userAgent)
 		req.Header.Set("X-Alist-OriUA", userAgent)
+		if token := os.Getenv("ALIST_TOKEN"); token != "" {
+			req.Header.Set("Authorization", token)
+		}
 		res, err := xiaoyaClient.Do(req)
 		if err != nil {
 			return "", false, fmt.Errorf("resolver request failed: %w", err)

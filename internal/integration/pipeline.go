@@ -469,9 +469,10 @@ func (p *Pipeline) SyncRootsFromManifest(ctx context.Context, roots []discovery.
 		}
 
 		snapshot := discovery.ManualSnapshot{
-			RootPath: prefix,
-			Mode:     discovery.ManageManualSeriesDir,
-			Nodes:    nodes,
+			RootPath:   prefix,
+			OriginType: discovery.OriginXiaoyaSQLite,
+			Mode:       discovery.ManageManualSeriesDir,
+			Nodes:      nodes,
 		}
 		batch, _, err := p.discovery.ApplyManualSnapshot(ctx, snapshot)
 		if err != nil {
@@ -479,7 +480,7 @@ func (p *Pipeline) SyncRootsFromManifest(ctx context.Context, roots []discovery.
 			continue
 		}
 		now := time.Now().Unix()
-		_ = p.store.UpdateMonitorRootStatus(ctx, r.ID, now, batch.ID, batch.Status, "", int64(len(entries)))
+		_ = p.store.UpdateMonitorRootStatus(ctx, r.ID, 0, batch.ID, batch.Status, "", now)
 		result[r.ID] = p.finishSync(batch)
 	}
 
