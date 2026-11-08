@@ -289,13 +289,14 @@ export async function triggerSync(id: string, full: boolean) {
   return request<AdminJob>(full ? '/api/sync/full?async=true' : '/api/sync/incremental?async=true', 'POST', { root_id: id });
 }
 
-export async function importResource(path: string, isDir: boolean, trackUpdates: boolean, libraryID: string, outputDir: string) {
+export async function importResource(path: string, isDir: boolean, trackUpdates: boolean, libraryID: string, outputDir: string, source: string = 'manifest') {
   return request<AdminJob>('/api/resources/import?async=true', 'POST', {
     path,
     is_dir: isDir,
     track_updates: trackUpdates,
     library_id: libraryID,
     output_dir: outputDir,
+    source,
   });
 }
 

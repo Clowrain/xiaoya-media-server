@@ -28,7 +28,6 @@ services:
       MEDIA_ROOTS: /media
       STRM_OUTPUT_ROOT: /media/strm
       XIAOYA_STRM_PATH: ${XIAOYA_STRM_PATH:-/xiaoya-db/strm.txt}
-      XIAOYA_SQLITE_PATH: /xiaoya-db/${XIAOYA_SQLITE_FILENAME:-data/strm_internal.db}
       # 监控与自动化
       MONITOR_ENABLED: ${MONITOR_ENABLED:-true}
       MONITOR_INTERVAL: ${MONITOR_INTERVAL:-10m}

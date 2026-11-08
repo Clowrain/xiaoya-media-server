@@ -18,6 +18,7 @@ type ImportRequest struct {
 	TrackUpdates bool   `json:"track_updates"`
 	LibraryID    string `json:"library_id"`
 	OutputDir    string `json:"output_dir"`
+	Source       string `json:"source,omitempty"`
 }
 
 type ImportSummary struct {

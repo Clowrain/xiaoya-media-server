@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -65,10 +64,9 @@ func NewPipeline(ctx context.Context, cfg *config.Config, app *embyserver.App, s
 		},
 	})
 
-	_ = p.EnsureSQLiteReader(ctx)
 	manifestPath := xiaoya.AutoDetectStrmText(cfg.Xiaoya.ResolveStrmTextPath(), cfg.Xiaoya.SQLitePath)
 	p.manifest = xiaoya.NewManifestScanner(manifestPath)
-	p.discovery = discovery.NewService(store, p.reader, p.strmEng)
+	p.discovery = discovery.NewService(store, nil, p.strmEng)
 
 	if cfg.Monitor.Enabled && len(cfg.Monitor.Roots) > 0 {
 		if _, err := p.discovery.RegisterMonitorRoots(ctx, cfg.Monitor.Roots, cfg.Monitor.Interval); err != nil {
@@ -106,45 +104,8 @@ func (p *Pipeline) FlushScopedLibraryScans(files ...string) []string {
 	return dirs
 }
 
-// EnsureSQLiteReader opens or verifies the read-only Xiaoya SQLite connection lazily so startup
-// succeeds even before external container volumes are populated.
+// EnsureSQLiteReader is a no-op kept for backwards compatibility since Xiaoya SQLite has been superseded by strm.txt manifest.
 func (p *Pipeline) EnsureSQLiteReader(ctx context.Context) error {
-	p.readerMu.Lock()
-	defer p.readerMu.Unlock()
-
-	if p.reader != nil {
-		if err := p.reader.VerifyReadOnly(ctx); err == nil {
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if p.discovery != nil {
-			p.discovery.SetReader(nil)
-		}
-		_ = p.reader.Close()
-		p.reader = nil
-	}
-
-	dbPath := strings.TrimSpace(p.cfg.Xiaoya.SQLitePath)
-	if dbPath == "" {
-		return os.ErrNotExist
-	}
-	if _, err := os.Stat(dbPath); err != nil {
-		return err
-	}
-	r, err := xiaoya.OpenReader(dbPath)
-	if err != nil {
-		return err
-	}
-	if err := r.VerifyReadOnly(ctx); err != nil {
-		_ = r.Close()
-		return err
-	}
-	p.reader = r
-	if p.discovery != nil {
-		p.discovery.SetReader(r)
-	}
 	return nil
 }
 
@@ -160,17 +121,11 @@ func (p *Pipeline) STRMEngine() *strm.Engine {
 	return p.strmEng
 }
 
-// ImportSQLitePath resolves an administrator-selected path against Xiaoya's
-// read-only SQLite snapshot and imports that exact subtree.  It deliberately
-// does not call AList: the browse/search UI may use AList for discovery, but an
-// import is accepted only when the same path exists in the authoritative
-// SQLite index.
-func (p *Pipeline) ImportSQLitePath(ctx context.Context, rootPath, libraryID, outputDir string, track *bool) (discovery.SyncBatch, error) {
-	if err := p.EnsureSQLiteReader(ctx); err != nil {
-		return discovery.SyncBatch{}, fmt.Errorf("小雅 SQLite 不可用: %w", err)
-	}
-	if p.reader == nil {
-		return discovery.SyncBatch{}, errors.New("小雅 SQLite 未配置")
+// ImportManifestPath resolves an administrator-selected path or keyword against Xiaoya's
+// authoritative strm.txt manifest and imports that subtree or matching works.
+func (p *Pipeline) ImportManifestPath(ctx context.Context, rootPath, libraryID, outputDir string, track *bool) (discovery.SyncBatch, error) {
+	if p.manifest == nil || !p.manifest.Available() {
+		return discovery.SyncBatch{}, errors.New("strm.txt 权威清单未找到，请检查宿主机小雅主目录是否正确挂载")
 	}
 	if p.app != nil {
 		var err error
@@ -179,70 +134,50 @@ func (p *Pipeline) ImportSQLitePath(ctx context.Context, rootPath, libraryID, ou
 			return discovery.SyncBatch{}, err
 		}
 	}
-	rootPath, _, err := xiaoya.NormalizeMonitorPath(rootPath)
+	normPath, _, err := xiaoya.NormalizeMonitorPath(rootPath)
 	if err != nil {
 		return discovery.SyncBatch{}, err
+	}
+	cleanName := filepath.Base(strings.TrimRight(normPath, "/"))
+
+	// 1. Try matching by exact prefix first, then fallback to keyword match
+	var entries []xiaoya.ManifestEntry
+	_, _ = p.manifest.StreamPrefix(ctx, normPath, func(entry xiaoya.ManifestEntry) error {
+		entries = append(entries, entry)
+		return nil
+	})
+	if len(entries) == 0 {
+		// Fallback to searching by clean name (e.g. "走马上任")
+		entries, _ = p.manifest.FindMatching(ctx, cleanName, 2000)
+	}
+
+	if len(entries) == 0 {
+		return discovery.SyncBatch{}, fmt.Errorf("在 strm.txt 清单中未找到与 '%s' 匹配的条目", rootPath)
 	}
 
 	var nodes []discovery.ManualNode
-	err = p.reader.WithSnapshot(ctx, func(snapshot *xiaoya.Reader) error {
-		root, err := snapshot.ResolveAnyPath(ctx, rootPath)
-		if err != nil {
-			return err
-		}
-		nodes = append(nodes, discovery.ManualNode{
-			Path: root.FullPath, RelPath: strings.TrimPrefix(root.FullPath, "/"), Name: root.Name,
-			IsDir: true, SourceNodeID: root.ID, SourceParentID: root.ParentID,
-		})
-		if !root.IsDir {
-			return nil
-		}
-		_, err = snapshot.WalkSubtreeBatched(ctx, root, 1000, func(batch []xiaoya.Node) error {
-			for _, n := range batch {
-				nodes = append(nodes, discovery.ManualNode{
-					Path: n.FullPath, RelPath: n.RelPath, Name: n.Name, IsDir: n.IsDir, Content: n.Content,
-					SourceNodeID: n.ID, SourceParentID: n.ParentID,
-				})
-			}
-			return nil
-		})
-		return err
+	nodes = append(nodes, discovery.ManualNode{
+		Path:    normPath,
+		RelPath: strings.TrimPrefix(normPath, "/"),
+		Name:    cleanName,
+		IsDir:   true,
 	})
-	if err != nil {
-		// Fallback to strm.txt manifest scanner if available
-		if p.manifest != nil && p.manifest.Available() {
-			cleanName := filepath.Base(strings.TrimRight(rootPath, "/"))
-			entries, mErr := p.manifest.FindMatching(ctx, cleanName, 2000)
-			if mErr == nil && len(entries) > 0 {
-				nodes = append(nodes, discovery.ManualNode{
-					Path: rootPath, RelPath: strings.TrimPrefix(rootPath, "/"), Name: cleanName,
-					IsDir: true,
-				})
-				for _, e := range entries {
-					nodes = append(nodes, discovery.ManualNode{
-						Path:    "/" + e.RelPath,
-						RelPath: e.RelPath,
-						Name:    filepath.Base(e.RelPath),
-						IsDir:   false,
-						Content: e.PlayURL,
-					})
-				}
-				err = nil
-			}
-		}
+	for _, e := range entries {
+		nodes = append(nodes, discovery.ManualNode{
+			Path:    "/" + e.RelPath,
+			RelPath: e.RelPath,
+			Name:    filepath.Base(e.RelPath),
+			IsDir:   false,
+			Content: e.PlayURL,
+		})
 	}
-	if err != nil {
-		return discovery.SyncBatch{}, err
-	}
-	if len(nodes) == 0 {
-		return discovery.SyncBatch{}, errors.New("小雅 SQLite 与 strm.txt 清单中均没有找到可入库的节点")
-	}
+
 	mode := discovery.ManageManualSeriesDir
-	if !nodes[0].IsDir {
+	if len(nodes) == 2 && !nodes[1].IsDir {
 		mode = discovery.ManageManualFile
 	}
 	batch, _, err := p.discovery.ApplyManualSnapshot(ctx, discovery.ManualSnapshot{
-		RootPath: rootPath, Mode: mode, LibraryID: libraryID,
+		RootPath: normPath, Mode: mode, LibraryID: libraryID,
 		OutputDir: outputDir, Track: track, OriginType: discovery.OriginXiaoyaSQLite, Nodes: nodes,
 	})
 	if err != nil {
@@ -250,6 +185,11 @@ func (p *Pipeline) ImportSQLitePath(ctx context.Context, rootPath, libraryID, ou
 	}
 	p.FlushScopedLibraryScans()
 	return batch, nil
+}
+
+// ImportSQLitePath provides backwards compatibility by delegating directly to ImportManifestPath.
+func (p *Pipeline) ImportSQLitePath(ctx context.Context, rootPath, libraryID, outputDir string, track *bool) (discovery.SyncBatch, error) {
+	return p.ImportManifestPath(ctx, rootPath, libraryID, outputDir, track)
 }
 
 // RunMetadataMatchJobs performs bounded TMDB matching for deterministic V2
@@ -544,43 +484,25 @@ func (p *Pipeline) SyncRootsFromManifest(ctx context.Context, roots []discovery.
 }
 
 func (p *Pipeline) RunFullSyncRoot(ctx context.Context, rootID string) (discovery.SyncBatch, error) {
-	if p.manifest != nil && p.manifest.Available() {
-		root, err := p.store.GetMonitorRoot(ctx, rootID)
-		if err != nil {
-			return discovery.SyncBatch{}, err
-		}
-		batches, sErr := p.SyncRootsFromManifest(ctx, []discovery.MonitorRoot{root})
-		if sErr != nil {
-			return discovery.SyncBatch{}, sErr
-		}
-		if b, ok := batches[rootID]; ok {
-			return b, nil
-		}
-		return discovery.SyncBatch{RootID: rootID, Status: discovery.BatchSuccess}, nil
+	if p.manifest == nil || !p.manifest.Available() {
+		return discovery.SyncBatch{}, errors.New("strm.txt 权威清单未就绪，请检查宿主机小雅主目录挂载")
 	}
-	_ = p.EnsureSQLiteReader(ctx)
-	batch, err := p.discovery.ScanRootFull(ctx, rootID)
-	return p.finishSync(batch), err
+	root, err := p.store.GetMonitorRoot(ctx, rootID)
+	if err != nil {
+		return discovery.SyncBatch{}, err
+	}
+	batches, sErr := p.SyncRootsFromManifest(ctx, []discovery.MonitorRoot{root})
+	if sErr != nil {
+		return discovery.SyncBatch{}, sErr
+	}
+	if b, ok := batches[rootID]; ok {
+		return b, nil
+	}
+	return discovery.SyncBatch{RootID: rootID, Status: discovery.BatchSuccess}, nil
 }
 
 func (p *Pipeline) RunIncrementalSyncRoot(ctx context.Context, rootID string) (discovery.SyncBatch, error) {
-	if p.manifest != nil && p.manifest.Available() {
-		root, err := p.store.GetMonitorRoot(ctx, rootID)
-		if err != nil {
-			return discovery.SyncBatch{}, err
-		}
-		batches, sErr := p.SyncRootsFromManifest(ctx, []discovery.MonitorRoot{root})
-		if sErr != nil {
-			return discovery.SyncBatch{}, sErr
-		}
-		if b, ok := batches[rootID]; ok {
-			return b, nil
-		}
-		return discovery.SyncBatch{RootID: rootID, Status: discovery.BatchSuccess}, nil
-	}
-	_ = p.EnsureSQLiteReader(ctx)
-	batch, err := p.discovery.ScanRootIncremental(ctx, rootID)
-	return p.finishSync(batch), err
+	return p.RunFullSyncRoot(ctx, rootID)
 }
 
 func (p *Pipeline) finishSync(batch discovery.SyncBatch) discovery.SyncBatch {

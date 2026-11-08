@@ -313,7 +313,7 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			return true
 		}
 		if h.pipeline == nil {
-			writeErr(w, http.StatusServiceUnavailable, "SQLite 入库管线未配置")
+			writeErr(w, http.StatusServiceUnavailable, "入库管线未就绪")
 			return true
 		}
 		var req alist.ImportRequest
@@ -332,14 +332,27 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 		}
 		run := func(ctx context.Context) (string, any, error) {
 			track := req.TrackUpdates
-			batch, err := h.pipeline.ImportSQLitePath(ctx, req.Path, req.LibraryID, req.OutputDir, &track)
+			// 1. 若显式指定从 AList 实时网盘目录入库
+			if strings.EqualFold(req.Source, "alist") && h.importer != nil {
+				sum, err := h.importer.Import(ctx, req)
+				if err != nil || sum.FailedFiles > 0 {
+					if sum.ImportedFiles > 0 {
+						return "PARTIAL", sum, err
+					}
+					return "FAILED", sum, err
+				}
+				return "SUCCESS", sum, nil
+			}
+
+			// 2. 默认走官方权威清单 strm.txt 流式毫秒级匹配入库（彻底替代 SQLite）
+			batch, err := h.pipeline.ImportManifestPath(ctx, req.Path, req.LibraryID, req.OutputDir, &track)
 			sum := alist.ImportSummary{
 				SourcePath: req.Path, BatchID: batch.ID, ImportedFiles: int(batch.TotalSeen),
 				FailedFiles: int(batch.FailedCount), TrackingEnabled: track,
 				GeneratedSTRMs: append([]string(nil), batch.MaterializedSTRMs...),
 			}
 			if err != nil || sum.FailedFiles > 0 {
-				embyserver.RecordGlobalLog("WARN", "scan", "SQLite 入库有失败项", fmt.Sprintf("%s · %d 个文件失败", sum.SourcePath, sum.FailedFiles), "", "")
+				embyserver.RecordGlobalLog("WARN", "scan", "清单入库有失败项", fmt.Sprintf("%s · %d 个文件失败", sum.SourcePath, sum.FailedFiles), "", "")
 			}
 			if err != nil || sum.FailedFiles > 0 {
 				if sum.ImportedFiles > 0 {
@@ -348,7 +361,7 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 				return "FAILED", sum, err
 			}
 			if sum.ImportedFiles == 0 {
-				return "FAILED", sum, errors.New("SQLite 路径没有可入库的资源")
+				return "FAILED", sum, errors.New("strm.txt 清单中未匹配到可入库的资源")
 			}
 			return "SUCCESS", sum, nil
 		}
@@ -812,14 +825,23 @@ func (h *Handler) runSync(ctx context.Context, roots []discovery.MonitorRoot, fu
 }
 
 func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWriter) {
-	sqliteOK := false
-	sqliteErr := ""
-	if h.pipeline != nil {
-		if err := h.pipeline.EnsureSQLiteReader(ctx); err == nil {
-			sqliteOK = true
-		} else {
-			sqliteErr = err.Error()
+	manifestAvail := false
+	manifestPath := ""
+	var manifestSize int64
+	var manifestModTime int64
+	if h.pipeline != nil && h.pipeline.ManifestScanner() != nil {
+		manifestAvail = h.pipeline.ManifestScanner().Available()
+		manifestPath = h.pipeline.ManifestScanner().FilePath()
+		if fi, err := os.Stat(manifestPath); err == nil {
+			manifestSize = fi.Size()
+			manifestModTime = fi.ModTime().Unix()
 		}
+	}
+
+	sqliteOK := manifestAvail
+	sqliteErr := ""
+	if !manifestAvail {
+		sqliteErr = "strm.txt 权威清单未就绪"
 	}
 	roots, _ := h.store.ListMonitorRoots(ctx)
 	_, activeCount, _ := h.store.ListResources(ctx, discovery.ResourceFilter{Status: discovery.StatusActive, OnlyFiles: true, Limit: 1})
@@ -846,18 +868,6 @@ func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWrite
 	if countErr != nil {
 		writeErr(w, 500, countErr.Error())
 		return
-	}
-	manifestAvail := false
-	manifestPath := ""
-	var manifestSize int64
-	var manifestModTime int64
-	if h.pipeline != nil && h.pipeline.ManifestScanner() != nil {
-		manifestAvail = h.pipeline.ManifestScanner().Available()
-		manifestPath = h.pipeline.ManifestScanner().FilePath()
-		if fi, err := os.Stat(manifestPath); err == nil {
-			manifestSize = fi.Size()
-			manifestModTime = fi.ModTime().Unix()
-		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

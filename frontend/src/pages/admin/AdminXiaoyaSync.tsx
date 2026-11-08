@@ -250,7 +250,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
   const handleImport = async (item: AListFileItem, track: boolean) => {
     const itemPath = item.full_path || (item.parent ? `${item.parent.replace(/\/$/, '')}/${item.name}` : (alistPath === '/' ? `/${item.name}` : `${alistPath}/${item.name}`));
     try {
-      const job = await importResource(itemPath, item.is_dir, track, libraryID, outputDir);
+      const job = await importResource(itemPath, item.is_dir, track, libraryID, outputDir, browseSource);
       setJobs(current => [job, ...current.filter(j => j.id !== job.id)]);
     } catch (err: any) {
       notifyToast(err.message || '导入资源失败', 'error');
