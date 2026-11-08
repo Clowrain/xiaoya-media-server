@@ -239,6 +239,12 @@ func (r *Reader) resolvePath(ctx context.Context, rootPath string, requireDir, a
 		}
 
 		if len(matches) == 0 {
+			if allowFuzzy && len(segments) > 0 {
+				targetSeg := segments[len(segments)-1]
+				if bottomUpNode, bErr := r.resolveByBottomUp(ctx, targetSeg, segments, requireDir); bErr == nil {
+					return bottomUpNode, nil
+				}
+			}
 			return Node{}, fmt.Errorf("%w: 该路径尚未进入小雅 SQLite，暂不能入库（等待小雅数据库更新后重试）: segment %q in %q (parent_id=%d)", ErrPathNotFound, seg, normPath, parentID)
 		}
 		if len(matches) > 1 {
@@ -547,4 +553,126 @@ func stripYear(s string) string {
 	}
 	return strings.ToLower(strings.TrimSpace(s))
 }
+
+// resolveByBottomUp searches SQLite globally for the target name and walks up parent_id
+// to find a candidate whose ancestor chain matches the expected path segments (e.g. 电视剧, 国产剧).
+func (r *Reader) resolveByBottomUp(ctx context.Context, targetSeg string, segments []string, requireDir bool) (Node, error) {
+	cleanTarget := strings.TrimSpace(targetSeg)
+	if cleanTarget == "" {
+		return Node{}, ErrPathNotFound
+	}
+
+	q := "SELECT id, name, parent_id, is_dir, content FROM nodes WHERE (name = ? OR name LIKE ? OR name LIKE ?) ORDER BY id ASC LIMIT 50"
+	rows, err := r.query().QueryContext(ctx, q, cleanTarget, cleanTarget+" %", cleanTarget+"（%")
+	if err != nil {
+		return Node{}, err
+	}
+	defer rows.Close()
+
+	var candidates []RawNode
+	for rows.Next() {
+		var n RawNode
+		var isDirInt int
+		if err := rows.Scan(&n.ID, &n.Name, &n.ParentID, &isDirInt, &n.Content); err != nil {
+			return Node{}, err
+		}
+		n.IsDir = isDirInt != 0
+		if requireDir && !n.IsDir {
+			continue
+		}
+		candidates = append(candidates, n)
+	}
+
+	if len(candidates) == 0 {
+		return Node{}, ErrPathNotFound
+	}
+
+	var validMatches []Node
+	for _, c := range candidates {
+		fullPath, pathErr := r.buildFullPathUpward(ctx, c)
+		if pathErr != nil {
+			continue
+		}
+		if matchesAncestors(fullPath, segments) {
+			validMatches = append(validMatches, Node{
+				RawNode:  c,
+				FullPath: fullPath,
+			})
+		}
+	}
+
+	if len(validMatches) == 1 {
+		return validMatches[0], nil
+	}
+	if len(validMatches) > 1 {
+		return Node{}, fmt.Errorf("%w: 找到 %d 个同名路径，无法自动确定唯一目标", ErrAmbiguousPath, len(validMatches))
+	}
+	return Node{}, ErrPathNotFound
+}
+
+func (r *Reader) buildFullPathUpward(ctx context.Context, n RawNode) (string, error) {
+	currentID := n.ID
+	currentName := n.Name
+	parts := []string{currentName}
+	parentID := n.ParentID
+	visited := map[int64]bool{currentID: true}
+
+	for parentID > 0 {
+		if visited[parentID] {
+			break
+		}
+		visited[parentID] = true
+
+		var pName string
+		var nextParent int64
+		err := r.query().QueryRowContext(ctx, "SELECT name, parent_id FROM nodes WHERE id = ?", parentID).Scan(&pName, &nextParent)
+		if err != nil {
+			return "", err
+		}
+		parts = append([]string{pName}, parts...)
+		parentID = nextParent
+	}
+	return "/" + strings.Join(parts, "/"), nil
+}
+
+func matchesAncestors(fullPath string, expectedSegments []string) bool {
+	if len(expectedSegments) <= 1 {
+		return true
+	}
+	matchedCategory := false
+	hasCategory := false
+	for _, seg := range expectedSegments[:len(expectedSegments)-1] {
+		seg = strings.TrimSpace(seg)
+		if seg == "" || seg == "每日更新" {
+			continue
+		}
+		base := stripYear(seg)
+		if isCategoryKeyword(base) {
+			hasCategory = true
+			if strings.Contains(fullPath, base) {
+				matchedCategory = true
+			}
+		}
+	}
+	if hasCategory {
+		return matchedCategory
+	}
+	for _, seg := range expectedSegments[:len(expectedSegments)-1] {
+		base := stripYear(seg)
+		if len(base) > 0 && strings.Contains(fullPath, base) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCategoryKeyword(s string) bool {
+	for _, cat := range []string{"电视剧", "国产剧", "美剧", "韩剧", "日剧", "泰剧", "电影", "综艺", "动漫", "短剧", "纪录片"} {
+		if strings.Contains(s, cat) {
+			return true
+		}
+	}
+	return false
+}
+
 

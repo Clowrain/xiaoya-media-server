@@ -123,6 +123,13 @@ func TestReaderReadOnlyAndZheYueLiangSubtree(t *testing.T) {
 		t.Fatalf("ResolveAnyPath fuzzy matching failed: got (%+v, %v)", fuzzyNode, err)
 	}
 
+	// Verify ResolveAnyPath succeeds via bottom-up when intermediate directory has discrepancy
+	// e.g. path passed as /非每日更新前缀/电视剧/国产剧/折月亮
+	bottomUpNode, err := r.ResolveAnyPath(ctx, "/其他前缀/电视剧/国产剧/折月亮")
+	if err != nil || bottomUpNode.ID != 641716 || bottomUpNode.FullPath != "/每日更新/电视剧/国产剧/折月亮 (2026)" {
+		t.Fatalf("ResolveAnyPath bottom-up failed: got (%+v, %v)", bottomUpNode, err)
+	}
+
 	// Batched walk with tiny pageSize=5 to verify cursor pagination across all 30 nodes
 	var collected []Node
 	stats, err := r.WalkSubtreeBatched(ctx, root1, 5, func(batch []Node) error {
