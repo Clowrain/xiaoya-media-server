@@ -546,12 +546,17 @@ func (p *Pipeline) SyncRootsFromManifest(ctx context.Context, roots []discovery.
 func (p *Pipeline) RunFullSyncRoot(ctx context.Context, rootID string) (discovery.SyncBatch, error) {
 	if p.manifest != nil && p.manifest.Available() {
 		root, err := p.store.GetMonitorRoot(ctx, rootID)
-		if err == nil {
-			batches, sErr := p.SyncRootsFromManifest(ctx, []discovery.MonitorRoot{root})
-			if sErr == nil && len(batches) > 0 {
-				return batches[rootID], nil
-			}
+		if err != nil {
+			return discovery.SyncBatch{}, err
 		}
+		batches, sErr := p.SyncRootsFromManifest(ctx, []discovery.MonitorRoot{root})
+		if sErr != nil {
+			return discovery.SyncBatch{}, sErr
+		}
+		if b, ok := batches[rootID]; ok {
+			return b, nil
+		}
+		return discovery.SyncBatch{RootID: rootID, Status: discovery.BatchSuccess}, nil
 	}
 	_ = p.EnsureSQLiteReader(ctx)
 	batch, err := p.discovery.ScanRootFull(ctx, rootID)
@@ -561,12 +566,17 @@ func (p *Pipeline) RunFullSyncRoot(ctx context.Context, rootID string) (discover
 func (p *Pipeline) RunIncrementalSyncRoot(ctx context.Context, rootID string) (discovery.SyncBatch, error) {
 	if p.manifest != nil && p.manifest.Available() {
 		root, err := p.store.GetMonitorRoot(ctx, rootID)
-		if err == nil {
-			batches, sErr := p.SyncRootsFromManifest(ctx, []discovery.MonitorRoot{root})
-			if sErr == nil && len(batches) > 0 {
-				return batches[rootID], nil
-			}
+		if err != nil {
+			return discovery.SyncBatch{}, err
 		}
+		batches, sErr := p.SyncRootsFromManifest(ctx, []discovery.MonitorRoot{root})
+		if sErr != nil {
+			return discovery.SyncBatch{}, sErr
+		}
+		if b, ok := batches[rootID]; ok {
+			return b, nil
+		}
+		return discovery.SyncBatch{RootID: rootID, Status: discovery.BatchSuccess}, nil
 	}
 	_ = p.EnsureSQLiteReader(ctx)
 	batch, err := p.discovery.ScanRootIncremental(ctx, rootID)
