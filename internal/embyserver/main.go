@@ -492,12 +492,9 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		w.Write(b)
 		return
 	}
-	if strings.HasPrefix(l, "/assets/") || strings.HasPrefix(l, "/web/assets/") {
-		assetPath := p
-		if strings.HasPrefix(l, "/web/assets/") {
-			assetPath = strings.TrimPrefix(assetPath, "/web")
-		}
-		assetPath = strings.TrimPrefix(assetPath, "/")
+	if strings.Contains(l, "/assets/") {
+		idx := strings.Index(l, "/assets/")
+		assetPath := strings.TrimPrefix(p[idx:], "/")
 
 		b, err := web.Assets.ReadFile(assetPath)
 		if err != nil {

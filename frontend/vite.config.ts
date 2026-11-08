@@ -12,7 +12,7 @@ const buildTime = new Date().toISOString().replace('T', ' ').slice(0, 19)
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: './',
+  base: '/web/',
   define: {
     'import.meta.env.VITE_APP_VERSION': JSON.stringify('v2.1.0'),
     'import.meta.env.VITE_BUILD_COMMIT': JSON.stringify(gitCommit),
