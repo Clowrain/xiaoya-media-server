@@ -183,6 +183,9 @@ func (p *Pipeline) ImportManifestPath(ctx context.Context, rootPath, libraryID, 
 	if err != nil {
 		return batch, err
 	}
+	if track != nil && *track && p.discovery != nil {
+		_, _ = p.discovery.RegisterMonitorRoots(ctx, []string{normPath}, 10*time.Minute)
+	}
 	p.FlushScopedLibraryScans()
 	return batch, nil
 }
