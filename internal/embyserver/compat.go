@@ -285,7 +285,7 @@ func (a *App) viewerDTO(x Item, r *http.Request, u User) M {
 			a.db.QueryRow("SELECT position,played FROM userdata WHERE user_id=? AND item=?", u.ID, x.ID).Scan(&pos, &played)
 			a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", u.ID, x.ID).Scan(&fav)
 		}
-		m["UserData"] = M{"PlaybackPositionTicks": pos, "Played": played, "IsFavorite": fav > 0, "Key": x.ID}
+		m["UserData"] = userItemDataMap(x.ID, pos, played, fav > 0)
 	}
 	if x.URL != "" {
 		m["MediaSources"] = a.versionSources(x, r, u, true)

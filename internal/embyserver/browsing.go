@@ -475,7 +475,7 @@ func (a *App) serveImage(w http.ResponseWriter, r *http.Request, i string) {
 	http.ServeFile(w, r, path)
 }
 func (a *App) rootDTO() M {
-	return M{"Id": "root", "Name": "媒体库", "Type": "UserRootFolder", "IsFolder": true, "DisplayPreferencesId": "root", "SortName": "媒体库", "ExternalUrls": []M{}, "ProviderIds": M{}, "Taglines": []string{}, "RemoteTrailers": []M{}, "ServerId": a.serverID, "ChildCount": len(a.libraries()), "ImageTags": M{}, "BackdropImageTags": []string{}, "UserData": M{"Played": false, "IsFavorite": false}}
+	return M{"Id": "root", "Name": "媒体库", "Type": "UserRootFolder", "IsFolder": true, "DisplayPreferencesId": "root", "SortName": "媒体库", "ExternalUrls": []M{}, "ProviderIds": M{}, "Taglines": []string{}, "RemoteTrailers": []M{}, "ServerId": a.serverID, "ChildCount": len(a.libraries()), "ImageTags": M{}, "BackdropImageTags": []string{}, "UserData": userItemDataMap("root", 0, false, false)}
 }
 func setQuery(r *http.Request, k, v string) {
 	qv := r.URL.Query()
@@ -564,8 +564,12 @@ func (a *App) browseRoute(w http.ResponseWriter, r *http.Request, u User, p stri
 		}
 		return true
 	}
-	if l == "/genres" || l == "/items/filters" || l == "/items/filters2" {
-		a.genres(w, r, l == "/genres")
+	if l == "/genres" || strings.HasSuffix(l, "/genres") || l == "/items/filters" || l == "/items/filters2" {
+		a.genres(w, r, l == "/genres" || strings.HasSuffix(l, "/genres"))
+		return true
+	}
+	if l == "/studios" || strings.HasSuffix(l, "/studios") || l == "/tags" || strings.HasSuffix(l, "/tags") {
+		respond(w, M{"Items": []M{}, "TotalRecordCount": 0, "StartIndex": 0})
 		return true
 	}
 	if l == "/movies/recommendations" {
@@ -610,7 +614,7 @@ func (a *App) personDTO(i, name, uid string) M {
 		a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", uid, i).Scan(&n)
 		isFav = (n > 0)
 	}
-	m := M{"Id": i, "Name": name, "Type": "Person", "ServerId": a.serverID, "IsFolder": false, "ImageTags": a.libraryImageTags(i), "BackdropImageTags": []string{}, "Overview": "", "PrimaryImageAspectRatio": 2.0 / 3, "UserData": M{"Played": false, "IsFavorite": isFav, "PlaybackPositionTicks": 0}}
+	m := M{"Id": i, "Name": name, "Type": "Person", "ServerId": a.serverID, "IsFolder": false, "ImageTags": a.libraryImageTags(i), "BackdropImageTags": []string{}, "Overview": "", "PrimaryImageAspectRatio": 2.0 / 3, "UserData": userItemDataMap(i, 0, false, isFav)}
 	var n int
 	a.db.QueryRow("SELECT count(DISTINCT item) FROM item_people WHERE person=?", i).Scan(&n)
 	m["MovieCount"] = n
@@ -725,7 +729,7 @@ func (a *App) persons(w http.ResponseWriter, r *http.Request, u User) {
 			"Type":      "Person",
 			"ImageTags": a.libraryImageTags(pair[0]),
 			"IsFolder":  false,
-			"UserData":  M{"Played": false, "IsFavorite": isFav, "PlaybackPositionTicks": 0},
+			"UserData":  userItemDataMap(pair[0], 0, false, isFav),
 		})
 	}
 	if p.Count < 0 {

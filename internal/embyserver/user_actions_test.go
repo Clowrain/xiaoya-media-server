@@ -17,6 +17,7 @@ func newTestSQLiteApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rawDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { rawDB.Close() })
 	tables := []string{
 		"CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT,hash TEXT,admin INT,first_admin INT,max_devices INT);",
@@ -25,6 +26,7 @@ func newTestSQLiteApp(t *testing.T) *App {
 		"CREATE TABLE userdata(user_id TEXT,item TEXT,position INT DEFAULT 0,played INT DEFAULT 0,PRIMARY KEY(user_id,item));",
 		"CREATE TABLE user_favorites(user_id TEXT,item TEXT,created_at INT DEFAULT 0,PRIMARY KEY(user_id,item));",
 		"CREATE TABLE item_people(item TEXT, person TEXT, name TEXT, role TEXT, type TEXT, thumb TEXT, PRIMARY KEY(item,person,type));",
+		"CREATE TABLE item_genres(item TEXT, genre TEXT, PRIMARY KEY(item,genre));",
 		"CREATE TABLE actor_image_failures(person TEXT PRIMARY KEY, path TEXT NOT NULL, expires BIGINT NOT NULL);",
 		"CREATE TABLE resume_activity(user_id TEXT,item TEXT,updated INT,PRIMARY KEY(user_id,item));",
 		"CREATE TABLE plays(user_id TEXT,device TEXT,item TEXT,updated INT,PRIMARY KEY(user_id,device));",
@@ -297,5 +299,78 @@ func TestNextUpIsCompletelyRemoved(t *testing.T) {
 		if len(res.Items) != 0 {
 			t.Fatalf("NextUp 应当已被完全移除返回 0 条，实际返回: %+v", res.Items)
 		}
+	}
+}
+
+func TestEmbySpecificationCompliance(t *testing.T) {
+	a := newTestSQLiteApp(t)
+
+	var uid string
+	_ = a.db.QueryRow("SELECT id FROM users LIMIT 1").Scan(&uid)
+	tokenVal := "test-token-spec"
+	_, _ = a.db.Exec("INSERT INTO tokens VALUES(?,?,?,?)", digest(tokenVal), uid, "device", time.Now().Unix()+3600)
+
+	// 插入电视剧与电影
+	_, _ = a.db.Exec("INSERT INTO items("+cols+",seen) VALUES('show-1','lib-1','','测试剧集','Series','/media/show','dir','剧情', '', 2024, 0, 0, 1000, 0, 't')")
+	_, _ = a.db.Exec("INSERT INTO items("+cols+",seen) VALUES('mov-1','lib-1','','测试电影','Movie','/media/mov.mp4','http://xiaoya.host/mov.mp4','剧情', '', 2024, 0, 0, 1000, 0, 't')")
+
+	// 1. 验证 BaseItemDto 中 Series 的 MediaType 不应为 Video
+	rShow := httptest.NewRequest("GET", "/emby/Items/show-1?api_key="+tokenVal, nil)
+	wShow := httptest.NewRecorder()
+	a.serve(wShow, rShow)
+	if wShow.Code != 200 {
+		t.Fatalf("获取电视剧详情失败: %d", wShow.Code)
+	}
+	var showDTO M
+	_ = json.Unmarshal(wShow.Body.Bytes(), &showDTO)
+	if _, ok := showDTO["MediaType"]; ok {
+		t.Fatalf("Series 不应包含 MediaType 字段: %+v", showDTO["MediaType"])
+	}
+
+	// 2. 验证 BaseItemDto 中 Movie 的 MediaType 必须为 Video
+	rMov := httptest.NewRequest("GET", "/emby/Items/mov-1?api_key="+tokenVal, nil)
+	wMov := httptest.NewRecorder()
+	a.serve(wMov, rMov)
+	var movDTO M
+	_ = json.Unmarshal(wMov.Body.Bytes(), &movDTO)
+	if movDTO["MediaType"] != "Video" {
+		t.Fatalf("Movie 的 MediaType 必须为 Video，实际为: %+v", movDTO["MediaType"])
+	}
+
+	// 3. 验证 UserData 必须完整包含官方 OpenAPI UserItemDataDto 关键规范字段
+	for _, dto := range []M{showDTO, movDTO} {
+		ud, ok := dto["UserData"].(map[string]any)
+		if !ok {
+			t.Fatalf("缺少 UserData 对象: %+v", dto)
+		}
+		for _, requiredKey := range []string{"Key", "ItemId", "Played", "PlaybackPositionTicks", "PlayCount", "IsFavorite", "PlayedPercentage", "UnplayedItemCount"} {
+			if _, exists := ud[requiredKey]; !exists {
+				t.Fatalf("UserData 缺少官方 OpenAPI 标准字段 %q: %+v", requiredKey, ud)
+			}
+		}
+	}
+
+	// 4. 验证 /Users/{userId}/Genres 与 /Studios /Tags 端点
+	rGenres := httptest.NewRequest("GET", "/emby/Users/"+uid+"/Genres?api_key="+tokenVal, nil)
+	wGenres := httptest.NewRecorder()
+	a.serve(wGenres, rGenres)
+	if wGenres.Code != 200 {
+		t.Fatalf("/Users/{userId}/Genres 响应状态码错误: %d", wGenres.Code)
+	}
+
+	rStudios := httptest.NewRequest("GET", "/emby/Users/"+uid+"/Studios?api_key="+tokenVal, nil)
+	wStudios := httptest.NewRecorder()
+	a.serve(wStudios, rStudios)
+	if wStudios.Code != 200 {
+		t.Fatalf("/Users/{userId}/Studios 响应状态码错误: %d", wStudios.Code)
+	}
+	var studiosRes struct {
+		Items            []M
+		TotalRecordCount int
+		StartIndex       int
+	}
+	_ = json.Unmarshal(wStudios.Body.Bytes(), &studiosRes)
+	if studiosRes.TotalRecordCount != 0 || studiosRes.StartIndex != 0 {
+		t.Fatalf("/Studios 响应格式不符合 QueryResult 规范: %+v", studiosRes)
 	}
 }

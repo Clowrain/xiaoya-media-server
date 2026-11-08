@@ -709,7 +709,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 				a.password(w, r, u, uid)
 				return
 			case "views":
-				respond(w, M{"Items": a.libraryDTOs(), "TotalRecordCount": len(a.libraries())})
+				respond(w, M{"Items": a.libraryDTOs(), "TotalRecordCount": len(a.libraries()), "StartIndex": 0})
 				return
 			case "items":
 				if len(s) > 4 && strings.ToLower(s[4]) != "latest" && strings.ToLower(s[4]) != "resume" {
@@ -1173,7 +1173,8 @@ func (a *App) libraries() []M {
 func (a *App) libraryDTOs() []M {
 	out := []M{}
 	for _, v := range a.libraries() {
-		out = append(out, M{"Id": v["Id"], "Name": v["Name"], "Type": "CollectionFolder", "IsFolder": true, "CollectionType": v["CollectionType"], "SortName": v["Name"], "ForcedSortName": v["Name"], "ExternalUrls": []M{}, "ProviderIds": M{}, "RemoteTrailers": []M{}, "Taglines": []string{}, "LockedFields": []string{}, "LockData": false, "CanDelete": false, "CanDownload": false, "PresentationUniqueKey": v["Id"], "ServerId": a.serverID, "ImageTags": a.libraryImageTags(v["Id"].(string)), "ParentId": "root", "LocationType": "Virtual", "ChildCount": v["Count"], "RecursiveItemCount": v["Count"], "PrimaryImageAspectRatio": 2.0 / 3, "BackdropImageTags": []string{}, "UserData": M{"Played": false, "IsFavorite": false, "PlaybackPositionTicks": 0}, "DisplayPreferencesId": v["Id"]})
+		vid := v["Id"].(string)
+		out = append(out, M{"Id": vid, "Name": v["Name"], "Type": "CollectionFolder", "IsFolder": true, "CollectionType": v["CollectionType"], "SortName": v["Name"], "ForcedSortName": v["Name"], "ExternalUrls": []M{}, "ProviderIds": M{}, "RemoteTrailers": []M{}, "Taglines": []string{}, "LockedFields": []string{}, "LockData": false, "CanDelete": false, "CanDownload": false, "PresentationUniqueKey": vid, "ServerId": a.serverID, "ImageTags": a.libraryImageTags(vid), "ParentId": "root", "LocationType": "Virtual", "ChildCount": v["Count"], "RecursiveItemCount": v["Count"], "PrimaryImageAspectRatio": 2.0 / 3, "BackdropImageTags": []string{}, "UserData": userItemDataMap(vid, 0, false, false), "DisplayPreferencesId": vid})
 	}
 	return out
 }
@@ -1203,8 +1204,9 @@ func (a *App) dto(x Item) M {
 	if x.Poster != "" {
 		tags["Primary"] = digest(x.Poster + strconv.FormatInt(x.Mtime, 10))[:12]
 	}
-	m := M{"Id": x.ID, "ServerId": a.serverID, "ParentId": x.Parent, "Name": x.Name, "SortName": x.Name, "Type": x.Kind, "IsFolder": folder, "Path": x.Path, "Overview": x.Overview, "ProductionYear": x.Year, "IndexNumber": x.Episode, "ParentIndexNumber": x.Season, "ImageTags": tags, "BackdropImageTags": []string{}, "MediaType": "Video", "LocationType": "FileSystem", "UserData": M{"PlaybackPositionTicks": 0, "Played": false, "IsFavorite": false}, "CanDownload": false}
+	m := M{"Id": x.ID, "ServerId": a.serverID, "ParentId": x.Parent, "Name": x.Name, "SortName": x.Name, "Type": x.Kind, "IsFolder": folder, "Path": x.Path, "Overview": x.Overview, "ProductionYear": x.Year, "IndexNumber": x.Episode, "ParentIndexNumber": x.Season, "ImageTags": tags, "BackdropImageTags": []string{}, "LocationType": "FileSystem", "UserData": userItemDataMap(x.ID, 0, false, false), "CanDownload": false}
 	if !folder {
+		m["MediaType"] = "Video"
 		m["MediaSources"] = []M{a.source(x, "")}
 	}
 	a.enrich(x, m)
@@ -1256,7 +1258,7 @@ func (a *App) single(w http.ResponseWriter, r *http.Request, u User, i string) {
 			a.db.QueryRow("SELECT position,played FROM userdata WHERE user_id=? AND item=?", u.ID, i).Scan(&pos, &played)
 			a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", u.ID, i).Scan(&fav)
 		}
-		m["UserData"] = M{"PlaybackPositionTicks": pos, "Played": played, "IsFavorite": fav > 0}
+		m["UserData"] = userItemDataMap(i, pos, played, fav > 0)
 	}
 	respond(w, m)
 	_ = http.NewResponseController(w).Flush()

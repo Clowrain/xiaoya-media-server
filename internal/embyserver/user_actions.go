@@ -116,19 +116,20 @@ func (a *App) handleUserActionRoutes(w http.ResponseWriter, r *http.Request, u U
 	return false
 }
 
-// userItemDataDTO constructs a 100% compliant Emby UserItemDataDto model for clients like SenPlayer / Infuse.
-func (a *App) userItemDataDTO(uid, itemID string, isFav bool) M {
-	var pos int64
-	var played bool
-	if a.db != nil {
-		a.db.QueryRow("SELECT position,played FROM userdata WHERE user_id=? AND item=?", uid, itemID).Scan(&pos, &played)
+// userItemDataMap constructs a 100% compliant Emby UserItemDataDto model for clients like SenPlayer / Infuse / VidHub.
+func userItemDataMap(itemID string, pos int64, played, isFav bool) M {
+	var playCount int
+	var playedPct float64
+	if played {
+		playCount = 1
+		playedPct = 100.0
 	}
 	return M{
 		"Rating":                nil,
-		"PlayedPercentage":      0.0,
+		"PlayedPercentage":      playedPct,
 		"UnplayedItemCount":     0,
 		"PlaybackPositionTicks": pos,
-		"PlayCount":             0,
+		"PlayCount":             playCount,
 		"IsFavorite":            isFav,
 		"Likes":                 nil,
 		"LastPlayedDate":        nil,
@@ -136,6 +137,16 @@ func (a *App) userItemDataDTO(uid, itemID string, isFav bool) M {
 		"Key":                   itemID,
 		"ItemId":                itemID,
 	}
+}
+
+// userItemDataDTO constructs a 100% compliant Emby UserItemDataDto model for clients like SenPlayer / Infuse.
+func (a *App) userItemDataDTO(uid, itemID string, isFav bool) M {
+	var pos int64
+	var played bool
+	if a.db != nil && uid != "" {
+		a.db.QueryRow("SELECT position,played FROM userdata WHERE user_id=? AND item=?", uid, itemID).Scan(&pos, &played)
+	}
+	return userItemDataMap(itemID, pos, played, isFav)
 }
 
 func (a *App) setFavorite(w http.ResponseWriter, r *http.Request, u User, uid, itemID string, fav bool) {
