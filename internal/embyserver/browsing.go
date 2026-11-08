@@ -544,6 +544,22 @@ func (a *App) browseRoute(w http.ResponseWriter, r *http.Request, u User, p stri
 		a.items(w, r, u, false)
 		return true
 	}
+	if l == "/episodes" {
+		sid := q(r, "SeriesId")
+		if sid == "" {
+			respond(w, M{"Items": []M{}, "TotalRecordCount": 0, "StartIndex": 0})
+			return true
+		}
+		setQuery(r, "ParentId", sid)
+		setQuery(r, "IncludeItemTypes", "Episode")
+		setQuery(r, "Recursive", "true")
+		if s := q(r, "SeasonId"); s != "" {
+			setQuery(r, "ParentId", s)
+		}
+		setQuery(r, "SortBy", "ParentIndexNumber,IndexNumber")
+		a.items(w, r, u, false)
+		return true
+	}
 	if l == "/persons" || strings.HasSuffix(l, "/persons") {
 		a.persons(w, r, u)
 		return true
@@ -593,6 +609,88 @@ func (a *App) browseRoute(w http.ResponseWriter, r *http.Request, u User, p stri
 			return true
 		}
 		respond(w, []M{{"BaselineItemName": name, "CategoryId": 1, "RecommendationType": "SimilarToRecentlyPlayed", "Items": result.Items}})
+		return true
+	}
+	if strings.HasPrefix(l, "/searchhints") {
+		term := q(r, "SearchTerm")
+		if term == "" {
+			term = q(r, "query")
+		}
+		if term == "" {
+			respond(w, M{"SearchHints": []M{}, "TotalRecordCount": 0})
+			return true
+		}
+		limit := 20
+		if n, err := strconv.Atoi(q(r, "Limit")); err == nil && n > 0 {
+			limit = n
+		}
+		if limit > 50 {
+			limit = 50
+		}
+		setQuery(r, "SearchTerm", term)
+		setQuery(r, "Limit", strconv.Itoa(limit))
+		rec := &jsonCapture{header: http.Header{}}
+		a.items(rec, r, u, false)
+		var result struct {
+			Items            []M
+			TotalRecordCount int
+		}
+		if json.Unmarshal(rec.buf.Bytes(), &result) != nil {
+			fail(w, 500, "搜索提示查询失败")
+			return true
+		}
+		hints := []M{}
+		for _, item := range result.Items {
+			mediaType := ""
+			if isFolder, ok := item["IsFolder"].(bool); ok && !isFolder {
+				mediaType = "Video"
+			}
+			hints = append(hints, M{
+				"Id":          item["Id"],
+				"ItemId":      item["Id"],
+				"Name":        item["Name"],
+				"MatchedTerm": term,
+				"Type":        item["Type"],
+				"MediaType":   mediaType,
+			})
+		}
+		respond(w, M{"SearchHints": hints, "TotalRecordCount": result.TotalRecordCount})
+		return true
+	}
+	if l == "/searchsuggestions" {
+		if q(r, "SearchTerm") == "" {
+			if v := q(r, "query"); v != "" {
+				setQuery(r, "SearchTerm", v)
+			}
+		}
+		a.items(w, r, u, false)
+		return true
+	}
+	if l == "/years" || strings.HasSuffix(l, "/years") {
+		parent := q(r, "ParentId")
+		rows, e := a.db.Query("SELECT DISTINCT year FROM items WHERE year>0 AND (?='' OR lib=?) ORDER BY year DESC", parent, parent)
+		if e != nil {
+			fail(w, 500, "年份查询失败")
+			return true
+		}
+		defer rows.Close()
+		out := []M{}
+		for rows.Next() {
+			var y int
+			if rows.Scan(&y) == nil {
+				out = append(out, M{"Name": strconv.Itoa(y), "Id": strconv.Itoa(y)})
+			}
+		}
+		respond(w, M{"Items": out, "TotalRecordCount": len(out), "StartIndex": 0})
+		return true
+	}
+	if len(parts) >= 3 && strings.EqualFold(parts[0], "genres") && strings.EqualFold(parts[2], "items") {
+		name, err := url.PathUnescape(parts[1])
+		if err != nil {
+			name = parts[1]
+		}
+		setQuery(r, "Genres", name)
+		a.items(w, r, u, false)
 		return true
 	}
 
@@ -659,7 +757,7 @@ func (a *App) persons(w http.ResponseWriter, r *http.Request, u User) {
 	key := a.pageSignature(r, where, "persons", args)
 	p, e := a.pageStart(r, key)
 	if e != nil {
-		fail(w, 400, e.Error())
+		fail(w, 500, e.Error())
 		return
 	}
 	if p.Count < 0 && !strings.EqualFold(q(r, "EnableTotalRecordCount"), "false") {

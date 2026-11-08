@@ -18,6 +18,26 @@ func (a *App) handleUserActionRoutes(w http.ResponseWriter, r *http.Request, u U
 		return true
 	}
 
+	// 1.5 GET /Users/{userId}/FavoriteItems & /Users/{userId}/PlayedItems: filtered QueryResult lists.
+	// Filters is always non-empty here, so parentlessBrowse never short-circuits to libraryDTOs.
+	if r.Method == http.MethodGet && len(parts) == 3 && strings.EqualFold(parts[0], "users") && (strings.EqualFold(parts[2], "favoriteitems") || strings.EqualFold(parts[2], "playeditems")) {
+		uid := parts[1]
+		if uid == "me" || uid == "" {
+			uid = u.ID
+		}
+		if !u.API && !u.Admin && uid != u.ID {
+			fail(w, http.StatusForbidden, "无权限")
+			return true
+		}
+		if strings.EqualFold(parts[2], "favoriteitems") {
+			setQuery(r, "Filters", "IsFavorite")
+		} else {
+			setQuery(r, "Filters", "IsPlayed")
+		}
+		a.items(w, r, u, false)
+		return true
+	}
+
 	// 2. FavoriteItems & PlayedItems & UserData & Rating:
 	if len(parts) >= 2 {
 		var uid, itemID string

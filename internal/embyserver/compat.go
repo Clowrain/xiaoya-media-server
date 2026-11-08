@@ -341,7 +341,7 @@ func (a *App) similar(w http.ResponseWriter, r *http.Request, u User, i string) 
 	}
 	rows.Close()
 	out := a.listDTOs(items, r, u)
-	respond(w, M{"Items": out, "TotalRecordCount": len(out)})
+	respond(w, M{"Items": out, "TotalRecordCount": len(out), "StartIndex": 0})
 }
 
 func (a *App) orderedViews() []string {
