@@ -37,19 +37,25 @@ RUN apk add --no-cache \
       ca-certificates \
       tzdata \
       ffmpeg \
+      postgresql16 \
       postgresql16-client \
+      su-exec \
       wget \
-    && mkdir -p /data /media/strm /xiaoya-db /etc/xiaoya-media-server
+    && mkdir -p /data /media/strm /xiaoya-db /etc/xiaoya-media-server /run/postgresql
 
 ENV TZ=Asia/Shanghai \
     DATA_DIR=/data \
     MEDIA_ROOTS=/media \
     STRM_OUTPUT_ROOT=/media/strm \
     XIAOYA_SQLITE_PATH=/xiaoya-db/strm_internal.db \
-    LISTEN=0.0.0.0:8096
+    LISTEN=0.0.0.0:8096 \
+    POSTGRES_HOST=127.0.0.1 \
+    POSTGRES_PORT=5432
 
 COPY --from=builder /out/xiaoya-media-server /usr/local/bin/xiaoya-media-server
 COPY configs/config.example.yaml /etc/xiaoya-media-server/config.yaml
+COPY deployments/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 WORKDIR /data
 EXPOSE 8096
@@ -57,5 +63,5 @@ EXPOSE 8096
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -qO- http://127.0.0.1:8096/api/system/health || exit 1
 
-ENTRYPOINT ["/usr/local/bin/xiaoya-media-server"]
-CMD ["-config", "/etc/xiaoya-media-server/config.yaml"]
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/usr/local/bin/xiaoya-media-server", "-config", "/etc/xiaoya-media-server/config.yaml"]

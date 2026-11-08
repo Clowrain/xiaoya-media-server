@@ -1,23 +1,6 @@
 name: xiaoya-media-server
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: xiaoya-media-postgres
-    restart: unless-stopped
-    environment:
-      TZ: ${TZ:-Asia/Shanghai}
-      POSTGRES_USER: ${POSTGRES_USER:-emby}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先在 .env 中设置 POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-emby}
-    volumes:
-      - ${POSTGRES_DATA_DIR:-./data/postgres}:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-emby} -d $${POSTGRES_DB:-emby}"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-
   xiaoya-media-server:
     image: ${IMAGE_NAME:-ghcr.io/clowrain/xiaoya-media-server:latest}
     # 如需在本地自行编译，可取消以下 build 配置注释：
@@ -26,34 +9,37 @@ services:
     #   dockerfile: deployments/Dockerfile
     container_name: xiaoya-media-server
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     ports:
       - "${HTTP_PORT:-8096}:8096"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       LISTEN: 0.0.0.0:8096
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
+      # 数据库配置（默认使用容器内置轻量 PostgreSQL，数据自动持久化到 /data/postgres）
+      POSTGRES_HOST: ${POSTGRES_HOST:-127.0.0.1}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
       POSTGRES_USER: ${POSTGRES_USER:-emby}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先在 .env 中设置 POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-emby}
+      # 管理员账号与系统密钥
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请先在 .env 中设置至少 12 位的 ADMIN_PASSWORD}
       BOOTSTRAP_API_KEY: ${BOOTSTRAP_API_KEY:-}
+      # 数据路径配置
       DATA_DIR: /data
       MEDIA_ROOTS: /media
       STRM_OUTPUT_ROOT: /media/strm
       XIAOYA_STRM_PATH: ${XIAOYA_STRM_PATH:-/xiaoya-db/strm.txt}
       XIAOYA_SQLITE_PATH: /xiaoya-db/${XIAOYA_SQLITE_FILENAME:-data/strm_internal.db}
+      # 监控与自动化
       MONITOR_ENABLED: ${MONITOR_ENABLED:-true}
       MONITOR_INTERVAL: ${MONITOR_INTERVAL:-10m}
       MONITOR_ROOTS: ${MONITOR_ROOTS:-}
+      # 小雅 AList 与 STRM 地址
       ALIST_BASE_URL: ${ALIST_BASE_URL:-http://xiaoya.host:5678}
       STRM_TARGET_BASE_URL: ${STRM_TARGET_BASE_URL:-}
       XIAOYA_USERNAME: ${XIAOYA_USERNAME:-}
       XIAOYA_PASSWORD: ${XIAOYA_PASSWORD:-}
       ALIST_TOKEN: ${ALIST_TOKEN:-}
+      # TMDB 刮削配置
       TMDB_API_KEY: ${TMDB_API_KEY:-}
       TMDB_LANGUAGE: ${TMDB_LANGUAGE:-zh-CN}
     volumes:
@@ -61,7 +47,13 @@ services:
       - ${XIAOYA_DIR:-${XIAOYA_DB_DIR:?请设置小雅所在宿主机目录 XIAOYA_DIR}}:/xiaoya-db:ro
       # 本地 STRM 输出及附件落地目录（读写）
       - ${MEDIA_DIR:-./data/media}:/media
-      # 应用持久化数据目录（封面缓存、媒体探测缓存、PostgreSQL 自动备份）
+      # 应用持久化数据目录（含内置 PostgreSQL 数据库、封面缓存、媒体探测缓存、备份等）
       - ${APP_DATA_DIR:-./data/appdata}:/data
       # 可选：自定义 YAML 配置文件（镜像内已内置默认配置并由上述环境变量覆盖；如需外部挂载可取消注释）
       # - ${CONFIG_FILE_HOST:-./config.yaml}:/etc/xiaoya-media-server/config.yaml:ro
+    networks:
+      - proxy_net
+
+networks:
+  proxy_net:
+    external: true
