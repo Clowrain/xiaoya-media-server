@@ -65,7 +65,7 @@ func (a *App) versionSources(x Item, r *http.Request, u User, display bool) []M 
 		versions = a.versions(x)
 	}
 	for _, v := range versions {
-		m := a.viewerSourceWithDisplay(v, r, u, display)
+		m := a.viewerSource(v, r, u)
 		m["Name"] = filepath.Base(v.Path)
 		m["ItemId"] = v.ID
 		m["LibraryId"] = v.Lib

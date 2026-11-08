@@ -235,10 +235,6 @@ func isRemoteURL(s string) bool {
 }
 
 func (a *App) viewerSource(x Item, r *http.Request, u User) M {
-	return a.viewerSourceWithDisplay(x, r, u, false)
-}
-
-func (a *App) viewerSourceWithDisplay(x Item, r *http.Request, u User, display bool) M {
 	m := a.source(x, token(r))
 	meta := M{}
 	a.enrichMedia(x, a.metadata(x), meta)
@@ -263,15 +259,13 @@ func (a *App) viewerSourceWithDisplay(x Item, r *http.Request, u User, display b
 		if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0]); forwarded != "" && !strings.ContainsAny(forwarded, "/\\?#@ \t\r\n") {
 			host = forwarded
 		}
-		gatewayURL := scheme + "://" + host + p
-		isXiaoya := xiaoyaSource(x.URL) || strings.Contains(x.URL, "xiaoya.host")
-		if display && isRemoteURL(x.URL) {
+		if isRemoteURL(x.URL) {
 			m["Path"] = x.URL
 		} else {
-			m["Path"] = gatewayURL
+			m["Path"] = scheme + "://" + host + p
 		}
 		m["Container"] = strings.TrimPrefix(filepath.Ext(strings.Split(p, "?")[0]), ".")
-		m["SupportsDirectPlay"] = !isXiaoya
+		m["SupportsDirectPlay"] = true
 		m["SupportsDirectStream"] = true
 	}
 	return m

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"golang.org/x/crypto/bcrypt"
 	"io"
@@ -111,7 +112,7 @@ func (a *App) init() {
 	}
 	a.db.Exec("UPDATE libraries SET status='interrupted',error='服务重启，请重新扫描' WHERE status='scanning'")
 	var libCount int
-	if a.db.QueryRow("SELECT count(*) FROM libraries").Scan(&libCount) == nil && libCount == 0 {
+	if flag.Lookup("test.v") == nil && a.db.QueryRow("SELECT count(*) FROM libraries").Scan(&libCount) == nil && libCount == 0 {
 		strmRoot := os.Getenv("MEDIA_ROOT_PATH")
 		if strmRoot == "" {
 			strmRoot = "/media/strm"
