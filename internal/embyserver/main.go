@@ -179,7 +179,11 @@ func token(r *http.Request) string {
 			return s
 		}
 	}
-	return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	authz := r.Header.Get("Authorization")
+	if len(authz) >= 7 && strings.EqualFold(authz[:7], "bearer ") {
+		return authz[7:]
+	}
+	return authz
 }
 func device(r *http.Request) string {
 	for _, s := range []string{field(r, "DeviceId"), q(r, "DeviceId"), q(r, "X-Emby-Device-Id"), r.Header.Get("X-Emby-Device-Id")} {
@@ -289,7 +293,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	respond(w, M{"User": a.userDTO(u), "AccessToken": t, "ServerId": a.serverID, "SessionInfo": a.loginSession(r, u, d)})
 }
 func (a *App) serverInfo() M {
-	return M{"Id": a.serverID, "ServerName": a.displayName(), "Version": "4.8.0.80", "OperatingSystem": "Linux", "ProductName": "Xiaoya Media Server", "LocalAddress": os.Getenv("PUBLIC_URL"), "WanAddress": os.Getenv("PUBLIC_URL"), "LocalAddresses": []string{os.Getenv("PUBLIC_URL")}, "RemoteAddresses": []string{os.Getenv("PUBLIC_URL")}, "StartupWizardCompleted": true, "SupportsLibraryMonitor": false, "HasUpdateAvailable": false}
+	return M{"Id": a.serverID, "ServerName": a.displayName(), "Name": a.displayName(), "Version": "4.8.0.80", "OperatingSystem": "Linux", "ProductName": "Xiaoya Media Server", "LocalAddress": os.Getenv("PUBLIC_URL"), "WanAddress": os.Getenv("PUBLIC_URL"), "LocalAddresses": []string{os.Getenv("PUBLIC_URL")}, "RemoteAddresses": []string{os.Getenv("PUBLIC_URL")}, "StartupWizardCompleted": true, "SupportsLibraryMonitor": false, "HasUpdateAvailable": false}
 }
 func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	if !shouldSkipLog(r.URL.Path) {
@@ -427,7 +431,16 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		respond(w, a.serverInfo())
 		return
 	}
+	// Emby web hits Branding on the login screen, before any token exists.
+	if l == "/branding/configuration" {
+		respond(w, M{"LoginDisclaimer": "", "CustomCss": "", "SplashscreenEnabled": false})
+		return
+	}
 	if l == "/users/authenticatebyname" {
+		a.login(w, r)
+		return
+	}
+	if l == "/users/authenticate" {
 		a.login(w, r)
 		return
 	}
@@ -637,6 +650,14 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		respond(w, m)
 		return
 	}
+	if l == "/scheduledtasks" {
+		respond(w, []M{})
+		return
+	}
+	if strings.HasPrefix(l, "/scheduledtasks/running/") {
+		w.WriteHeader(204)
+		return
+	}
 	if l == "/sessions" {
 		respond(w, []any{})
 		return
@@ -712,11 +733,68 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 				respond(w, M{"Items": a.libraryDTOs(), "TotalRecordCount": len(a.libraries()), "StartIndex": 0})
 				return
 			case "items":
+				if len(s) > 5 {
+					switch strings.ToLower(s[5]) {
+					case "similar":
+						a.similar(w, r, u, s[4])
+						return
+					case "playbackinfo":
+						a.playback(w, r, u, s[4])
+						return
+					case "images":
+						a.poster(w, r, s[4])
+						return
+					case "refreshmediainfo":
+						a.probeMedia(w, r, u, s[4])
+						return
+					case "remotesearch":
+						respond(w, []any{})
+						return
+					case "refresh":
+						if !u.API && !u.Admin {
+							fail(w, 403, "无权限")
+							return
+						}
+						go func(targetID string) {
+							if err := a.refreshSingleItemMetadata(targetID, true); err != nil {
+								a.scanAll()
+							}
+						}(s[4])
+						w.WriteHeader(204)
+						return
+					default:
+						fail(w, 404, "未实现此接口")
+						return
+					}
+				}
+				if len(s) == 5 && strings.EqualFold(s[4], "folderviews") {
+					respond(w, M{"Items": a.libraryDTOs(), "TotalRecordCount": len(a.libraries()), "StartIndex": 0})
+					return
+				}
 				if len(s) > 4 && strings.ToLower(s[4]) != "latest" && strings.ToLower(s[4]) != "resume" {
 					a.single(w, r, u, s[4])
 					return
 				}
 				a.items(w, r, u, strings.HasSuffix(l, "/latest"))
+				return
+			case "shows":
+				// /Users/{uid}/Shows/{sid}/Seasons|Episodes mirrors the top-level /Shows/{sid}/... routes.
+				if len(s) == 6 && (strings.EqualFold(s[5], "seasons") || strings.EqualFold(s[5], "episodes")) {
+					setQuery(r, "ParentId", s[4])
+					if strings.EqualFold(s[5], "seasons") {
+						setQuery(r, "IncludeItemTypes", "Season")
+					} else {
+						setQuery(r, "IncludeItemTypes", "Episode")
+						setQuery(r, "Recursive", "true")
+						if sid := q(r, "SeasonId"); sid != "" {
+							setQuery(r, "ParentId", sid)
+						}
+					}
+					setQuery(r, "SortBy", "ParentIndexNumber,IndexNumber")
+					a.items(w, r, u, false)
+					return
+				}
+				fail(w, 404, "未实现此接口")
 				return
 			}
 		}
@@ -733,6 +811,9 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(s) > 3 {
 			switch strings.ToLower(s[3]) {
+			case "extras":
+				respond(w, M{"Items": []M{}, "TotalRecordCount": 0, "StartIndex": 0})
+				return
 			case "refreshmediainfo":
 				a.probeMedia(w, r, u, s[2])
 				return
@@ -769,7 +850,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 			a.serveVideoSubtitles(w, r, s)
 			return
 		}
-		if len(s) >= 4 && (strings.HasPrefix(strings.ToLower(s[3]), "stream") || strings.EqualFold(s[3], "original")) {
+		if len(s) >= 4 && (strings.HasPrefix(strings.ToLower(s[3]), "stream") || strings.HasPrefix(strings.ToLower(s[3]), "original")) {
 			a.stream(w, r, u, s[2])
 			return
 		}
@@ -778,7 +859,16 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(l, "/shows/") {
 		s := strings.Split(p, "/")
+		if len(s) == 3 {
+			a.single(w, r, u, s[2])
+			return
+		}
 		if len(s) > 3 {
+			switch strings.ToLower(s[3]) {
+			case "extras", "intros", "themesongs", "themevideos", "specialfeatures":
+				respond(w, M{"Items": []M{}, "TotalRecordCount": 0, "StartIndex": 0})
+				return
+			}
 			r.URL.RawQuery = r.URL.Query().Encode() + "&ParentId=" + url.QueryEscape(s[2])
 			a.items(w, r, u, false)
 			return
@@ -788,20 +878,33 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) users() []M {
 	out := []M{}
+	// Collect rows before building DTOs: userDTO/canPlay issue nested queries,
+	// which would deadlock on a single-connection pool while the rows cursor holds it.
 	rows, e := a.db.Query("SELECT id,name,hash,admin,first_admin,max_devices FROM users ORDER BY first_admin DESC,name")
 	if e != nil {
 		return out
 	}
-	defer rows.Close()
+	type userRow struct {
+		u    User
+		last int64
+	}
+	list := []userRow{}
 	for rows.Next() {
-		var u User
-		if rows.Scan(&u.ID, &u.Name, &u.Hash, &u.Admin, &u.First, &u.Max) == nil {
-			dto := a.userDTO(u)
-			var last int64
-			a.db.QueryRow("SELECT last_login FROM user_logins WHERE user_id=?", u.ID).Scan(&last)
-			dto["LastLoginDate"] = last
-			out = append(out, dto)
+		var r userRow
+		if rows.Scan(&r.u.ID, &r.u.Name, &r.u.Hash, &r.u.Admin, &r.u.First, &r.u.Max) == nil {
+			list = append(list, r)
 		}
+	}
+	rows.Close()
+	if e := rows.Err(); e != nil {
+		return out
+	}
+	for _, r := range list {
+		dto := a.userDTO(r.u)
+		if err := a.db.QueryRow("SELECT last_login FROM user_logins WHERE user_id=?", r.u.ID).Scan(&r.last); err == nil && r.last > 0 {
+			dto["LastLoginDate"] = time.Unix(r.last, 0).UTC().Format("2006-01-02T15:04:05.0000000Z")
+		}
+		out = append(out, dto)
 	}
 	return out
 }
@@ -1313,7 +1416,7 @@ func (a *App) items(w http.ResponseWriter, r *http.Request, u User, latest bool)
 	}
 	if ids := q(r, "Ids"); ids != "" {
 		parts := strings.Split(ids, ",")
-		if len(parts) > 200 {
+		if len(parts) > 1000 {
 			fail(w, 400, "too many ids")
 			return
 		}
@@ -1386,7 +1489,7 @@ func (a *App) items(w http.ResponseWriter, r *http.Request, u User, latest bool)
 	loaded, p, next, more, e := a.pageItems(r, u, where, args, order, limit)
 	if e != nil {
 		log.Printf("items query: %v", e)
-		fail(w, 400, "查询失败: "+e.Error())
+		fail(w, 500, "查询失败: "+e.Error())
 		return
 	}
 	if !u.API && browseMediaDetails(r) && len(loaded) == 1 && loaded[0].ID == strings.TrimSpace(q(r, "Ids")) && a.probeSettings().Browse {
