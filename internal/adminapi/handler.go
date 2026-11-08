@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"xiaoya-media-server/internal/config"
 	"xiaoya-media-server/internal/embyserver"
@@ -335,6 +336,9 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			// 1. 若显式指定从 AList 实时网盘目录入库
 			if strings.EqualFold(req.Source, "alist") && h.importer != nil {
 				sum, err := h.importer.Import(ctx, req)
+				if track && h.pipeline != nil && h.pipeline.Discovery() != nil {
+					_, _ = h.pipeline.Discovery().RegisterMonitorRoots(ctx, []string{req.Path}, 10*time.Minute)
+				}
 				if err != nil || sum.FailedFiles > 0 {
 					if sum.ImportedFiles > 0 {
 						return "PARTIAL", sum, err
@@ -346,6 +350,9 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 
 			// 2. 默认走官方权威清单 strm.txt 流式毫秒级匹配入库（彻底替代 SQLite）
 			batch, err := h.pipeline.ImportManifestPath(ctx, req.Path, req.LibraryID, req.OutputDir, &track)
+			if track && h.pipeline != nil && h.pipeline.Discovery() != nil {
+				_, _ = h.pipeline.Discovery().RegisterMonitorRoots(ctx, []string{req.Path}, 10*time.Minute)
+			}
 			sum := alist.ImportSummary{
 				SourcePath: req.Path, BatchID: batch.ID, ImportedFiles: int(batch.TotalSeen),
 				FailedFiles: int(batch.FailedCount), TrackingEnabled: track,

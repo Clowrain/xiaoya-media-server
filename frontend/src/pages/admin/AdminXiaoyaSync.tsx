@@ -252,6 +252,12 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
     try {
       const job = await importResource(itemPath, item.is_dir, track, libraryID, outputDir, browseSource);
       setJobs(current => [job, ...current.filter(j => j.id !== job.id)]);
+      if (track) {
+        notifyToast('已提交整剧追更，监控目录已同步添加', 'success');
+        setTimeout(() => loadSystemInfo(), 500);
+      } else {
+        notifyToast('单次入库任务已提交', 'success');
+      }
     } catch (err: any) {
       notifyToast(err.message || '导入资源失败', 'error');
     }

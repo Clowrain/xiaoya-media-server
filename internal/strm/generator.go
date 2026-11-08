@@ -293,16 +293,12 @@ func (e *Engine) writeOwnedSTRM(ctx context.Context, root string, res discovery.
 	fresh := p == ""
 	if fresh {
 		var base string
-		if res.OriginType == discovery.OriginXiaoyaSQLite {
-			var standard bool
-			base, standard, err = MapStandardEpisodePath(root, res.SourcePath, res.RelPath, e.cfg.PreserveSourceStructure, e.cfg.MaxPathLength, e.tracker)
-			if err != nil {
-				return "", err
-			}
-			if !standard {
-				base, err = MapLocalSTRMPath(root, res.SourcePath, res.RelPath, e.cfg.PreserveSourceStructure, e.cfg.MaxPathLength, nil)
-			}
-		} else {
+		var standard bool
+		base, standard, err = MapStandardEpisodePath(root, res.SourcePath, res.RelPath, e.cfg.PreserveSourceStructure, e.cfg.MaxPathLength, e.tracker)
+		if err != nil {
+			return "", err
+		}
+		if !standard {
 			base, err = MapLocalSTRMPath(root, res.SourcePath, res.RelPath, e.cfg.PreserveSourceStructure, e.cfg.MaxPathLength, nil)
 		}
 		if err != nil {
