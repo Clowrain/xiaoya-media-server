@@ -28,10 +28,12 @@ type Service struct {
 	writes    sync.Mutex
 	scanMu    sync.Mutex
 	running   map[string]string
+	versionMu sync.Mutex
+	dataVers  map[string]int64
 }
 
 func NewService(store *SQLStore, reader *xiaoya.Reader, processor ResourceProcessor) *Service {
-	s := &Service{store: store, processor: processor, running: map[string]string{}}
+	s := &Service{store: store, processor: processor, running: map[string]string{}, dataVers: map[string]int64{}}
 	s.SetReader(reader)
 	return s
 }
@@ -144,9 +146,9 @@ func (s *Service) scan(ctx context.Context, id string, full bool) (SyncBatch, er
 		return s.failBatch(batch, errors.New("小雅 SQLite 未连接"))
 	}
 
-	var nodes []xiaoya.Node
 	var rootNode xiaoya.Node
 	var high int64
+	var dataVersion int64
 	err = reader.WithSnapshot(ctx, func(view *xiaoya.Reader) error {
 		var e error
 		rootNode, e = view.ResolvePath(ctx, root.RootPath)
@@ -157,12 +159,33 @@ func (s *Service) scan(ctx context.Context, id string, full bool) (SyncBatch, er
 		if e != nil {
 			return e
 		}
+		dataVersion, e = view.DataVersion(ctx)
+		if e != nil {
+			return e
+		}
 		// A replaced root or source database must be reconciled before reusing its old cursor.
 		if !full && (cursor.RootNodeID != rootNode.ID || high < cursor.LastMaxNodeID) {
 			full = true
 			batch.ScanMode = ScanModeFull
 		}
-		collect := func(page []xiaoya.Node) error { nodes = append(nodes, page...); return nil }
+		if !full && has && dataVersion > 0 {
+			s.versionMu.Lock()
+			unchanged := s.dataVers[id] == dataVersion
+			s.versionMu.Unlock()
+			if unchanged {
+				batch.Status = BatchSuccess
+				batch.FinishedAt = time.Now().Unix()
+				return nil
+			}
+		}
+		collect := func(page []xiaoya.Node) error {
+			batch.TotalSeen += int64(len(page))
+			pending, chunkErr := s.commitSQLiteChunk(ctx, &batch, rootNode.ID, page)
+			if chunkErr != nil {
+				return chunkErr
+			}
+			return s.materializePending(ctx, &batch, pending)
+		}
 		if full {
 			_, e = view.WalkSubtreeBatched(ctx, rootNode, 500, collect)
 			return e
@@ -172,16 +195,31 @@ func (s *Service) scan(ctx context.Context, id string, full bool) (SyncBatch, er
 	if err != nil {
 		return s.failBatch(batch, err)
 	}
-	batch.TotalSeen = int64(len(nodes))
+	if batch.Status == BatchSuccess && batch.TotalSeen == 0 && !full {
+		batch.MaxSourceNodeID = high
+		if err := s.store.FinishBatch(ctx, batch); err != nil {
+			return s.failBatch(batch, err)
+		}
+		if err := s.store.UpdateMonitorRootStatus(ctx, id, high, batch.ID, BatchSuccess, "", batch.FinishedAt); err != nil {
+			return s.failBatch(batch, err)
+		}
+		return batch, nil
+	}
 	batch.MaxSourceNodeID = high
-	pending, err := s.commitSQLite(ctx, &batch, rootNode.ID, cursor, nodes, full)
+	err = s.finalizeSQLiteScan(ctx, &batch, rootNode.ID, cursor, full)
 	if err != nil {
 		return s.failBatch(batch, err)
 	}
-	return s.finishMaterialization(ctx, batch, pending, rootNode.ID)
+	s.versionMu.Lock()
+	s.dataVers[id] = dataVersion
+	s.versionMu.Unlock()
+	return s.finishMaterialization(ctx, batch, nil, rootNode.ID)
 }
 
-func (s *Service) commitSQLite(ctx context.Context, batch *SyncBatch, rootNode int64, cursor SyncCursor, nodes []xiaoya.Node, full bool) ([]string, error) {
+// commitSQLiteChunk applies one bounded reader page. It intentionally looks up
+// prior rows by the stable SQLite node key instead of loading the entire root
+// into a Go map.
+func (s *Service) commitSQLiteChunk(ctx context.Context, batch *SyncBatch, rootNode int64, nodes []xiaoya.Node) ([]string, error) {
 	s.writes.Lock()
 	defer s.writes.Unlock()
 	tx, err := s.store.db.BeginTx(ctx, nil)
@@ -189,43 +227,27 @@ func (s *Service) commitSQLite(ctx context.Context, batch *SyncBatch, rootNode i
 		return nil, err
 	}
 	defer tx.Rollback()
-	existing, err := s.store.loadRootResources(ctx, tx, batch.RootID)
-	if err != nil {
-		return nil, err
-	}
 	exclusions, err := s.store.suppressions(ctx, tx, OriginXiaoyaSQLite)
 	if err != nil {
 		return nil, err
 	}
-	seen := make(map[string]bool, len(nodes))
-	var pending []string
 	now := time.Now().Unix()
+	var pending []string
 	for _, n := range nodes {
 		key := "sqlite:" + strconv.FormatInt(n.ID, 10)
-		seen[key] = true
-		old, ok := existing[key]
-		if !ok {
-			old, ok, err = s.store.resourceByKey(ctx, tx, key)
-			if err != nil {
-				return nil, err
-			}
+		old, exists, lookupErr := s.store.resourceByKey(ctx, tx, key)
+		if lookupErr != nil {
+			return nil, lookupErr
 		}
 		r := MediaResource{ID: StableID(key), SourceKey: key, OriginType: OriginXiaoyaSQLite, RootID: batch.RootID,
 			SourceNodeID: n.ID, SourceParentID: n.ParentID, SourcePath: n.FullPath, RelPath: n.RelPath, Name: n.Name, IsDir: n.IsDir, SourceContent: n.Content}
 		if suppressed(exclusions, r) {
-			// Track the location of an explicitly suppressed directory by node identity.
 			if _, err = tx.ExecContext(ctx, s.store.rebind("UPDATE resource_suppressions SET source_path=? WHERE resource_id=? AND source_path<>?"), r.SourcePath, r.ID, r.SourcePath); err != nil {
 				return nil, err
 			}
-			for i := range exclusions {
-				if exclusions[i].id == r.ID {
-					exclusions[i].path = r.SourcePath
-				}
-			}
 			continue
 		}
-		// For overlapping roots, keep one stable resource row and its existing owner when possible.
-		if ok && old.RootID != batch.RootID && old.RootID != "" {
+		if exists && old.RootID != batch.RootID && old.RootID != "" {
 			var other string
 			err = tx.QueryRowContext(ctx, s.store.rebind("SELECT root_path FROM monitor_roots WHERE id=?"), old.RootID).Scan(&other)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -233,30 +255,65 @@ func (s *Service) commitSQLite(ctx context.Context, batch *SyncBatch, rootNode i
 			}
 			if other != "" && hasPathPrefix(r.SourcePath, other) {
 				r.RootID = old.RootID
-				// Relative mapping belongs to the owner if it already monitors this path.
 				r.RelPath = r.SourcePath[len(other)+1:]
 			}
 		}
-		queued, e := s.recordObservation(ctx, tx, batch, r, old, ok, ManageAutoMonitor, "", "", now)
-		if e != nil {
-			return nil, e
+		queued, err := s.recordObservation(ctx, tx, batch, r, old, exists, ManageAutoMonitor, "", "", now)
+		if err != nil {
+			return nil, err
 		}
 		if queued {
 			pending = append(pending, r.ID)
 		}
 	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	_ = rootNode // retained in the signature to document the scan ownership.
+	return pending, nil
+}
+
+func (s *Service) finalizeSQLiteScan(ctx context.Context, batch *SyncBatch, rootNode int64, cursor SyncCursor, full bool) error {
+	s.writes.Lock()
+	defer s.writes.Unlock()
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
 	if full {
-		for k, r := range existing {
-			if !seen[k] && r.OriginType == OriginXiaoyaSQLite && !suppressed(exclusions, r) {
-				if err = s.store.markMissing(ctx, tx, batch, r, now); err != nil {
-					return nil, err
-				}
+		exclusions, e := s.store.suppressions(ctx, tx, OriginXiaoyaSQLite)
+		if e != nil {
+			return e
+		}
+		rows, e := tx.QueryContext(ctx, s.store.rebind("SELECT "+mediaResourceCols+" FROM media_resources WHERE root_id=? AND origin_type=? AND status=? AND last_seen_batch_id<>? ORDER BY id"), batch.RootID, OriginXiaoyaSQLite, StatusActive, batch.ID)
+		if e != nil {
+			return e
+		}
+		for rows.Next() {
+			r, scanErr := scanMediaResource(rows)
+			if scanErr != nil {
+				rows.Close()
+				return scanErr
+			}
+			if suppressed(exclusions, r) {
+				continue
+			}
+			if e = s.store.markMissing(ctx, tx, batch, r, now); e != nil {
+				rows.Close()
+				return e
 			}
 		}
+		if e = rows.Err(); e != nil {
+			rows.Close()
+			return e
+		}
+		rows.Close()
 		cursor.LastCompleteScanAt = now
 	}
 	if _, err = tx.ExecContext(ctx, s.store.rebind("UPDATE sync_batches SET scan_mode=? WHERE id=?"), batch.ScanMode, batch.ID); err != nil {
-		return nil, err
+		return err
 	}
 	cursor.RootID = batch.RootID
 	cursor.RootNodeID = rootNode
@@ -264,12 +321,93 @@ func (s *Service) commitSQLite(ctx context.Context, batch *SyncBatch, rootNode i
 	cursor.LastSuccessBatchID = batch.ID
 	cursor.UpdatedAt = now
 	if err = s.store.saveCursor(ctx, tx, cursor); err != nil {
-		return nil, err
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Service) materializePending(ctx context.Context, batch *SyncBatch, pending []string) error {
+	for _, id := range pending {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		res, err := s.ReprocessResource(ctx, id)
+		if err == nil {
+			if identityErr := s.PersistV2Identity(ctx, res); identityErr != nil {
+				batch.FailedCount++
+				if batch.ErrorMessage == "" {
+					batch.ErrorMessage = identityErr.Error()
+				}
+			}
+		}
+		if err == nil && strings.EqualFold(filepath.Ext(res.LocalSTRMPath), ".strm") {
+			batch.MaterializedSTRMs = append(batch.MaterializedSTRMs, res.LocalSTRMPath)
+		}
+		if err != nil && !errors.Is(err, ErrResourceUnmanaged) && !errors.Is(err, ErrResourceMissing) {
+			batch.FailedCount++
+			if batch.ErrorMessage == "" {
+				batch.ErrorMessage = err.Error()
+			}
+		}
+	}
+	return nil
+}
+
+// PersistV2Identity stores the deterministic identity and playback version
+// produced from one SQLite resource. Provider matching can update the same
+// rows later without changing the source key or output path.
+func (s *Service) PersistV2Identity(ctx context.Context, res MediaResource) error {
+	identity := ParseMediaIdentity(res)
+	if identity.MediaType == "" {
+		return nil
+	}
+	now := time.Now().Unix()
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	mediaID := identity.ParentID
+	if identity.MediaType == "MOVIE" {
+		mediaID = StableID("media:MOVIE:" + identity.Title + ":" + strconv.Itoa(identity.Year))
+	} else {
+		if _, err = tx.ExecContext(ctx, s.store.rebind(`INSERT INTO media_items_v2(id,media_type,title,sort_title,year,state,revision,created_at,updated_at)
+VALUES(?,?,?,?,?,'ACTIVE',1,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,year=excluded.year,updated_at=excluded.updated_at`),
+			identity.ParentID, "SERIES", identity.Title, identity.Title, identity.Year, now, now); err != nil {
+			return err
+		}
+	}
+	if identity.MediaType == "MOVIE" {
+		if _, err = tx.ExecContext(ctx, s.store.rebind(`INSERT INTO media_items_v2(id,media_type,title,sort_title,year,parent_id,season_number,episode_number,state,revision,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?, 'ACTIVE',1,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,year=excluded.year,updated_at=excluded.updated_at`),
+			mediaID, identity.MediaType, identity.Title, identity.Title, identity.Year, "", 0, 0, now, now); err != nil {
+			return err
+		}
+	} else {
+		mediaID = StableID("media:EPISODE:" + identity.ParentID + ":" + strconv.Itoa(identity.SeasonNumber) + ":" + strconv.Itoa(identity.EpisodeNumber))
+		if _, err = tx.ExecContext(ctx, s.store.rebind(`INSERT INTO media_items_v2(id,media_type,title,sort_title,year,parent_id,season_number,episode_number,state,revision,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?, 'ACTIVE',1,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,parent_id=excluded.parent_id,season_number=excluded.season_number,episode_number=excluded.episode_number,updated_at=excluded.updated_at`),
+			mediaID, "EPISODE", identity.Title, identity.Title, identity.Year, identity.ParentID, identity.SeasonNumber, identity.EpisodeNumber, now, now); err != nil {
+			return err
+		}
+	}
+	recID := StableID("recognition:" + res.ID)
+	if _, err = tx.ExecContext(ctx, s.store.rebind(`INSERT INTO recognition_results(id,source_resource_id,media_type,title,year,season_number,episode_number,evidence,state,revision,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_resource_id) DO UPDATE SET media_type=excluded.media_type,title=excluded.title,year=excluded.year,season_number=excluded.season_number,episode_number=excluded.episode_number,evidence=excluded.evidence,state=excluded.state,revision=recognition_results.revision+1,updated_at=excluded.updated_at`),
+		recID, res.ID, identity.MediaType, identity.Title, identity.Year, identity.SeasonNumber, identity.EpisodeNumber, identity.Evidence, identity.State, 1, now); err != nil {
+		return err
+	}
+	versionID := StableID("version:" + mediaID + ":" + res.ID)
+	if _, err = tx.ExecContext(ctx, s.store.rebind(`INSERT INTO media_versions_v2(id,media_id,source_resource_id,label,stream_uri,revision,updated_at)
+VALUES(?,?,?,?,?,1,?) ON CONFLICT(media_id,source_resource_id) DO UPDATE SET stream_uri=excluded.stream_uri,revision=media_versions_v2.revision+1,updated_at=excluded.updated_at`),
+		versionID, mediaID, res.ID, res.Name, res.SourceContent, now); err != nil {
+		return err
 	}
 	if err = tx.Commit(); err != nil {
-		return nil, err
+		return err
 	}
-	return pending, nil
+	_, err = s.store.EnqueueV2Job(ctx, "metadata_match", res.ID, res.LastChangedAt, `{"resource_id":"`+res.ID+`"}`, now)
+	return err
 }
 
 func hasPathPrefix(p, base string) bool {
@@ -323,6 +461,12 @@ func (s *Service) recordObservation(ctx context.Context, tx *sql.Tx, b *SyncBatc
 		r.LastError = ""
 		r.RetryCount = 0
 		r.LastChangedAt = now
+	}
+	if exists && len(changes) == 0 && old.Status == StatusActive && old.NameHash == r.NameHash && old.PathHash == r.PathHash && old.ContentHash == r.ContentHash && old.SnapshotHash == r.SnapshotHash {
+		// A successful observation still advances the batch proof used by full
+		// scans, but an unchanged resource does not need a full-row upsert.
+		_, err := tx.ExecContext(ctx, s.store.rebind("UPDATE media_resources SET last_seen_batch_id=?, last_seen_at=? WHERE id=?"), b.ID, now, old.ID)
+		return false, err
 	}
 	if err := s.store.UpsertResource(ctx, tx, r); err != nil {
 		return false, err
@@ -444,13 +588,19 @@ func (s *Service) RestoreManagement(ctx context.Context, id string) error {
 type ManualNode struct {
 	Path, RelPath, Name, Content string
 	IsDir                        bool
+	SourceNodeID, SourceParentID int64
 }
 
 type ManualSnapshot struct {
 	RootPath, Mode, LibraryID, OutputDir string
-	Nodes                                []ManualNode
-	Missing                              []string // verified absent paths only
-	Track                                *bool    // nil preserves the tracking preference
+	// OriginType selects the authoritative source for this snapshot.  Existing
+	// callers default to AList manual import; SQLite-resolved imports set
+	// OriginXiaoyaSQLite so downstream keys and suppression rules stay aligned
+	// with the sole resource source policy.
+	OriginType string
+	Nodes      []ManualNode
+	Missing    []string // verified absent paths only
+	Track      *bool    // nil preserves the tracking preference
 }
 
 func (s *Service) ApplyManualSnapshot(ctx context.Context, m ManualSnapshot) (SyncBatch, []MediaResource, error) {
@@ -486,15 +636,28 @@ func (s *Service) commitManual(ctx context.Context, b *SyncBatch, m ManualSnapsh
 		return nil, nil, err
 	}
 	defer tx.Rollback()
-	exclusions, err := s.store.suppressions(ctx, tx, OriginAListManual)
+	origin := m.OriginType
+	if origin == "" {
+		origin = OriginAListManual
+	}
+	keyPrefix := "alist:"
+	if origin == OriginXiaoyaSQLite {
+		keyPrefix = "xiaoya:"
+	}
+	exclusions, err := s.store.suppressions(ctx, tx, origin)
 	if err != nil {
 		return nil, nil, err
 	}
 	now := time.Now().Unix()
 	var pending, ids []string
 	for _, n := range m.Nodes {
-		key := "alist:" + n.Path
-		r := MediaResource{ID: StableID(key), SourceKey: key, OriginType: OriginAListManual, SourcePath: n.Path, RelPath: n.RelPath, Name: n.Name, IsDir: n.IsDir, SourceContent: n.Content}
+		key := keyPrefix + n.Path
+		sourceNodeID, sourceParentID := int64(0), int64(0)
+		if origin == OriginXiaoyaSQLite && n.SourceNodeID > 0 {
+			key = "sqlite:" + strconv.FormatInt(n.SourceNodeID, 10)
+			sourceNodeID, sourceParentID = n.SourceNodeID, n.SourceParentID
+		}
+		r := MediaResource{ID: StableID(key), SourceKey: key, OriginType: origin, SourceNodeID: sourceNodeID, SourceParentID: sourceParentID, SourcePath: n.Path, RelPath: n.RelPath, Name: n.Name, IsDir: n.IsDir, SourceContent: n.Content}
 		if suppressed(exclusions, r) {
 			if n.Path == m.RootPath && m.Track != nil {
 				return nil, nil, ErrResourceUnmanaged
@@ -526,7 +689,7 @@ func (s *Service) commitManual(ctx context.Context, b *SyncBatch, m ManualSnapsh
 		}
 	}
 	for _, p := range m.Missing {
-		r, ok, e := s.store.resourceByKey(ctx, tx, "alist:"+p)
+		r, ok, e := s.store.resourceByKey(ctx, tx, keyPrefix+p)
 		if e != nil {
 			return nil, nil, e
 		}
@@ -536,7 +699,7 @@ func (s *Service) commitManual(ctx context.Context, b *SyncBatch, m ManualSnapsh
 			}
 		}
 	}
-	if m.Track != nil {
+	if m.Track != nil && origin == OriginAListManual {
 		id := StableID("alist:" + m.RootPath)
 		if *m.Track {
 			_, err = tx.ExecContext(ctx, s.store.rebind("INSERT INTO alist_tracking_roots(resource_id,review) VALUES(?,0) ON CONFLICT(resource_id) DO UPDATE SET review=0"), id)

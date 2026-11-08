@@ -179,6 +179,53 @@ type ScheduledTaskState struct {
 	LastError      string `json:"last_error"`
 }
 
+// V2WorkJob is the durable unit used by synchronization, recognition and
+// publication workers. Payloads are intentionally opaque JSON so retries do
+// not depend on in-memory queue state.
+type V2WorkJob struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	ScopeKey    string `json:"scope_key"`
+	Revision    int64  `json:"revision"`
+	Payload     string `json:"payload"`
+	Status      string `json:"status"`
+	Attempts    int64  `json:"attempts"`
+	AvailableAt int64  `json:"available_at"`
+	LeaseUntil  int64  `json:"lease_until"`
+	Worker      string `json:"worker"`
+	LastError   string `json:"last_error"`
+	CreatedAt   int64  `json:"created_at"`
+	UpdatedAt   int64  `json:"updated_at"`
+}
+
+// ParsedMediaIdentity is the deterministic, network-free part of recognition.
+// External-provider matching is intentionally a later state transition.
+type ParsedMediaIdentity struct {
+	MediaType     string `json:"media_type"`
+	Title         string `json:"title"`
+	Year          int    `json:"year"`
+	ParentID      string `json:"parent_id"`
+	SeasonNumber  int    `json:"season_number"`
+	EpisodeNumber int    `json:"episode_number"`
+	State         string `json:"state"`
+	Evidence      string `json:"evidence"`
+}
+
+type RecognitionPending struct {
+	ID            string `json:"id"`
+	ResourceID    string `json:"resource_id"`
+	SourcePath    string `json:"source_path"`
+	MediaType     string `json:"media_type"`
+	Title         string `json:"title"`
+	Year          int    `json:"year"`
+	SeasonNumber  int    `json:"season_number"`
+	EpisodeNumber int    `json:"episode_number"`
+	State         string `json:"state"`
+	Evidence      string `json:"evidence"`
+	ExternalID    string `json:"external_id"`
+	UpdatedAt     int64  `json:"updated_at"`
+}
+
 // CleanupImpactPreview describes affected artifacts before manual cleanup confirmation (`keep` policy).
 type CleanupImpactPreview struct {
 	ResourceID        string   `json:"resource_id"`

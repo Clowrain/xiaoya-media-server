@@ -1,23 +1,23 @@
 # Xiaoya Media Server
 
-基于 [`go-emby`](https://github.com/sd87671067/go-emby) 演进的**一体化小雅资源监控、Python 兼容 STRM 引擎、AList 浏览入库、TMDB/NFO 元数据刮削与 Emby 兼容媒体服务器**（V1.0）。
+基于 [`go-emby`](https://github.com/sd87671067/go-emby) 演进的**小雅 SQLite 资源监控、标准 STRM/NFO 生成、TMDB 元数据刮削与 Emby 兼容媒体服务器**（V2 基础链路）。
 
 ---
 
 ## 核心特性
 
 1. **Emby 兼容播放与网页管理**
-   - 网页用于浏览影库、管理媒体库和资源。使用 Infuse、VidHub、SenPlayer 等 Emby 兼容客户端播放，支持 302 直链重定向播放、过期 `?sign=...` 自动刷新回退、外挂字幕发现与 `.srt -> WebVTT` 动态转换、播放进度续播与真实 `/Shows/NextUp` 下一集推荐。
+   - 网页默认进入影视墙，管理员通过 `/web/manage/` 进入管理界面。使用 Infuse、VidHub、SenPlayer 等 Emby 兼容客户端播放，支持 302 直链重定向、外挂字幕发现与 `.srt -> WebVTT` 动态转换、播放进度续播与真实 `/Shows/NextUp` 下一集推荐。
 2. **小雅 SQLite 零侵入只读目录监控**
-   - 通过 `mode=ro` + `PRAGMA query_only=1` 只读消费小雅 `strm_internal.db`（WAL 安全），支持精确路径注册与按需监控，建立基线快照、分钟级 `id > last_max_node_id` 增量发现与全树差异对账。
+   - 通过 `mode=ro` + `PRAGMA query_only=1` 只读消费小雅 `strm_internal.db`（WAL 安全），支持精确路径注册与按需监控，建立基线快照、`id > last_max_node_id` 增量发现、`data_version` 无变化跳过与全树差异对账。
 3. **按 `strm.py` 和 `strm2.py` 规则生成 STRM 与附件**
-   - 覆盖两份脚本的媒体扩展名并集、字幕和图片等附件，支持无后缀分集节点（如 `E01..E27`）、原子写入和重启后复用 STRM 路径。规则片段用 Python 对照，特殊路径、签名和附件另有回归测试。
+   - 覆盖两份脚本的媒体扩展名并集、字幕和图片等附件；SQLite 来源的平铺数字分集会生成 `Season 1/<剧名> - S01E01.strm` 和基础 NFO；文件采用原子写入并在重启后复用路径。
 4. **`prefer` NFO 优先策略 + TMDB v3 自动刮削**
    - 本地有效非空 NFO 优先采用（自动过滤空白页、HTML 错误页与 JSON 报错）；缺失 NFO 时识别 `{tmdb-*}` 或片名年份自动调用 TMDB v3 刮削中文剧集/季/集/电影海报与演职员，刮削异常绝不阻塞入库与播放。
 5. **`keep` 源端缺失保护策略**
    - 仅完整无错扫描可标记资源 `MISSING`（扫描异常绝不推进游标或误标缺失），完整保留本地 STRM/NFO/字幕/图片与用户观看进度；源端恢复自动 `RESTORED`；管理员可预览并确认取消管理；本地文件、媒体条目和观看记录继续保留。
-6. **AList 目录浏览、关键词搜索与一键人工入库**
-   - 后台直接浏览与搜索小雅 AList 全量目录，支持单文件入库及整部剧集目录入库（可选开启自动追更），纳入同一统一资源台账与周期调度体系。
+6. **AList 目录浏览、关键词搜索与 SQLite 校验入库**
+   - 后台仅使用 AList 浏览与搜索；管理员选择路径后由服务回到 SQLite 读取并入库。后台追更统一由 SQLite 监控目录驱动。
 
 ---
 
@@ -25,7 +25,7 @@
 
 ```text
 xiaoya-media-server/
-├── cmd/server/                 # 统一服务入口（装配 Emby + Pipeline + AList + Scheduler + AdminAPI）
+├── cmd/server/                 # 统一服务入口（装配 Emby + SQLite Pipeline + AList 浏览 + Scheduler + AdminAPI）
 ├── configs/                    # YAML 配置示例 (config.example.yaml)
 ├── deployments/                # 生产多阶段 Dockerfile、compose.yaml 与 .env.example
 ├── docs/                       # 技术方案、架构规划、部署指南与验收清单
@@ -37,7 +37,7 @@ xiaoya-media-server/
 │   ├── integration/            # 监控发现 -> STRM 落地 -> 局部媒体库刷新一体化流水线
 │   ├── metadata/tmdb/          # TMDB v3 客户端与 {tmdb-*} / SxxExx 命名解析器
 │   ├── resource/
-│   │   ├── alist/              # AList v3 客户端、分页浏览/搜索与单文件/整剧追更入库器
+│   │   ├── alist/              # AList v3 客户端与分页浏览/搜索适配
 │   │   ├── discovery/          # 基线快照、增量游标、状态机、keep 保护与统一存储层
 │   │   └── xiaoya/             # 小雅 SQLite 纯 Go 只读驱动与子树遍历器
 │   ├── scheduler/              # 后台周期调度任务与防重入执行器
@@ -91,6 +91,7 @@ go test ./...
 
 ## 文档索引
 
+- [小雅 SQLite → 标准刮削 → Emby 展示重构方案（实施中，含低配置 NAS 性能设计）](docs/XIAOYA-MEDIA-PIPELINE-V2.md)
 - [完整技术方案 V1.0](docs/TECHNICAL-SPEC.md)
 - [Python STRM 兼容规则审计](docs/STRM-RULES-AUDIT.md)
 - [`go-emby` 基线源码审计报告](docs/GO-EMBY-SOURCE-AUDIT.md)

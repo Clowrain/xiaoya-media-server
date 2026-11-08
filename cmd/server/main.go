@@ -64,9 +64,8 @@ func main() {
 			pipe.FlushScopedLibraryScans(paths...)
 		})
 		imp.SetLibraryTarget(app.ResolveImportTarget, app.UnmatchedLibraryPaths)
-		app.SetAListPlayback(alistCli.BaseURL(), alistCli.PlaybackFile)
 
-		sched := scheduler.New(store, pipe, imp, cfg.Monitor.Interval, cfg.Monitor.Enabled)
+		sched := scheduler.New(store, pipe, cfg.Monitor.Interval, cfg.Monitor.Enabled)
 
 		adminHandler := adminapi.NewHandler(cfg, store, pipe, imp, sched)
 		if err := adminHandler.Start(ctx); err != nil {

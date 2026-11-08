@@ -83,6 +83,46 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 		}
 		writeJSON(w, 200, map[string]any{"items": items})
 		return true
+	case p == "/api/recognition/pending":
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "GET required")
+			return true
+		}
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		items, err := h.store.ListV2RecognitionPending(ctx, limit)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return true
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items)})
+		return true
+	case strings.HasPrefix(p, "/api/recognition/") && strings.HasSuffix(p, "/confirm"):
+		if r.Method != http.MethodPost {
+			writeErr(w, http.StatusMethodNotAllowed, "POST required")
+			return true
+		}
+		resourceID := strings.TrimSuffix(strings.TrimPrefix(p, "/api/recognition/"), "/confirm")
+		if resourceID == "" {
+			writeErr(w, http.StatusBadRequest, "resource_id 不能为空")
+			return true
+		}
+		var req struct {
+			ExternalID string `json:"external_id"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, "无效 JSON 请求")
+			return true
+		}
+		if h.pipeline == nil {
+			writeErr(w, http.StatusServiceUnavailable, "识别管线未配置")
+			return true
+		}
+		if err := h.pipeline.ConfirmMetadataMatch(ctx, resourceID, req.ExternalID); err != nil {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return true
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"resource_id": resourceID, "status": "MATCHED"})
+		return true
 	case p == "/api/alist/tracking-review":
 		if r.Method != http.MethodGet {
 			writeErr(w, 405, "GET required")
@@ -251,8 +291,8 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			writeErr(w, http.StatusMethodNotAllowed, "POST required")
 			return true
 		}
-		if h.importer == nil {
-			writeErr(w, http.StatusServiceUnavailable, "AList 入库器未配置")
+		if h.pipeline == nil {
+			writeErr(w, http.StatusServiceUnavailable, "SQLite 入库管线未配置")
 			return true
 		}
 		var req alist.ImportRequest
@@ -265,14 +305,20 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			return true
 		}
 		scope := "import:" + alist.NormalizePath(req.Path)
-		if h.importer.Busy(req.Path) {
+		if h.importer != nil && h.importer.Busy(req.Path) {
 			writeErr(w, 409, alist.ErrImportInProgress.Error())
 			return true
 		}
 		run := func(ctx context.Context) (string, any, error) {
-			sum, err := h.importer.Import(ctx, req)
+			track := req.TrackUpdates
+			batch, err := h.pipeline.ImportSQLitePath(ctx, req.Path, req.LibraryID, req.OutputDir, &track)
+			sum := alist.ImportSummary{
+				SourcePath: req.Path, BatchID: batch.ID, ImportedFiles: int(batch.TotalSeen),
+				FailedFiles: int(batch.FailedCount), TrackingEnabled: track,
+				GeneratedSTRMs: append([]string(nil), batch.MaterializedSTRMs...),
+			}
 			if err != nil || sum.FailedFiles > 0 {
-				embyserver.RecordGlobalLog("WARN", "scan", "AList 入库有失败项", fmt.Sprintf("%s · %d 个文件失败", sum.SourcePath, sum.FailedFiles), "", "")
+				embyserver.RecordGlobalLog("WARN", "scan", "SQLite 入库有失败项", fmt.Sprintf("%s · %d 个文件失败", sum.SourcePath, sum.FailedFiles), "", "")
 			}
 			if err != nil || sum.FailedFiles > 0 {
 				if sum.ImportedFiles > 0 {
@@ -280,8 +326,8 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 				}
 				return "FAILED", sum, err
 			}
-			if sum.ImportedFiles == 0 && sum.ImportedDirs == 0 {
-				return "FAILED", sum, errors.New("未找到可入库的资源")
+			if sum.ImportedFiles == 0 {
+				return "FAILED", sum, errors.New("SQLite 路径没有可入库的资源")
 			}
 			return "SUCCESS", sum, nil
 		}

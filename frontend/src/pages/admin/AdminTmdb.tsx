@@ -3,10 +3,10 @@ import {
   Sparkles, CheckCircle2, AlertCircle, RefreshCw, 
   Search, Link2, ExternalLink, ShieldCheck, Film 
 } from 'lucide-react';
-import { TmdbConfig, TmdbSearchResult, MediaItem } from '../../types';
+import { TmdbConfig, TmdbSearchResult, MediaItem, RecognitionPending } from '../../types';
 import { 
   fetchTmdbConfig, updateTmdbConfig, testTmdb, 
-  searchTmdb, matchTmdb, notifyToast 
+  searchTmdb, matchTmdb, fetchRecognitionPending, confirmRecognition, notifyToast
 } from '../../api/client';
 
 interface AdminTmdbProps {
@@ -42,10 +42,24 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
   const [searchResults, setSearchResults] = useState<TmdbSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const [matchingId, setMatchingId] = useState<number | null>(null);
+  const [pending, setPending] = useState<RecognitionPending[]>([]);
+  const [pendingLoading, setPendingLoading] = useState(false);
 
   useEffect(() => {
     loadConfig();
+    loadPending();
   }, []);
+
+  const loadPending = async () => {
+    setPendingLoading(true);
+    try {
+      setPending(await fetchRecognitionPending());
+    } catch (err: any) {
+      notifyToast(err.message || '加载待确认识别失败', 'error');
+    } finally {
+      setPendingLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (initialMatchItem) {
@@ -136,7 +150,12 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
     }
     setMatchingId(tmdbId);
     try {
-      await matchTmdb(searchTargetItemId, tmdbId, searchKind);
+      if (pending.some((item) => item.resource_id === searchTargetItemId)) {
+        await confirmRecognition(searchTargetItemId, tmdbId);
+        setPending((items) => items.filter((item) => item.resource_id !== searchTargetItemId));
+      } else {
+        await matchTmdb(searchTargetItemId, tmdbId, searchKind);
+      }
       notifyToast(`已成功关联 TMDB ID ${tmdbId}，刮削元数据与海报刷新中`, 'success');
     } catch (err: any) {
       notifyToast(err.message || '关联失败', 'error');
@@ -147,6 +166,49 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Deterministic V2 recognition queue */}
+      <div className="bg-zinc-900/60 border border-amber-900/60 rounded-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold text-zinc-100 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-amber-400" />
+              待确认识别 ({pending.length})
+            </h3>
+            <p className="text-xs text-zinc-400 mt-0.5">同名或无法确定季集的资源不会自动猜测，确认后才会绑定 TMDB。</p>
+          </div>
+          <button type="button" onClick={loadPending} disabled={pendingLoading} className="text-xs text-zinc-300 hover:text-white disabled:opacity-50">
+            <RefreshCw className={`w-3.5 h-3.5 inline mr-1 ${pendingLoading ? 'animate-spin' : ''}`} />刷新
+          </button>
+        </div>
+        {pending.length === 0 ? (
+          <p className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4 text-xs text-zinc-500">当前没有待确认资源。</p>
+        ) : (
+          <div className="max-h-72 overflow-y-auto divide-y divide-zinc-800 rounded-xl border border-zinc-800 bg-zinc-950/50">
+            {pending.map((item) => (
+              <button
+                type="button"
+                key={item.resource_id}
+                onClick={() => {
+                  setSearchTargetItemId(item.resource_id);
+                  setSearchTargetItemName(item.title);
+                  setSearchQuery(item.title);
+                  setSearchKind(item.media_type === 'MOVIE' ? 'movie' : 'tv');
+                  setSearchYear(item.year ? String(item.year) : '');
+                }}
+                className={`w-full px-3 py-2.5 text-left hover:bg-zinc-900 transition ${searchTargetItemId === item.resource_id ? 'bg-zinc-900' : ''}`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-zinc-200">{item.title || item.source_path}</span>
+                  <span className="text-[10px] font-mono text-amber-300">{item.media_type}{item.year ? ` · ${item.year}` : ''}</span>
+                </div>
+                <div className="mt-1 break-all text-[11px] text-zinc-500">{item.source_path}</div>
+                <div className="mt-1 text-[11px] text-zinc-500">{item.evidence || '等待人工选择 TMDB 条目'}</div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* TMDB Configuration Card */}
       <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800/80 pb-4">
@@ -294,7 +356,7 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
         {/* Search Bar */}
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 bg-zinc-950/60 p-3.5 rounded-xl border border-zinc-800">
           <div className="sm:col-span-4">
-            <label className="block text-[11px] text-zinc-500 mb-1">媒体库 Item ID (被纠偏项)</label>
+            <label className="block text-[11px] text-zinc-500 mb-1">资源 ID / 媒体库 Item ID</label>
             <input
               type="text"
               value={searchTargetItemId}

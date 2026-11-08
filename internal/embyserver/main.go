@@ -486,7 +486,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		respond(w, []any{})
 		return
 	}
-	if p == "" || l == "/web" || l == "/web/index.html" || l == "/web/dashboard.html" || l == "/index.html" || l == "/admin" || l == "/wall" {
+	if p == "" || l == "/web" || l == "/web/" || strings.HasPrefix(l, "/web/manage") || l == "/web/index.html" || l == "/web/dashboard.html" || l == "/index.html" || l == "/admin" || l == "/wall" {
 		b, _ := web.Assets.ReadFile("index.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(b)
@@ -568,7 +568,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.extHandler != nil && strings.HasPrefix(l, "/api/") {
-		if !u.Admin && !u.API {
+		if !u.Admin {
 			fail(w, 403, "需要管理员权限")
 			return
 		}

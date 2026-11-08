@@ -156,10 +156,31 @@ func (r *Reader) MaxNodeID(ctx context.Context) (int64, error) {
 	return maxID.Int64, nil
 }
 
+// DataVersion returns SQLite's connection-level change counter.  It changes
+// when another connection commits and lets the scheduler skip an unchanged
+// source before starting a subtree walk.
+func (r *Reader) DataVersion(ctx context.Context) (int64, error) {
+	var version int64
+	if err := r.query().QueryRowContext(ctx, "PRAGMA data_version").Scan(&version); err != nil {
+		return 0, err
+	}
+	return version, nil
+}
+
 // ResolvePath resolves an exact directory path segment-by-segment starting from parent_id = 0.
 // Returns ErrPathNotFound if any segment is missing, ErrAmbiguousPath if duplicate sibling names exist,
 // and ErrNotDirectory if any resolved segment is not a directory.
 func (r *Reader) ResolvePath(ctx context.Context, rootPath string) (Node, error) {
+	return r.resolvePath(ctx, rootPath, true)
+}
+
+// ResolveAnyPath resolves either a file or directory. It is used only by an
+// explicit administrator import; monitor roots continue to require a directory.
+func (r *Reader) ResolveAnyPath(ctx context.Context, rootPath string) (Node, error) {
+	return r.resolvePath(ctx, rootPath, false)
+}
+
+func (r *Reader) resolvePath(ctx context.Context, rootPath string, requireDir bool) (Node, error) {
 	normPath, segments, err := NormalizeMonitorPath(rootPath)
 	if err != nil {
 		return Node{}, err
@@ -202,7 +223,7 @@ func (r *Reader) ResolvePath(ctx context.Context, rootPath string) (Node, error)
 			return Node{}, fmt.Errorf("%w: %d sibling nodes named %q under parent_id=%d in %q", ErrAmbiguousPath, len(matches), seg, parentID, normPath)
 		}
 		current = matches[0]
-		if !current.IsDir {
+		if !current.IsDir && (requireDir || len(builtSegments) < len(segments)-1) {
 			return Node{}, fmt.Errorf("%w: segment %q (id=%d) in %q", ErrNotDirectory, seg, current.ID, normPath)
 		}
 		parentID = current.ID

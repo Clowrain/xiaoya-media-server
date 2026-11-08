@@ -112,6 +112,10 @@ func TestReaderReadOnlyAndZheYueLiangSubtree(t *testing.T) {
 	if _, err := r.ResolvePath(ctx, "/每日更新/说明.txt"); !errors.Is(err, ErrNotDirectory) {
 		t.Fatalf("expected ErrNotDirectory, got %v", err)
 	}
+	file, err := r.ResolveAnyPath(ctx, "/每日更新/说明.txt")
+	if err != nil || file.IsDir || file.Name != "说明.txt" {
+		t.Fatalf("ResolveAnyPath file got (%+v, %v)", file, err)
+	}
 
 	// Batched walk with tiny pageSize=5 to verify cursor pagination across all 30 nodes
 	var collected []Node

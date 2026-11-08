@@ -110,6 +110,11 @@ func TestDiscoveryLifecycleBaselineIncrementalDiffMissingRestore(t *testing.T) {
 	if proc.calls != 27 {
 		t.Fatalf("expected processor called for 27 file nodes, got %d", proc.calls)
 	}
+	proc.calls = 0
+	noChange, err := svc.ScanRootIncremental(ctx, rootID)
+	if err != nil || noChange.TotalSeen != 0 || proc.calls != 0 {
+		t.Fatalf("unchanged incremental scan should be skipped: batch=%+v procCalls=%d err=%v", noChange, proc.calls, err)
+	}
 
 	// 2. Unchanged second full scan: idempotent, 0 changes, 0 processor calls
 	proc.calls = 0
@@ -216,6 +221,33 @@ func TestDiscoveryLifecycleBaselineIncrementalDiffMissingRestore(t *testing.T) {
 	ep28Restored, _, _ := store.GetResourceBySourceKey(ctx, "sqlite:641746")
 	if ep28Restored.Status != StatusActive {
 		t.Fatalf("expected restored E28 Status=ACTIVE, got %+v", ep28Restored)
+	}
+}
+
+func TestV2QueueDedupLeaseAndRecovery(t *testing.T) {
+	_, _, _, store := setupTestXiaoyaAndStore(t)
+	ctx := context.Background()
+	first, err := store.EnqueueV2Job(ctx, "recognize", "sqlite:641719", 3, `{"path":"/折月亮/01.strm"}`, time.Now().Unix())
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	second, err := store.EnqueueV2Job(ctx, "recognize", "sqlite:641719", 3, `{"path":"/折月亮/01.strm"}`, time.Now().Unix())
+	if err != nil || second.ID != first.ID {
+		t.Fatalf("duplicate enqueue should reuse job: first=%+v second=%+v err=%v", first, second, err)
+	}
+	claimed, err := store.ClaimV2Job(ctx, "test-worker", time.Minute)
+	if err != nil || claimed.ID != first.ID || claimed.Status != "RUNNING" || claimed.Attempts != 1 {
+		t.Fatalf("claim=%+v err=%v", claimed, err)
+	}
+	if err := store.FailV2Job(ctx, claimed.ID, "temporary", time.Now().Unix()); err != nil {
+		t.Fatalf("fail/requeue: %v", err)
+	}
+	retried, err := store.ClaimV2Job(ctx, "test-worker-2", time.Minute)
+	if err != nil || retried.ID != first.ID || retried.Attempts != 2 {
+		t.Fatalf("reclaim=%+v err=%v", retried, err)
+	}
+	if err := store.CompleteV2Job(ctx, retried.ID); err != nil {
+		t.Fatalf("complete: %v", err)
 	}
 }
 

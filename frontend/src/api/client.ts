@@ -1,6 +1,6 @@
 import { 
   User, LibraryView, MediaItem, AdminLibrary, SystemOverview, 
-  MonitorRoot, AListBrowseResult, AdminJob, TmdbConfig, TmdbSearchResult, LogEntry
+  MonitorRoot, AListBrowseResult, AdminJob, TmdbConfig, TmdbSearchResult, RecognitionPending, LogEntry
 } from '../types';
 
 const TOKEN_KEY = 'xiaoya_token';
@@ -28,6 +28,10 @@ export function getStoredUser(): User | null {
 
 export function getStoredToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
+}
+
+export function fetchCurrentUser(userId: string): Promise<User> {
+  return request<User>(`/emby/Users/${encodeURIComponent(userId)}`);
 }
 
 export function setAuthSession(user: User, token: string) {
@@ -289,6 +293,17 @@ export async function matchTmdb(itemId: string, tmdbId: number | string, kind: s
     ItemId: itemId,
     TmdbId: String(tmdbId),
     MediaType: kind,
+  });
+}
+
+export async function fetchRecognitionPending(limit: number = 100): Promise<RecognitionPending[]> {
+  const data = await request<{ items?: RecognitionPending[] }>(`/api/recognition/pending?limit=${limit}`);
+  return data.items || [];
+}
+
+export async function confirmRecognition(resourceID: string, externalID: number | string): Promise<void> {
+  await request(`/api/recognition/${encodeURIComponent(resourceID)}/confirm`, 'POST', {
+    external_id: String(externalID),
   });
 }
 

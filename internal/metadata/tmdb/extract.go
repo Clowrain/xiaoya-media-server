@@ -74,7 +74,7 @@ func ParseSeasonEpisode(fileStem string, seasonHint int) (season int, episode in
 	// Strip trailing media extension if caller passed "E01.mp4" stem inside "E01.mp4.strm"
 	if ext := strings.ToLower(filepath.Ext(stem)); ext != "" {
 		switch ext {
-		case ".mp4", ".m4v", ".mkv", ".avi", ".ts", ".mov", ".flv", ".wmv", ".rmvb", ".webm", ".iso":
+		case ".strm", ".mp4", ".m4v", ".mkv", ".avi", ".ts", ".mov", ".flv", ".wmv", ".rmvb", ".webm", ".iso":
 			stem = strings.TrimSuffix(stem, filepath.Ext(stem))
 		}
 	}
@@ -105,12 +105,14 @@ func ParseSeasonEpisode(fileStem string, seasonHint int) (season int, episode in
 			return defSeason, e, true
 		}
 	}
-	if seasonHint > 0 {
-		if m := pureNumPattern.FindStringSubmatch(stem); len(m) == 2 {
-			e, _ := strconv.Atoi(m[1])
-			if e > 0 && e < 1900 {
-				return seasonHint, e, true
-			}
+	// A bare number is a common Xiaoya flat episode layout (01.strm, 02.strm,
+	// ...).  When the caller has no explicit Season directory, use Season 1.
+	// This parser is only used for TV episode candidates, so treating a numeric
+	// stem as an episode is preferable to dropping the item from the season.
+	if m := pureNumPattern.FindStringSubmatch(stem); len(m) == 2 {
+		e, _ := strconv.Atoi(m[1])
+		if e > 0 && e < 1900 {
+			return defSeason, e, true
 		}
 	}
 	return seasonHint, 0, false

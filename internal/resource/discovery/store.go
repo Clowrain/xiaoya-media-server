@@ -199,11 +199,151 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     last_duration_ms BIGINT NOT NULL DEFAULT 0,
     last_error TEXT NOT NULL DEFAULT ''
 );
+
+-- V2 model. These tables are additive during the development cut-over; the
+-- legacy resource tables above remain readable until the new pipeline owns all
+-- callers.
+CREATE TABLE IF NOT EXISTS media_pipeline_schema (
+    component TEXT PRIMARY KEY,
+    version BIGINT NOT NULL,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_connections (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    sqlite_path TEXT NOT NULL DEFAULT '',
+    generation BIGINT NOT NULL DEFAULT 1,
+    data_version BIGINT NOT NULL DEFAULT 0,
+    enabled BIGINT NOT NULL DEFAULT 1,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_connections_path ON source_connections(kind, sqlite_path);
+
+CREATE TABLE IF NOT EXISTS source_resources_v2 (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    source_generation BIGINT NOT NULL,
+    source_node_id BIGINT NOT NULL,
+    parent_node_id BIGINT NOT NULL DEFAULT 0,
+    path TEXT NOT NULL,
+    rel_path TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL,
+    is_dir BIGINT NOT NULL DEFAULT 0,
+    content TEXT NOT NULL DEFAULT '',
+    name_hash TEXT NOT NULL DEFAULT '',
+    path_hash TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL DEFAULT '',
+    snapshot_hash TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    first_seen_at BIGINT NOT NULL,
+    last_seen_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE(source_id, source_generation, source_node_id),
+    UNIQUE(source_id, source_generation, path)
+);
+CREATE INDEX IF NOT EXISTS idx_source_resources_v2_parent ON source_resources_v2(source_id, source_generation, parent_node_id);
+
+CREATE TABLE IF NOT EXISTS recognition_results (
+    id TEXT PRIMARY KEY,
+    source_resource_id TEXT NOT NULL UNIQUE,
+    media_type TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    year BIGINT NOT NULL DEFAULT 0,
+    external_id TEXT NOT NULL DEFAULT '',
+    season_number BIGINT NOT NULL DEFAULT 0,
+    episode_number BIGINT NOT NULL DEFAULT 0,
+    confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+    evidence TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'PENDING',
+    revision BIGINT NOT NULL DEFAULT 1,
+    last_error TEXT NOT NULL DEFAULT '',
+    updated_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recognition_results_state ON recognition_results(state, updated_at);
+
+CREATE TABLE IF NOT EXISTS media_items_v2 (
+    id TEXT PRIMARY KEY,
+    media_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    sort_title TEXT NOT NULL DEFAULT '',
+    year BIGINT NOT NULL DEFAULT 0,
+    tmdb_id TEXT NOT NULL DEFAULT '',
+    tvdb_id TEXT NOT NULL DEFAULT '',
+    poster_url TEXT NOT NULL DEFAULT '',
+    backdrop_url TEXT NOT NULL DEFAULT '',
+    logo_url TEXT NOT NULL DEFAULT '',
+    parent_id TEXT NOT NULL DEFAULT '',
+    season_number BIGINT NOT NULL DEFAULT 0,
+    episode_number BIGINT NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'ACTIVE',
+    revision BIGINT NOT NULL DEFAULT 1,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_media_items_v2_identity ON media_items_v2(media_type, title, year, parent_id, season_number, episode_number);
+
+CREATE TABLE IF NOT EXISTS media_versions_v2 (
+    id TEXT PRIMARY KEY,
+    media_id TEXT NOT NULL,
+    source_resource_id TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    stream_uri TEXT NOT NULL,
+    stable_suffix TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'ACTIVE',
+    revision BIGINT NOT NULL DEFAULT 1,
+    updated_at BIGINT NOT NULL,
+    UNIQUE(media_id, source_resource_id)
+);
+
+CREATE TABLE IF NOT EXISTS media_artifacts_v2 (
+    id TEXT PRIMARY KEY,
+    media_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_hash TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'PENDING',
+    revision BIGINT NOT NULL DEFAULT 1,
+    updated_at BIGINT NOT NULL,
+    UNIQUE(media_id, kind, path)
+);
+
+CREATE TABLE IF NOT EXISTS work_jobs_v2 (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 1,
+    payload TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'QUEUED',
+    attempts BIGINT NOT NULL DEFAULT 0,
+    available_at BIGINT NOT NULL,
+    lease_until BIGINT NOT NULL DEFAULT 0,
+    worker TEXT NOT NULL DEFAULT '',
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_work_jobs_v2_dedupe ON work_jobs_v2(kind, scope_key, revision, status);
+CREATE INDEX IF NOT EXISTS idx_work_jobs_v2_claim ON work_jobs_v2(status, available_at, lease_until);
+
+CREATE TABLE IF NOT EXISTS metadata_cache_v2 (
+    cache_key TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    expires_at BIGINT NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL
+);
 `
 
 func (s *SQLStore) EnsureSchema(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, resourceEngineDDL); err != nil {
 		return fmt.Errorf("ensure resource engine schema: %w", err)
+	}
+	if err := s.ensureV2MediaColumns(ctx); err != nil {
+		return err
 	}
 	// If `items` exists in the same DB (unified PostgreSQL), ensure `availability` column exists.
 	if s.dialect == "postgres" {
@@ -219,7 +359,53 @@ func (s *SQLStore) EnsureSchema(ctx context.Context) error {
 	if _, err = tx.ExecContext(ctx, migrations.ResourceLifecycle); err != nil {
 		return fmt.Errorf("migrate resource lifecycle: %w", err)
 	}
+	now := time.Now().Unix()
+	if _, err = tx.ExecContext(ctx, s.rebind(`
+INSERT INTO media_pipeline_schema(component, version, created_at, updated_at)
+VALUES('xiaoya-media-pipeline', 2, ?, ?)
+ON CONFLICT(component) DO UPDATE SET version=excluded.version, updated_at=excluded.updated_at`), now, now); err != nil {
+		return fmt.Errorf("record media pipeline schema: %w", err)
+	}
 	return tx.Commit()
+}
+
+func (s *SQLStore) ensureV2MediaColumns(ctx context.Context) error {
+	columns := []string{"poster_url", "backdrop_url", "logo_url"}
+	if s.dialect == "postgres" {
+		for _, column := range columns {
+			if _, err := s.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE media_items_v2 ADD COLUMN IF NOT EXISTS %s TEXT NOT NULL DEFAULT ''", column)); err != nil {
+				return fmt.Errorf("ensure media_items_v2.%s: %w", column, err)
+			}
+		}
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info(media_items_v2)")
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		seen[name] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, column := range columns {
+		if !seen[column] {
+			if _, err := s.db.ExecContext(ctx, "ALTER TABLE media_items_v2 ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''"); err != nil {
+				return fmt.Errorf("ensure media_items_v2.%s: %w", column, err)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *SQLStore) UpsertMonitorRoot(ctx context.Context, rootPath string, enabled bool, intervalSec int64) (MonitorRoot, error) {
@@ -263,6 +449,134 @@ func (s *SQLStore) GetMonitorRoot(ctx context.Context, id string) (MonitorRoot, 
 func (s *SQLStore) GetMonitorRootByPath(ctx context.Context, rootPath string) (MonitorRoot, error) {
 	row := s.db.QueryRowContext(ctx, s.rebind("SELECT "+monitorRootCols+" FROM monitor_roots WHERE root_path = ?"), rootPath)
 	return scanMonitorRoot(row)
+}
+
+// EnqueueV2Job persists a deduplicated background job.  A queued/running job
+// for the same kind, scope and revision is reused rather than duplicated.
+func (s *SQLStore) EnqueueV2Job(ctx context.Context, kind, scopeKey string, revision int64, payload string, availableAt int64) (V2WorkJob, error) {
+	if revision <= 0 {
+		revision = 1
+	}
+	if availableAt <= 0 {
+		availableAt = time.Now().Unix()
+	}
+	now := time.Now().Unix()
+	if payload == "" {
+		payload = "{}"
+	}
+	id := StableID(fmt.Sprintf("v2-job:%s:%s:%d:%d", kind, scopeKey, revision, now))
+	q := s.rebind(`INSERT INTO work_jobs_v2(id,kind,scope_key,revision,payload,status,available_at,created_at,updated_at)
+VALUES(?,?,?,?,?,'QUEUED',?,?,?) ON CONFLICT DO NOTHING`)
+	if _, err := s.db.ExecContext(ctx, q, id, kind, scopeKey, revision, payload, availableAt, now, now); err != nil {
+		return V2WorkJob{}, err
+	}
+	row := s.db.QueryRowContext(ctx, s.rebind(`SELECT id,kind,scope_key,revision,payload,status,attempts,available_at,lease_until,worker,last_error,created_at,updated_at
+FROM work_jobs_v2 WHERE kind=? AND scope_key=? AND revision=? AND status IN ('QUEUED','RUNNING') ORDER BY created_at DESC LIMIT 1`), kind, scopeKey, revision)
+	return scanV2Job(row)
+}
+
+func scanV2Job(scanner interface{ Scan(...any) error }) (V2WorkJob, error) {
+	var j V2WorkJob
+	err := scanner.Scan(&j.ID, &j.Kind, &j.ScopeKey, &j.Revision, &j.Payload, &j.Status, &j.Attempts, &j.AvailableAt, &j.LeaseUntil, &j.Worker, &j.LastError, &j.CreatedAt, &j.UpdatedAt)
+	return j, err
+}
+
+// ClaimV2Job leases one ready job. PostgreSQL uses SKIP LOCKED; SQLite uses a
+// short transaction and the same status predicate, keeping the NAS path
+// single-worker and avoiding long-lived database locks.
+func (s *SQLStore) ClaimV2Job(ctx context.Context, worker string, lease time.Duration) (V2WorkJob, error) {
+	if lease <= 0 {
+		lease = 10 * time.Minute
+	}
+	now := time.Now().Unix()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return V2WorkJob{}, err
+	}
+	defer tx.Rollback()
+	_, _ = tx.ExecContext(ctx, s.rebind(`UPDATE work_jobs_v2 SET status='QUEUED', lease_until=0, worker='', updated_at=? WHERE status='RUNNING' AND lease_until>0 AND lease_until<?`), now, now)
+	query := `SELECT id,kind,scope_key,revision,payload,status,attempts,available_at,lease_until,worker,last_error,created_at,updated_at
+FROM work_jobs_v2 WHERE status='QUEUED' AND available_at<=? ORDER BY available_at ASC, created_at ASC LIMIT 1`
+	if s.dialect == "postgres" {
+		query += " FOR UPDATE SKIP LOCKED"
+	}
+	row := tx.QueryRowContext(ctx, s.rebind(query), now)
+	job, err := scanV2Job(row)
+	if err != nil {
+		return V2WorkJob{}, err
+	}
+	if _, err = tx.ExecContext(ctx, s.rebind(`UPDATE work_jobs_v2 SET status='RUNNING', attempts=attempts+1, lease_until=?, worker=?, updated_at=? WHERE id=? AND status='QUEUED'`), now+int64(lease.Seconds()), worker, now, job.ID); err != nil {
+		return V2WorkJob{}, err
+	}
+	job.Status, job.Attempts, job.LeaseUntil, job.Worker, job.UpdatedAt = "RUNNING", job.Attempts+1, now+int64(lease.Seconds()), worker, now
+	if err = tx.Commit(); err != nil {
+		return V2WorkJob{}, err
+	}
+	return job, nil
+}
+
+func (s *SQLStore) CompleteV2Job(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, s.rebind(`UPDATE work_jobs_v2 SET status='SUCCESS', lease_until=0, worker='', updated_at=? WHERE id=? AND status='RUNNING'`), time.Now().Unix(), id)
+	return err
+}
+
+func (s *SQLStore) FailV2Job(ctx context.Context, id, message string, retryAt int64) error {
+	if retryAt <= 0 {
+		retryAt = time.Now().Unix()
+	}
+	_, err := s.db.ExecContext(ctx, s.rebind(`UPDATE work_jobs_v2 SET status='QUEUED', available_at=?, lease_until=0, worker='', last_error=?, updated_at=? WHERE id=? AND status='RUNNING'`), retryAt, message, time.Now().Unix(), id)
+	return err
+}
+
+func (s *SQLStore) UpdateV2Match(ctx context.Context, resourceID, mediaID, tmdbID, title string, year int, posterURL, backdropURL string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	if _, err = tx.ExecContext(ctx, s.rebind(`UPDATE recognition_results SET external_id=?, title=?, year=?, state='MATCHED', last_error='', updated_at=? WHERE source_resource_id=?`), tmdbID, title, year, now, resourceID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, s.rebind(`UPDATE media_items_v2 SET tmdb_id=?, title=?, sort_title=?, year=?, poster_url=?, backdrop_url=?, updated_at=? WHERE id=?`), tmdbID, title, title, year, posterURL, backdropURL, now, mediaID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, s.rebind(`UPDATE media_items_v2 SET tmdb_id=?, poster_url=?, backdrop_url=?, updated_at=? WHERE id=(SELECT parent_id FROM media_items_v2 WHERE id=? AND media_type='EPISODE')`), tmdbID, posterURL, backdropURL, now, mediaID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *SQLStore) MarkV2RecognitionState(ctx context.Context, resourceID, state, message string) error {
+	_, err := s.db.ExecContext(ctx, s.rebind(`UPDATE recognition_results SET state=?, last_error=?, updated_at=? WHERE source_resource_id=?`), state, message, time.Now().Unix(), resourceID)
+	return err
+}
+
+func (s *SQLStore) CompleteV2JobsForScope(ctx context.Context, scopeKey string) error {
+	_, err := s.db.ExecContext(ctx, s.rebind(`UPDATE work_jobs_v2 SET status='SUCCESS', lease_until=0, worker='', updated_at=? WHERE scope_key=? AND status IN ('QUEUED','RUNNING')`), time.Now().Unix(), scopeKey)
+	return err
+}
+
+func (s *SQLStore) ListV2RecognitionPending(ctx context.Context, limit int) ([]RecognitionPending, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, s.rebind(`SELECT r.id,r.source_resource_id,m.source_path,r.media_type,r.title,r.year,r.season_number,r.episode_number,r.state,r.evidence,r.external_id,r.updated_at
+FROM recognition_results r JOIN media_resources m ON m.id=r.source_resource_id
+WHERE r.state IN ('NEEDS_CONFIRMATION','READY_FOR_MATCH') ORDER BY r.updated_at ASC LIMIT ?`), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RecognitionPending
+	for rows.Next() {
+		var item RecognitionPending
+		if err := rows.Scan(&item.ID, &item.ResourceID, &item.SourcePath, &item.MediaType, &item.Title, &item.Year, &item.SeasonNumber, &item.EpisodeNumber, &item.State, &item.Evidence, &item.ExternalID, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (s *SQLStore) ListMonitorRoots(ctx context.Context) ([]MonitorRoot, error) {

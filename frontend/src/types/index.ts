@@ -141,6 +141,21 @@ export interface TmdbSearchResult {
   rating?: number;
 }
 
+export interface RecognitionPending {
+  id: string;
+  resource_id: string;
+  source_path: string;
+  media_type: string;
+  title: string;
+  year: number;
+  season_number: number;
+  episode_number: number;
+  state: string;
+  evidence: string;
+  external_id?: string;
+  updated_at: number;
+}
+
 export interface LogEntry {
   time?: string;
   level: string;

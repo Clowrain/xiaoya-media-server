@@ -64,7 +64,7 @@ func TestAdminAPIRoutesMonitorSyncCleanupAndTasks(t *testing.T) {
 
 	alistCli := alist.NewClient(alist.Options{BaseURL: "http://xiaoya.host:5678"})
 	imp := alist.NewImporter(alistCli, pipe.Discovery(), pipe.STRMEngine(), nil)
-	sched := scheduler.New(store, pipe, imp, 10*time.Minute, true)
+	sched := scheduler.New(store, pipe, 10*time.Minute, true)
 	_ = sched.InitTasks(ctx)
 
 	h := NewHandler(cfg, store, pipe, imp, sched)

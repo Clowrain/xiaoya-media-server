@@ -46,7 +46,7 @@ func TestSchedulerInitAndSTRMConsistencySelfHeal(t *testing.T) {
 	}
 	defer pipe.Close()
 
-	sched := New(store, pipe, nil, 10*time.Minute, true)
+	sched := New(store, pipe, 10*time.Minute, true)
 	if err := sched.InitTasks(ctx); err != nil {
 		t.Fatalf("init tasks: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestAttachmentTaskRefreshesSameURLWithoutNewSourceMetadata(t *testing.T) {
 		t.Fatalf("attachment not created: %+v %v", r, err)
 	}
 	changed.Store(true)
-	s := New(store, p, nil, time.Minute, true)
+	s := New(store, p, time.Minute, true)
 	if err = s.RunTaskNow(ctx, "attachment_diff_sync"); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestConfiguredRootDoesNotOverrideStoredMonitorSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	s := New(store, p, nil, time.Minute, true)
+	s := New(store, p, time.Minute, true)
 	paused, err := store.GetMonitorRoot(ctx, a.ID)
 	if err != nil || paused.Enabled || paused.IntervalSec != 33 {
 		t.Fatalf("seed overwrote stored settings: %+v %v", paused, err)

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"xiaoya-media-server/internal/integration"
-	"xiaoya-media-server/internal/resource/alist"
 	"xiaoya-media-server/internal/resource/discovery"
 )
 
@@ -25,7 +24,6 @@ type TaskSpec struct {
 type Scheduler struct {
 	store    *discovery.SQLStore
 	pipeline *integration.Pipeline
-	importer *alist.Importer
 
 	mu      sync.Mutex
 	specs   map[string]*TaskSpec
@@ -33,14 +31,13 @@ type Scheduler struct {
 	running map[string]bool
 }
 
-func New(store *discovery.SQLStore, pipeline *integration.Pipeline, importer *alist.Importer, monitorInterval time.Duration, monitorEnabled bool) *Scheduler {
+func New(store *discovery.SQLStore, pipeline *integration.Pipeline, monitorInterval time.Duration, monitorEnabled bool) *Scheduler {
 	if monitorInterval <= 0 {
 		monitorInterval = 10 * time.Minute
 	}
 	s := &Scheduler{
 		store:    store,
 		pipeline: pipeline,
-		importer: importer,
 		specs:    make(map[string]*TaskSpec),
 		running:  make(map[string]bool),
 	}
@@ -52,13 +49,8 @@ func New(store *discovery.SQLStore, pipeline *integration.Pipeline, importer *al
 		Enabled:  monitorEnabled,
 		Fn:       s.runIncrementalMonitorScan,
 	})
-	s.register(TaskSpec{
-		Key:      "tracked_alist_sync",
-		Name:     "人工入库剧集目录追更检查",
-		Interval: 30 * time.Minute,
-		Enabled:  true,
-		Fn:       s.runTrackedAListSync,
-	})
+	// AList is an interactive browse/search source only.  Tracking and
+	//追更由 SQLite monitor roots统一驱动，避免后台任务调用 AList 资源 API。
 	s.register(TaskSpec{
 		Key:      "attachment_diff_sync",
 		Name:     "附件差异同步与重试",
@@ -98,6 +90,18 @@ func New(store *discovery.SQLStore, pipeline *integration.Pipeline, importer *al
 		Interval: 15 * time.Minute,
 		Enabled:  true,
 		Fn:       s.runFailedRetry,
+	})
+	s.register(TaskSpec{
+		Key:      "metadata_match",
+		Name:     "TMDB 作品匹配与元数据缓存",
+		Interval: 10 * time.Minute,
+		Enabled:  true,
+		Fn: func(ctx context.Context) error {
+			if s.pipeline == nil {
+				return nil
+			}
+			return s.pipeline.RunMetadataMatchJobs(ctx, 20)
+		},
 	})
 	return s
 }
@@ -276,14 +280,6 @@ func (s *Scheduler) runFullDiffScan(ctx context.Context) error {
 		}
 	}
 	return firstErr
-}
-
-func (s *Scheduler) runTrackedAListSync(ctx context.Context) error {
-	if s.importer == nil {
-		return nil
-	}
-	_, err := s.importer.SyncTrackedDirectories(ctx)
-	return err
 }
 
 func (s *Scheduler) runFailedRetry(ctx context.Context) error {

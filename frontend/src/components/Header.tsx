@@ -98,17 +98,19 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Right Action Tools */}
           <div className="flex items-center gap-3">
             {/* Full Chain Log Button */}
-            <button
-              onClick={onOpenLogs}
-              className="group flex items-center gap-2 px-3 py-1.5 rounded-xl border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-800/80 hover:border-zinc-700 text-zinc-300 hover:text-white transition text-xs font-mono"
-              title="查看全链路运行日志"
-            >
-              <div className="relative">
-                <Terminal className="w-4 h-4 text-emerald-400" />
-                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              </div>
-              <span className="hidden sm:inline">全链路日志</span>
-            </button>
+            {isAdmin && (
+              <button
+                onClick={onOpenLogs}
+                className="group flex items-center gap-2 px-3 py-1.5 rounded-xl border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-800/80 hover:border-zinc-700 text-zinc-300 hover:text-white transition text-xs font-mono"
+                title="查看全链路运行日志"
+              >
+                <div className="relative">
+                  <Terminal className="w-4 h-4 text-emerald-400" />
+                  <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                </div>
+                <span className="hidden sm:inline">全链路日志</span>
+              </button>
+            )}
 
             {/* User Dropdown */}
             <div className="relative">

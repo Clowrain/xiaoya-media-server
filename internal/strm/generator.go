@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"xiaoya-media-server/internal/metadata/tmdb"
 	"xiaoya-media-server/internal/resource/discovery"
 )
 
@@ -290,7 +292,19 @@ func (e *Engine) writeOwnedSTRM(ctx context.Context, root string, res discovery.
 	}
 	fresh := p == ""
 	if fresh {
-		base, err := MapLocalSTRMPath(root, res.SourcePath, res.RelPath, e.cfg.PreserveSourceStructure, e.cfg.MaxPathLength, nil)
+		var base string
+		if res.OriginType == discovery.OriginXiaoyaSQLite {
+			var standard bool
+			base, standard, err = MapStandardEpisodePath(root, res.SourcePath, res.RelPath, e.cfg.PreserveSourceStructure, e.cfg.MaxPathLength, e.tracker)
+			if err != nil {
+				return "", err
+			}
+			if !standard {
+				base, err = MapLocalSTRMPath(root, res.SourcePath, res.RelPath, e.cfg.PreserveSourceStructure, e.cfg.MaxPathLength, nil)
+			}
+		} else {
+			base, err = MapLocalSTRMPath(root, res.SourcePath, res.RelPath, e.cfg.PreserveSourceStructure, e.cfg.MaxPathLength, nil)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -336,10 +350,59 @@ func (e *Engine) writeOwnedSTRM(ctx context.Context, root string, res discovery.
 	if err != nil {
 		return "", err
 	}
+	if res.OriginType == discovery.OriginXiaoyaSQLite {
+		if err := writeStandardNFO(root, p, res); err != nil {
+			return "", err
+		}
+	}
 	if e.cfg.OnMediaMaterialized != nil {
 		e.cfg.OnMediaMaterialized(p)
 	}
 	return p, nil
+}
+
+type standardNFO struct {
+	XMLName xml.Name `xml:"movie"`
+	Title   string   `xml:"title,omitempty"`
+}
+
+type standardEpisodeNFO struct {
+	XMLName xml.Name `xml:"episodedetails"`
+	Title   string   `xml:"title,omitempty"`
+	Season  int      `xml:"season,omitempty"`
+	Episode int      `xml:"episode,omitempty"`
+}
+
+func writeStandardNFO(root, strmPath string, res discovery.MediaResource) error {
+	base := strings.TrimSuffix(strmPath, filepath.Ext(strmPath))
+	stem := filepath.Base(base)
+	title, _ := tmdb.ParseTitleAndYear(stem)
+	if title == "" {
+		title = res.Name
+	}
+	n := standardNFO{Title: title}
+	var payload []byte
+	var err error
+	if season, episode, ok := tmdb.ParseSeasonEpisode(stem, 0); ok {
+		ep := standardEpisodeNFO{Title: title, Season: season, Episode: episode}
+		if dir := filepath.Base(filepath.Dir(filepath.Dir(strmPath))); dir != "." && dir != "" {
+			if seriesTitle, _ := tmdb.ParseTitleAndYear(dir); seriesTitle != "" {
+				ep.Title = seriesTitle
+			}
+		}
+		payload, err = xml.MarshalIndent(ep, "", "  ")
+	} else {
+		payload, err = xml.MarshalIndent(n, "", "  ")
+	}
+	if len(payload) == 0 {
+		payload, err = xml.MarshalIndent(standardNFO{Title: res.Name}, "", "  ")
+	}
+	if err != nil {
+		return err
+	}
+	payload = append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), payload...)
+	_, _, err = WriteAtomicIdempotent(root, base+".nfo", payload)
+	return err
 }
 
 // ProcessResource implements discovery.ResourceProcessor, routing discovered file nodes

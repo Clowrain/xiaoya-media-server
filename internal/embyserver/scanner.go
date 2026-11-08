@@ -341,6 +341,26 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 						lastSeason = seasonPath
 					}
 					x.Parent = season.ID
+				} else {
+					// Xiaoya commonly exposes a flat series directory as 01.strm,
+					// 02.strm, ... with no physical Season folder.  Keep the source
+					// path intact, but materialize a logical Season 1 parent so Emby
+					// and clients can enumerate episodes normally.
+					seasonHint = 1
+					seasonNum, epNum, ok := tmdb.ParseSeasonEpisode(x.Name, seasonHint)
+					if ok {
+						x.Season, x.Episode = seasonNum, epNum
+						seasonPath := filepath.Join(seriesPath, "Season 1")
+						season := Item{ID: digest(seasonPath)[:32], Lib: lib, Parent: series.ID, Name: "Season 1", Kind: "Season", Path: seasonPath, Season: 1, Episode: 1}
+						if lastSeason != seasonPath {
+							season.Poster = seasonPoster(seriesPath, 1)
+							if e := save(season, 0); e != nil {
+								return e
+							}
+							lastSeason = seasonPath
+						}
+						x.Parent = season.ID
+					}
 				}
 			}
 			if x.Episode == 0 {

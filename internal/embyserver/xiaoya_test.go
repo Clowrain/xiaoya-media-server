@@ -291,3 +291,25 @@ func TestXiaoyaMultiHopRedirect(t *testing.T) {
 		}
 	})
 }
+
+func TestPlaybackResolverDoesNotCallAListResourceAPI(t *testing.T) {
+	apiCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/fs/get" {
+			apiCalls++
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Location", r.URL.Path)
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	a := &App{}
+	_, err := a.resolvePlaybackLink(httptest.NewRequest("GET", "/Videos/episode/stream", nil), "http://xiaoya.host:5678/d/episode.mp4", srv.URL)
+	if err == nil {
+		t.Fatal("expected direct resolver loop to be returned")
+	}
+	if apiCalls != 0 {
+		t.Fatalf("playback must not call AList /api/fs/get, got %d calls", apiCalls)
+	}
+}

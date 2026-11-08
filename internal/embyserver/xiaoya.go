@@ -347,6 +347,8 @@ func xiaoyaLink(r *http.Request, raw, endpoint string) (string, error) {
 }
 
 func xiaoyaLinkWithToken(r *http.Request, raw, endpoint, alistToken string) (string, error) {
+	// Kept for the low-level resolver tests and backwards-compatible callers.
+	// Playback requests from App use xiaoyaLinkWithoutAList below.
 	return xiaoyaLinkWithRefresh(r, raw, endpoint, alistToken, nil)
 }
 
@@ -358,14 +360,22 @@ func (a *App) SetAListPlayback(base string, get alistFileLookup) {
 }
 
 func (a *App) resolvePlaybackLink(r *http.Request, raw, endpoint string) (string, error) {
-	var get alistFileLookup
-	if strings.TrimRight(endpoint, "/") == a.alistPlaybackBase {
-		get = a.alistPlayback
-	}
-	return xiaoyaLinkWithRefresh(r, raw, endpoint, a.alistTokenForPlayback(), get)
+	return xiaoyaLinkWithoutAList(r, raw, endpoint)
+}
+
+// xiaoyaLinkWithoutAList resolves the stable STRM endpoint only.  Playback
+// must not turn into an AList resource lookup: the SQLite sync already stored
+// the canonical source path and a failed direct request is surfaced to the
+// client for a targeted resync instead of issuing /api/fs/get.
+func xiaoyaLinkWithoutAList(r *http.Request, raw, endpoint string) (string, error) {
+	return xiaoyaLinkWithRefreshPolicy(r, raw, endpoint, "", nil, false)
 }
 
 func xiaoyaLinkWithRefresh(r *http.Request, raw, endpoint, alistToken string, get alistFileLookup) (string, error) {
+	return xiaoyaLinkWithRefreshPolicy(r, raw, endpoint, alistToken, get, true)
+}
+
+func xiaoyaLinkWithRefreshPolicy(r *http.Request, raw, endpoint, alistToken string, get alistFileLookup, allowAListFallback bool) (string, error) {
 
 	source, err := url.Parse(raw)
 	if err != nil {
@@ -407,8 +417,10 @@ func xiaoyaLinkWithRefresh(r *http.Request, raw, endpoint, alistToken string, ge
 		}
 	}
 
-	// Fallback 2: Refresh raw_url or sign via AList /api/fs/get for /d/... paths.
-	if strings.HasPrefix(source.Path, "/d/") {
+	// Legacy low-level callers may explicitly opt into AList refresh. The
+	// application playback path passes false and therefore never calls the
+	// resource API.
+	if allowAListFallback && strings.HasPrefix(source.Path, "/d/") {
 		alistPath := strings.TrimPrefix(source.Path, "/d")
 		var rawURL, newSign string
 		var fErr error

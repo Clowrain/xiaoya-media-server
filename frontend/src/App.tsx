@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, MediaItem } from './types';
-import { getStoredUser, getStoredToken, logoutApi } from './api/client';
+import { getStoredUser, getStoredToken, logoutApi, fetchCurrentUser } from './api/client';
 import { Header } from './components/Header';
 import { LoginView } from './components/LoginView';
 import { MediaWall } from './pages/MediaWall';
@@ -10,7 +10,9 @@ import { ToastContainer } from './components/Toast';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(getStoredUser());
-  const [currentView, setCurrentView] = useState<'wall' | 'admin'>('wall');
+  const [currentView, setCurrentView] = useState<'wall' | 'admin'>(() =>
+    window.location.pathname.startsWith('/web/manage') ? 'admin' : 'wall'
+  );
   const [showLogs, setShowLogs] = useState<boolean>(false);
   const [matchTargetItem, setMatchTargetItem] = useState<MediaItem | null>(null);
 
@@ -22,14 +24,49 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('auth:expired', handleAuthExpired);
   }, []);
 
+  useEffect(() => {
+    if (!currentUser || !getStoredToken()) return;
+    fetchCurrentUser(currentUser.Id)
+      .then((serverUser) => setCurrentUser(serverUser))
+      .catch(() => {
+        // The request helper handles expired sessions; ordinary profile errors
+        // leave the current display view available while management APIs stay
+        // server-authorized.
+      });
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => setCurrentView(window.location.pathname.startsWith('/web/manage') ? 'admin' : 'wall');
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  const navigate = (view: 'wall' | 'admin') => {
+    if (view === 'admin' && !(currentUser?.Policy?.IsAdministrator ?? false)) {
+      window.history.replaceState({}, '', '/web/');
+      setCurrentView('wall');
+      return;
+    }
+    const path = view === 'admin' ? '/web/manage/' : '/web/';
+    if (window.location.pathname !== path) window.history.pushState({}, '', path);
+    setCurrentView(view);
+  };
+
+  useEffect(() => {
+    if (currentView === 'admin' && !(currentUser?.Policy?.IsAdministrator ?? false)) {
+      navigate('wall');
+    }
+  }, [currentUser, currentView]);
+
   const handleLogout = async () => {
     await logoutApi();
     setCurrentUser(null);
   };
 
   const handleRematchTmdbFromWall = (item: MediaItem) => {
+    if (!(currentUser?.Policy?.IsAdministrator ?? false)) return;
     setMatchTargetItem(item);
-    setCurrentView('admin');
+    navigate('admin');
   };
 
   if (!currentUser || !getStoredToken()) {
@@ -46,7 +83,7 @@ export const App: React.FC = () => {
       <Header
         user={currentUser}
         currentView={currentView}
-        onViewChange={(v) => setCurrentView(v)}
+        onViewChange={navigate}
         onOpenLogs={() => setShowLogs(true)}
         onLogout={handleLogout}
       />
@@ -57,12 +94,14 @@ export const App: React.FC = () => {
             user={currentUser}
             onRematchTmdb={handleRematchTmdbFromWall}
           />
-        ) : (
+        ) : currentUser.Policy?.IsAdministrator ? (
           <AdminLayout
             initialMatchItem={matchTargetItem}
             onClearInitialMatchItem={() => setMatchTargetItem(null)}
             onOpenLogs={() => setShowLogs(true)}
           />
+        ) : (
+          <div className="max-w-3xl mx-auto px-6 py-20 text-center text-zinc-400">没有管理权限</div>
         )}
       </main>
 

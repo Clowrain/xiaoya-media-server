@@ -5,9 +5,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"xiaoya-media-server/internal/metadata/tmdb"
 )
 
 const DefaultMaxSTRMPathRunes = 235
@@ -199,6 +203,77 @@ var fallbackCharReplacer = strings.NewReplacer(
 	"}", ".",
 	"'", ".",
 )
+
+var standardSeasonDirRe = regexp.MustCompile(`(?i)^season[ _.-]*0*(\d+)$`)
+
+// MapStandardEpisodePath turns Xiaoya's common flat or Season-directory TV
+// names into the stable Emby layout used by V2. Movies and unrecognised names
+// continue through MapLocalSTRMPath unchanged.
+func MapStandardEpisodePath(outputRoot, sourcePath, relPath string, preserveSourceStructure bool, maxRunes int, tracker *CollisionTracker) (string, bool, error) {
+	chosen := sourcePath
+	if !preserveSourceStructure && strings.TrimSpace(relPath) != "" {
+		chosen = relPath
+	}
+	parts, err := sanitizeRelativeSegments(chosen)
+	if err != nil || len(parts) < 2 {
+		return "", false, err
+	}
+	for _, part := range parts[:len(parts)-1] {
+		if part == "电影" || strings.EqualFold(part, "movies") || strings.EqualFold(part, "movie") {
+			return "", false, nil
+		}
+	}
+	file := parts[len(parts)-1]
+	stem := StripMediaStem(file)
+	season := 0
+	seasonIdx := -1
+	for i := len(parts) - 2; i >= 0; i-- {
+		if m := standardSeasonDirRe.FindStringSubmatch(parts[i]); len(m) == 2 {
+			season, _ = strconv.Atoi(m[1])
+			seasonIdx = i
+			break
+		}
+	}
+	seasonDetected := seasonIdx >= 0
+	seriesIdx := len(parts) - 2
+	if seasonIdx >= 0 {
+		seriesIdx = seasonIdx - 1
+		for seriesIdx >= 0 && tmdb.IsPureMetadataTagDir(parts[seriesIdx]) {
+			seriesIdx--
+		}
+	}
+	if seriesIdx < 0 || seriesIdx >= len(parts)-1 {
+		return "", false, nil
+	}
+	seriesTitle, _ := tmdb.ParseTitleAndYear(parts[seriesIdx])
+	if seriesTitle == "" {
+		seriesTitle = parts[seriesIdx]
+	}
+	seasonHint := season
+	if !seasonDetected {
+		seasonHint = 1
+	}
+	seasonNum, episodeNum, ok := tmdb.ParseSeasonEpisode(stem, season)
+	if !seasonDetected {
+		seasonNum, episodeNum, ok = tmdb.ParseSeasonEpisode(stem, seasonHint)
+	}
+	if !ok || episodeNum <= 0 {
+		return "", false, nil
+	}
+	if seasonDetected {
+		if season == 0 {
+			seasonNum = 0
+		}
+		season = seasonNum
+	} else {
+		season = 1
+	}
+	prefix := append([]string(nil), parts[:seriesIdx+1]...)
+	prefix = append(prefix, fmt.Sprintf("Season %d", season))
+	prefix = append(prefix, fmt.Sprintf("%s - S%02dE%02d.strm", seriesTitle, season, episodeNum))
+	path := filepath.Join(append([]string{filepath.Clean(outputRoot)}, prefix...)...)
+	return path, true, nil
+}
 
 // ApplyFallbackTranslation applies strm.py L161-177 character fallback translation ONLY to the path
 // relative to `outputRoot`, preserving `outputRoot` itself (including Windows drive letters or mount paths).
