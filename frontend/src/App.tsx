@@ -18,6 +18,9 @@ export const App: React.FC = () => {
     }
     return 'wall';
   });
+  const [activeTab, setActiveTab] = useState<'home' | 'favorites'>('home');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [showSearchModal, setShowSearchModal] = useState<boolean>(false);
   const [showLogs, setShowLogs] = useState<boolean>(false);
   const [matchTargetItem, setMatchTargetItem] = useState<MediaItem | null>(null);
 
@@ -88,15 +91,73 @@ export const App: React.FC = () => {
       <Header
         user={currentUser}
         currentView={currentView}
+        activeTab={activeTab}
+        onTabChange={(tab) => {
+          setActiveTab(tab);
+          if (currentView !== 'wall') navigate('wall');
+        }}
         onViewChange={navigate}
+        onOpenSearch={() => setShowSearchModal(true)}
         onOpenLogs={() => setShowLogs(true)}
         onLogout={handleLogout}
       />
+
+      {/* Global Quick Search Overlay / Modal */}
+      {showSearchModal && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4 bg-black/80 backdrop-blur-md animate-in fade-in">
+          <div className="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <span className="font-bold text-white text-sm">全局影视搜索 (支持汉字、拼音首字母如 zmsr)</span>
+              <button
+                type="button"
+                onClick={() => setShowSearchModal(false)}
+                className="text-xs px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                autoFocus
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="输入影片名或拼音首字母检索..."
+                className="flex-1 px-4 py-2.5 rounded-2xl bg-zinc-950 border border-zinc-700 text-white text-sm focus:outline-none focus:border-emerald-500"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') setShowSearchModal(false);
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowSearchModal(false)}
+                className="px-4 py-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-sm"
+              >
+                搜索
+              </button>
+            </div>
+            {searchQuery && (
+              <div className="flex items-center justify-between text-xs text-zinc-400">
+                <span>当前搜索关键词: <b className="text-emerald-400">{searchQuery}</b></span>
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="text-zinc-500 hover:text-zinc-300 underline"
+                >
+                  清空
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <main className="flex-1">
         {currentView === 'wall' ? (
           <MediaWall
             user={currentUser}
+            activeTab={activeTab}
+            searchQuery={searchQuery}
             onRematchTmdb={handleRematchTmdbFromWall}
           />
         ) : currentUser.Policy?.IsAdministrator ? (

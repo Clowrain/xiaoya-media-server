@@ -180,7 +180,11 @@ func (c *Config) applyEnv() {
 	if v := strings.TrimSpace(os.Getenv("XIAOYA_SQLITE_PATH")); v != "" {
 		c.Xiaoya.SQLitePath = v
 	}
-	if v := strings.TrimSpace(os.Getenv("XIAOYA_STRM_TEXT_PATH")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("XIAOYA_STRM_PATH")); v != "" {
+		c.Xiaoya.StrmTextPath = v
+	} else if v := strings.TrimSpace(os.Getenv("XIAOYA_STRM_TEXT_PATH")); v != "" {
+		c.Xiaoya.StrmTextPath = v
+	} else if v := strings.TrimSpace(os.Getenv("STRM_FILE_PATH")); v != "" {
 		c.Xiaoya.StrmTextPath = v
 	}
 	if v := strings.TrimSpace(os.Getenv("MONITOR_ENABLED")); v != "" {
@@ -258,4 +262,26 @@ func (c *Config) ResolveDatabaseDSN() (string, error) {
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// ResolveStrmTextPath returns the validated or auto-detected path of strm.txt.
+func (c *XiaoyaConfig) ResolveStrmTextPath() string {
+	candidates := []string{
+		c.StrmTextPath,
+		"/vol1/1000/xiaoya/strm.txt",
+		"/xiaoya-db/strm.txt",
+		"/xiaoya/strm.txt",
+		"/data/strm.txt",
+		"./strm.txt",
+	}
+	for _, p := range candidates {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			continue
+		}
+		if fi, err := os.Stat(trimmed); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			return trimmed
+		}
+	}
+	return c.StrmTextPath
 }

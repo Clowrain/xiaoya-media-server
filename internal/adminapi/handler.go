@@ -190,7 +190,27 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 		return true
 
 	case strings.HasPrefix(p, "/api/monitor/roots/"):
-		id := strings.TrimPrefix(p, "/api/monitor/roots/")
+		sub := strings.TrimPrefix(p, "/api/monitor/roots/")
+		if strings.HasSuffix(sub, "/sync") {
+			id := strings.TrimSuffix(sub, "/sync")
+			if id == "" || strings.Contains(id, "/") {
+				writeErr(w, http.StatusBadRequest, "invalid root id")
+				return true
+			}
+			if r.Method != http.MethodPost {
+				writeErr(w, http.StatusMethodNotAllowed, "POST required")
+				return true
+			}
+			batch, err := h.pipeline.RunIncrementalSyncRoot(ctx, id)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return true
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "batch": batch})
+			return true
+		}
+
+		id := sub
 		if id == "" || strings.Contains(id, "/") {
 			writeErr(w, http.StatusBadRequest, "invalid root id")
 			return true
@@ -814,9 +834,15 @@ func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWrite
 	}
 	manifestAvail := false
 	manifestPath := ""
+	var manifestSize int64
+	var manifestModTime int64
 	if h.pipeline != nil && h.pipeline.ManifestScanner() != nil {
 		manifestAvail = h.pipeline.ManifestScanner().Available()
 		manifestPath = h.pipeline.ManifestScanner().FilePath()
+		if fi, err := os.Stat(manifestPath); err == nil {
+			manifestSize = fi.Size()
+			manifestModTime = fi.ModTime().Unix()
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -828,6 +854,10 @@ func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWrite
 		"build_time":          version.BuildTime,
 		"manifest_available":  manifestAvail,
 		"manifest_path":       manifestPath,
+		"strm_text_available": manifestAvail,
+		"strm_text_path":      manifestPath,
+		"strm_text_size":      manifestSize,
+		"strm_text_mod_time":  manifestModTime,
 		"nfo_policy":          "prefer",
 		"deletion_policy":     "keep",
 		"sqlite_path":         sqlitePath,

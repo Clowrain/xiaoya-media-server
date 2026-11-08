@@ -11,6 +11,7 @@ import (
 
 	"xiaoya-media-server/internal/integration"
 	"xiaoya-media-server/internal/resource/discovery"
+	"xiaoya-media-server/internal/resource/xiaoya"
 )
 
 type TaskSpec struct {
@@ -25,10 +26,12 @@ type Scheduler struct {
 	store    *discovery.SQLStore
 	pipeline *integration.Pipeline
 
-	mu      sync.Mutex
-	specs   map[string]*TaskSpec
-	order   []string
-	running map[string]bool
+	mu             sync.Mutex
+	specs          map[string]*TaskSpec
+	order          []string
+	running        map[string]bool
+	lastManifestFP xiaoya.ManifestFingerprint
+	fpInit         bool
 }
 
 func New(store *discovery.SQLStore, pipeline *integration.Pipeline, monitorInterval time.Duration, monitorEnabled bool) *Scheduler {
@@ -248,6 +251,47 @@ func (s *Scheduler) runIncrementalMonitorScan(ctx context.Context) error {
 	if s.pipeline == nil {
 		return nil
 	}
+
+	// 1. If strm.txt manifest is available, trigger scan ONLY when file fingerprint changed or cold boot
+	if manifest := s.pipeline.Manifest(); manifest != nil && manifest.Available() {
+		curFP, err := manifest.Fingerprint()
+		if err == nil {
+			s.mu.Lock()
+			if !s.fpInit {
+				// Cold-boot baseline: record fingerprint and keep silent until next actual update
+				s.lastManifestFP = curFP
+				s.fpInit = true
+				s.mu.Unlock()
+				return nil
+			}
+			changed := curFP.ModTime != s.lastManifestFP.ModTime || curFP.Size != s.lastManifestFP.Size
+			if !changed {
+				s.mu.Unlock()
+				return nil
+			}
+			s.lastManifestFP = curFP
+			s.mu.Unlock()
+
+			// Manifest updated! Perform single-pass multi-prefix dispatch across all enabled roots
+			allRoots, rErr := s.store.ListMonitorRoots(ctx)
+			if rErr != nil {
+				return rErr
+			}
+			var enabledRoots []discovery.MonitorRoot
+			for _, r := range allRoots {
+				if r.Enabled {
+					enabledRoots = append(enabledRoots, r)
+				}
+			}
+			if len(enabledRoots) > 0 {
+				_, sErr := s.pipeline.SyncRootsFromManifest(ctx, enabledRoots)
+				return sErr
+			}
+			return nil
+		}
+	}
+
+	// Fallback when manifest is not available
 	roots, err := s.dueMonitorRoots(ctx)
 	if err != nil {
 		return err

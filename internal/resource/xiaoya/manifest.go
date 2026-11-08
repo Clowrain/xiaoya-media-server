@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +48,33 @@ func NewManifestScanner(filePath string) *ManifestScanner {
 	return &ManifestScanner{
 		filePath: filePath,
 	}
+}
+
+// ManifestFingerprint captures file state for change detection.
+type ManifestFingerprint struct {
+	ModTime time.Time `json:"mod_time"`
+	Size    int64     `json:"size"`
+}
+
+// Fingerprint returns the current mod time and size of strm.txt.
+func (s *ManifestScanner) Fingerprint() (ManifestFingerprint, error) {
+	if s == nil || s.filePath == "" {
+		return ManifestFingerprint{}, fmt.Errorf("strm.txt not configured")
+	}
+	fi, err := os.Stat(s.filePath)
+	if err != nil {
+		return ManifestFingerprint{}, err
+	}
+	return ManifestFingerprint{ModTime: fi.ModTime(), Size: fi.Size()}, nil
+}
+
+// HasChanged returns true if the current file fingerprint differs from the previous one.
+func (s *ManifestScanner) HasChanged(prev ManifestFingerprint) bool {
+	cur, err := s.Fingerprint()
+	if err != nil {
+		return false
+	}
+	return !cur.ModTime.Equal(prev.ModTime) || cur.Size != prev.Size
 }
 
 // Available returns true if the strm.txt file exists and is accessible.
@@ -249,6 +277,81 @@ func (s *ManifestScanner) StreamPrefix(ctx context.Context, prefix string, onEnt
 		}
 
 		if err := onEntry(*entry); err != nil {
+			return count, err
+		}
+		count++
+	}
+
+	return count, scanner.Err()
+}
+
+// PrefixMatch binds an original prefix string with its clean lowercased version.
+type PrefixMatch struct {
+	Original string
+	Clean    string
+}
+
+// StreamMultiPrefix scans strm.txt in a SINGLE PASS and dispatches matching entries
+// to onEntry. Longest-prefix matching is used to resolve child/parent overlapping.
+func (s *ManifestScanner) StreamMultiPrefix(ctx context.Context, prefixes []string, onEntry func(matchedPrefix string, entry ManifestEntry) error) (int, error) {
+	if !s.Available() {
+		return 0, fmt.Errorf("strm.txt not found at %s", s.filePath)
+	}
+
+	var targets []PrefixMatch
+	for _, p := range prefixes {
+		cl := strings.ToLower(strings.Trim(strings.TrimSpace(p), "/"))
+		if cl != "" {
+			targets = append(targets, PrefixMatch{Original: p, Clean: cl})
+		}
+	}
+	if len(targets) == 0 {
+		return 0, nil
+	}
+
+	// Sort targets by Clean length descending so more specific paths match first
+	sort.Slice(targets, func(i, j int) bool {
+		return len(targets[i].Clean) > len(targets[j].Clean)
+	})
+
+	f, err := os.Open(s.filePath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	count := 0
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		if ctx.Err() != nil {
+			return count, ctx.Err()
+		}
+
+		line := scanner.Text()
+		lineLower := strings.ToLower(line)
+
+		var matched *PrefixMatch
+		for i := range targets {
+			if strings.Contains(lineLower, targets[i].Clean) {
+				matched = &targets[i]
+				break
+			}
+		}
+		if matched == nil {
+			continue
+		}
+
+		entry, err := ParseManifestLine(lineNum, line)
+		if err != nil || entry == nil {
+			continue
+		}
+
+		if err := onEntry(matched.Original, *entry); err != nil {
 			return count, err
 		}
 		count++

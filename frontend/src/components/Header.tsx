@@ -1,13 +1,19 @@
 import React, { useState } from 'react';
 import { User } from '../types';
-import { Film, Settings, Terminal, LogOut, Key, User as UserIcon, Check } from 'lucide-react';
+import { 
+  Film, Settings, Terminal, LogOut, Key, User as UserIcon, 
+  Search, Cast, Menu, Play, Star 
+} from 'lucide-react';
 import { changePasswordApi, notifyToast } from '../api/client';
 import { APP_VERSION, BUILD_COMMIT, BUILD_TIME } from '../version';
 
 interface HeaderProps {
   user: User;
   currentView: 'wall' | 'admin';
+  activeTab?: 'home' | 'favorites';
+  onTabChange?: (tab: 'home' | 'favorites') => void;
   onViewChange: (view: 'wall' | 'admin') => void;
+  onOpenSearch?: () => void;
   onOpenLogs: () => void;
   onLogout: () => void;
 }
@@ -15,7 +21,10 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   user,
   currentView,
+  activeTab = 'home',
+  onTabChange,
   onViewChange,
+  onOpenSearch,
   onOpenLogs,
   onLogout,
 }) => {
@@ -49,88 +58,101 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <>
-      <header className="sticky top-0 z-40 w-full border-b border-zinc-800/80 bg-zinc-950/85 backdrop-blur-md">
+      <header className="sticky top-0 z-40 w-full border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-          {/* Logo & Main Nav */}
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => onViewChange('wall')}>
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20">
-                <Film className="w-5 h-5 text-white" />
-              </div>
-              <div className="flex flex-col">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-base tracking-tight bg-gradient-to-r from-zinc-100 to-zinc-400 bg-clip-text text-transparent">
-                    小雅媒体中心
-                  </span>
-                  <span 
-                    className="px-1.5 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 font-mono text-[10px] font-bold tracking-tight shadow-sm"
-                    title={`系统版本: ${APP_VERSION} · 编译号: ${BUILD_COMMIT} · 时间: ${BUILD_TIME}`}
-                  >
-                    {APP_VERSION} <span className="opacity-70">({BUILD_COMMIT})</span>
-                  </span>
-                </div>
-                <span className="text-[10px] text-zinc-500 font-mono tracking-wider -mt-0.5">
-                  XIAOYA MEDIA SERVER
-                </span>
-              </div>
-            </div>
+          {/* Left: Emby Brand & Logo */}
+          <div className="flex items-center gap-3 sm:gap-4">
+            <button 
+              type="button"
+              className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition cursor-pointer"
+              title="主菜单"
+              onClick={() => {
+                if (currentView === 'admin') onViewChange('wall');
+              }}
+            >
+              <Menu className="w-5 h-5" />
+            </button>
 
-            {/* Navigation Tabs */}
-            <nav className="flex items-center gap-1.5 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800/80">
-              <button
-                onClick={() => onViewChange('wall')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all cursor-pointer ${
-                  currentView === 'wall'
-                    ? 'bg-zinc-800 text-emerald-400 shadow-sm font-semibold'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
-                }`}
-              >
-                <Film className="w-4 h-4" />
-                影视展示
-              </button>
-              {isAdmin && (
-                <button
-                  onClick={() => onViewChange('admin')}
-                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all cursor-pointer ${
-                    currentView === 'admin'
-                      ? 'bg-zinc-800 text-emerald-400 shadow-sm font-semibold'
-                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
-                  }`}
+            <div 
+              className="flex items-center gap-2 cursor-pointer select-none"
+              onClick={() => onViewChange('wall')}
+            >
+              <div className="w-7 h-7 rounded-lg bg-emerald-500 flex items-center justify-center shadow-md shadow-emerald-500/30">
+                <Play className="w-4 h-4 text-black fill-black ml-0.5" />
+              </div>
+              <span className="font-black text-xl tracking-tight text-white flex items-center gap-1.5">
+                emby
+                <span 
+                  className="px-1.5 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 font-mono text-[9px] font-bold tracking-tight"
+                  title={`版本: ${APP_VERSION} (${BUILD_COMMIT})`}
                 >
-                  <Settings className="w-4 h-4" />
-                  管理控制台
-                </button>
-              )}
-            </nav>
+                  {APP_VERSION}
+                </span>
+              </span>
+            </div>
           </div>
 
-          {/* Right Action Tools */}
-          <div className="flex items-center gap-3">
-            {/* Full Chain Log Button */}
-            {isAdmin && (
+          {/* Middle: Emby Style Capsule Pill [ 首页 ] [ 收藏 ] */}
+          {currentView === 'wall' && onTabChange && (
+            <div className="flex items-center bg-zinc-900/90 p-1 rounded-full border border-zinc-800 shadow-inner">
               <button
-                onClick={onOpenLogs}
-                className="group flex items-center gap-2 px-3 py-1.5 rounded-xl border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-800/80 hover:border-zinc-700 text-zinc-300 hover:text-white transition text-xs font-mono"
-                title="查看全链路运行日志"
+                type="button"
+                onClick={() => onTabChange('home')}
+                className={`px-4 py-1 rounded-full text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'home'
+                    ? 'bg-zinc-600/90 text-white shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
               >
-                <div className="relative">
-                  <Terminal className="w-4 h-4 text-emerald-400" />
-                  <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                </div>
-                <span className="hidden sm:inline">全链路日志</span>
+                首页
+              </button>
+              <button
+                type="button"
+                onClick={() => onTabChange('favorites')}
+                className={`px-4 py-1 rounded-full text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'favorites'
+                    ? 'bg-zinc-600/90 text-white shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                收藏
+              </button>
+            </div>
+          )}
+
+          {/* Right Action Tools */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Cast Button */}
+            <button
+              type="button"
+              className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition cursor-pointer"
+              title="投屏播放"
+              onClick={() => notifyToast('局域网 DLNA / AirPlay 投屏准备就绪', 'info')}
+            >
+              <Cast className="w-5 h-5" />
+            </button>
+
+            {/* Search Button */}
+            {onOpenSearch && (
+              <button
+                type="button"
+                onClick={onOpenSearch}
+                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition cursor-pointer"
+                title="搜索影视 (支持拼音首字母)"
+              >
+                <Search className="w-5 h-5" />
               </button>
             )}
 
             {/* User Dropdown */}
             <div className="relative">
               <button
+                type="button"
                 onClick={() => setShowUserMenu(!showUserMenu)}
-                className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-800/80 text-zinc-200 transition text-sm"
+                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition cursor-pointer"
+                title={`当前账号: ${user.Name}`}
               >
-                <div className="w-6 h-6 rounded-lg bg-emerald-950 border border-emerald-500/30 text-emerald-400 flex items-center justify-center font-bold text-xs">
-                  {user.Name.slice(0, 1).toUpperCase()}
-                </div>
-                <span className="font-medium max-w-[100px] truncate">{user.Name}</span>
+                <UserIcon className="w-5 h-5" />
               </button>
 
               {showUserMenu && (
@@ -139,37 +161,58 @@ export const Header: React.FC<HeaderProps> = ({
                     className="fixed inset-0 z-40"
                     onClick={() => setShowUserMenu(false)}
                   />
-                  <div className="absolute right-0 mt-2 w-48 rounded-xl bg-zinc-900 border border-zinc-800 shadow-2xl py-1.5 z-50 animate-in fade-in zoom-in-95">
-                    <div className="px-3 py-2 border-b border-zinc-800/80 text-xs text-zinc-400">
-                      用户身份: <span className="text-zinc-200 font-semibold">{isAdmin ? '超级管理员' : '普通用户'}</span>
+                  <div className="absolute right-0 mt-2 w-48 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl py-1.5 z-50 animate-in fade-in zoom-in-95">
+                    <div className="px-3.5 py-2.5 border-b border-zinc-800/80">
+                      <div className="text-sm font-bold text-white truncate">{user.Name}</div>
+                      <div className="text-[11px] text-zinc-400 mt-0.5">
+                        {isAdmin ? '超级管理员' : '普通观影用户'}
+                      </div>
                     </div>
                     <button
+                      type="button"
                       onClick={() => {
                         setShowUserMenu(false);
                         setShowPasswordModal(true);
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-300 hover:text-white hover:bg-zinc-800/70 transition"
+                      className="w-full flex items-center gap-2 px-3.5 py-2 text-xs text-zinc-300 hover:text-white hover:bg-zinc-800/70 transition cursor-pointer"
                     >
                       <Key className="w-4 h-4 text-zinc-400" />
-                      修改密码
+                      修改登录密码
                     </button>
                     <button
+                      type="button"
                       onClick={() => {
                         setShowUserMenu(false);
                         onLogout();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 transition cursor-pointer"
+                      className="w-full flex items-center gap-2 px-3.5 py-2 text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 transition cursor-pointer"
                     >
                       <LogOut className="w-4 h-4" />
                       退出登录
                     </button>
                     <div className="px-3 py-1.5 border-t border-zinc-800/80 text-[10px] text-zinc-500 font-mono text-center">
-                      {APP_VERSION} · {BUILD_COMMIT}
+                      {APP_VERSION} ({BUILD_COMMIT})
                     </div>
                   </div>
                 </>
               )}
             </div>
+
+            {/* Admin Settings Gear - STRICTLY ADMIN ONLY */}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => onViewChange(currentView === 'admin' ? 'wall' : 'admin')}
+                className={`p-2 rounded-xl transition cursor-pointer ${
+                  currentView === 'admin'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-sm'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+                }`}
+                title={currentView === 'admin' ? '返回影视首页' : '管理控制台 (监控目录/日志/系统配置)'}
+              >
+                <Settings className={`w-5 h-5 ${currentView === 'admin' ? 'animate-spin-slow' : ''}`} />
+              </button>
+            )}
           </div>
         </div>
       </header>

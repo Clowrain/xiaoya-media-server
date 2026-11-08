@@ -82,3 +82,57 @@ func TestManifestScannerFindMatching(t *testing.T) {
 		t.Errorf("unexpected episodes: %+v", results)
 	}
 }
+
+func TestStreamMultiPrefixAndFingerprint(t *testing.T) {
+	content := `115/IMAX/奥本海默 - IMAX (2023)/{tmdb-872585}/奥本海默.2023.strm#http://xiaoya.host:5678/d/oppenheimer.mkv?sign=SIGN_STR
+每日更新/电视剧/国产剧/走马上任 (2026)/{tmdb-275297}/Season 1/走马上任.2026.S01E01.strm#http://xiaoya.host:5678/d/01.mp4?sign=SIGN_STR
+每日更新/电视剧/国产剧/走马上任 (2026)/{tmdb-275297}/Season 1/走马上任.2026.S01E02.strm#http://xiaoya.host:5678/d/02.mp4?sign=SIGN_STR
+每日更新/电视剧/韩剧/黑暗荣耀 (2022)/{tmdb-136283}/Season 1/黑暗荣耀.2022.S01E01.strm#http://xiaoya.host:5678/d/glory.mp4?sign=SIGN_STR
+`
+	tmp := t.TempDir()
+	txtPath := filepath.Join(tmp, "strm.txt")
+	if err := os.WriteFile(txtPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	scanner := NewManifestScanner(txtPath)
+	fp1, err := scanner.Fingerprint()
+	if err != nil {
+		t.Fatalf("Fingerprint failed: %v", err)
+	}
+	if fp1.Size != int64(len(content)) {
+		t.Errorf("expected size %d, got %d", len(content), fp1.Size)
+	}
+	if scanner.HasChanged(fp1) {
+		t.Errorf("fingerprint should not have changed")
+	}
+
+	ctx := context.Background()
+	// Test multi prefix with overlapping / child paths
+	prefixes := []string{
+		"/每日更新/电视剧/国产剧",
+		"/每日更新/电视剧/韩剧",
+		"/115/IMAX",
+	}
+
+	matchedCount := make(map[string]int)
+	total, err := scanner.StreamMultiPrefix(ctx, prefixes, func(matchedPrefix string, entry ManifestEntry) error {
+		matchedCount[matchedPrefix]++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamMultiPrefix failed: %v", err)
+	}
+	if total != 4 {
+		t.Fatalf("expected total 4, got %d", total)
+	}
+	if matchedCount["/每日更新/电视剧/国产剧"] != 2 {
+		t.Errorf("expected 2 for 国产剧, got %d", matchedCount["/每日更新/电视剧/国产剧"])
+	}
+	if matchedCount["/每日更新/电视剧/韩剧"] != 1 {
+		t.Errorf("expected 1 for 韩剧, got %d", matchedCount["/每日更新/电视剧/韩剧"])
+	}
+	if matchedCount["/115/IMAX"] != 1 {
+		t.Errorf("expected 1 for 115/IMAX, got %d", matchedCount["/115/IMAX"])
+	}
+}

@@ -66,7 +66,7 @@ func NewPipeline(ctx context.Context, cfg *config.Config, app *embyserver.App, s
 	})
 
 	_ = p.EnsureSQLiteReader(ctx)
-	manifestPath := xiaoya.AutoDetectStrmText(cfg.Xiaoya.StrmTextPath, cfg.Xiaoya.SQLitePath)
+	manifestPath := xiaoya.AutoDetectStrmText(cfg.Xiaoya.ResolveStrmTextPath(), cfg.Xiaoya.SQLitePath)
 	p.manifest = xiaoya.NewManifestScanner(manifestPath)
 	p.discovery = discovery.NewService(store, p.reader, p.strmEng)
 
@@ -466,13 +466,108 @@ func (p *Pipeline) Store() *discovery.SQLStore {
 	return p.store
 }
 
+// Manifest returns the active ManifestScanner for strm.txt.
+func (p *Pipeline) Manifest() *xiaoya.ManifestScanner {
+	return p.manifest
+}
+
+// SyncRootsFromManifest scans strm.txt in a single pass across all provided roots,
+// importing discovered media items and updating root sync timestamps.
+func (p *Pipeline) SyncRootsFromManifest(ctx context.Context, roots []discovery.MonitorRoot) (map[string]discovery.SyncBatch, error) {
+	result := make(map[string]discovery.SyncBatch)
+	if len(roots) == 0 {
+		return result, nil
+	}
+	if p.manifest == nil || !p.manifest.Available() {
+		return nil, errors.New("strm.txt 清单文件不可用")
+	}
+
+	rootMap := make(map[string]discovery.MonitorRoot)
+	var prefixes []string
+	for _, r := range roots {
+		norm, _, _ := xiaoya.NormalizeMonitorPath(r.RootPath)
+		prefixes = append(prefixes, norm)
+		rootMap[norm] = r
+	}
+
+	matchedEntries := make(map[string][]xiaoya.ManifestEntry)
+	_, err := p.manifest.StreamMultiPrefix(ctx, prefixes, func(matchedPrefix string, entry xiaoya.ManifestEntry) error {
+		matchedEntries[matchedPrefix] = append(matchedEntries[matchedPrefix], entry)
+		return nil
+	})
+	if err != nil {
+		return result, err
+	}
+
+	for prefix, r := range rootMap {
+		entries := matchedEntries[prefix]
+		if len(entries) == 0 {
+			now := time.Now().Unix()
+			_ = p.store.UpdateMonitorRootStatus(ctx, r.ID, now, "", discovery.BatchSuccess, "", 0)
+			continue
+		}
+
+		cleanBase := filepath.Base(strings.TrimRight(prefix, "/"))
+		var nodes []discovery.ManualNode
+		nodes = append(nodes, discovery.ManualNode{
+			Path:    prefix,
+			RelPath: strings.TrimPrefix(prefix, "/"),
+			Name:    cleanBase,
+			IsDir:   true,
+		})
+		for _, e := range entries {
+			nodes = append(nodes, discovery.ManualNode{
+				Path:    "/" + e.RelPath,
+				RelPath: e.RelPath,
+				Name:    filepath.Base(e.RelPath),
+				IsDir:   false,
+				Content: e.PlayURL,
+			})
+		}
+
+		snapshot := discovery.ManualSnapshot{
+			RootPath: prefix,
+			Mode:     discovery.ManageManualSeriesDir,
+			Nodes:    nodes,
+		}
+		batch, _, err := p.discovery.ApplyManualSnapshot(ctx, snapshot)
+		if err != nil {
+			log.Printf("[manifest-sync] apply snapshot for root %s failed: %v", prefix, err)
+			continue
+		}
+		now := time.Now().Unix()
+		_ = p.store.UpdateMonitorRootStatus(ctx, r.ID, now, batch.ID, batch.Status, "", int64(len(entries)))
+		result[r.ID] = p.finishSync(batch)
+	}
+
+	return result, nil
+}
+
 func (p *Pipeline) RunFullSyncRoot(ctx context.Context, rootID string) (discovery.SyncBatch, error) {
+	if p.manifest != nil && p.manifest.Available() {
+		root, err := p.store.GetMonitorRoot(ctx, rootID)
+		if err == nil {
+			batches, sErr := p.SyncRootsFromManifest(ctx, []discovery.MonitorRoot{root})
+			if sErr == nil && len(batches) > 0 {
+				return batches[rootID], nil
+			}
+		}
+	}
 	_ = p.EnsureSQLiteReader(ctx)
 	batch, err := p.discovery.ScanRootFull(ctx, rootID)
 	return p.finishSync(batch), err
 }
 
 func (p *Pipeline) RunIncrementalSyncRoot(ctx context.Context, rootID string) (discovery.SyncBatch, error) {
+	if p.manifest != nil && p.manifest.Available() {
+		root, err := p.store.GetMonitorRoot(ctx, rootID)
+		if err == nil {
+			batches, sErr := p.SyncRootsFromManifest(ctx, []discovery.MonitorRoot{root})
+			if sErr == nil && len(batches) > 0 {
+				return batches[rootID], nil
+			}
+		}
+	}
 	_ = p.EnsureSQLiteReader(ctx)
 	batch, err := p.discovery.ScanRootIncremental(ctx, rootID)
 	return p.finishSync(batch), err

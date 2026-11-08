@@ -277,6 +277,10 @@ export async function updateMonitorRoot(id: string, enabled: boolean, intervalSe
   });
 }
 
+export async function syncSingleMonitorRoot(id: string): Promise<any> {
+  return request(`/api/monitor/roots/${encodeURIComponent(id)}/sync`, 'POST');
+}
+
 export async function deleteMonitorRoot(id: string): Promise<void> {
   await request(`/api/monitor/roots/${encodeURIComponent(id)}`, 'DELETE');
 }

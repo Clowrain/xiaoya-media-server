@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, 
   RotateCcw, RotateCw, X, ArrowLeft, Star, Calendar, 
-  Clock, Film, Tv, Layers, RefreshCw, Search, Edit3, Trash2, CheckCircle2 
+  Clock, Film, Tv, Layers, RefreshCw, Search, Edit3, Trash2, CheckCircle2,
+  Copy, ExternalLink, MonitorPlay 
 } from 'lucide-react';
 import { User, MediaItem } from '../types';
 import { 
@@ -113,10 +114,36 @@ export const SenPlayerModal: React.FC<SenPlayerModalProps> = ({
     }
   };
 
+  // External player & stream link handlers
+  const getStreamUrl = (target: MediaItem) => {
+    return `${window.location.origin}/Videos/${target.Id}/stream?api_key=${token}&Static=true`;
+  };
+
+  const handleOpenExternal = (target: MediaItem, player: 'iina' | 'potplayer' | 'vlc' | 'browser') => {
+    const rawUrl = getStreamUrl(target);
+    if (player === 'iina') {
+      window.location.href = `iina://weblink?url=${encodeURIComponent(rawUrl)}`;
+      notifyToast('已唤醒 IINA 播放器', 'info');
+    } else if (player === 'potplayer') {
+      window.location.href = `potplayer://${encodeURIComponent(rawUrl)}`;
+      notifyToast('已唤醒 PotPlayer 播放器', 'info');
+    } else if (player === 'vlc') {
+      window.location.href = `vlc://${encodeURIComponent(rawUrl)}`;
+      notifyToast('已唤醒 VLC 播放器', 'info');
+    } else {
+      window.open(rawUrl, '_blank');
+    }
+  };
+
+  const handleCopyStreamLink = (target: MediaItem) => {
+    const rawUrl = getStreamUrl(target);
+    navigator.clipboard.writeText(rawUrl);
+    notifyToast('播放直链已复制到剪贴板，可粘贴至播放器', 'success');
+  };
+
   // Video player controls
   const handleStartPlay = (target: MediaItem) => {
-    setPlayingItem(target);
-    setIsPlaying(true);
+    handleOpenExternal(target, 'browser');
   };
 
   const handleStopPlay = () => {
@@ -477,16 +504,52 @@ export const SenPlayerModal: React.FC<SenPlayerModalProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        if (item.Type === 'Series' && episodes.length > 0) {
-                          handleStartPlay(episodes[0]);
-                        } else {
-                          handleStartPlay(item);
-                        }
+                        const target = (item.Type === 'Series' && episodes.length > 0) ? episodes[0] : item;
+                        handleOpenExternal(target, 'browser');
                       }}
                       className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition cursor-pointer"
                     >
                       <Play className="w-4 h-4 fill-white" />
                       {item.Type === 'Series' ? '播放第一集' : '立即播放'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = (item.Type === 'Series' && episodes.length > 0) ? episodes[0] : item;
+                        handleOpenExternal(target, 'iina');
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer border border-zinc-700"
+                      title="调用 macOS 本地 IINA 播放器"
+                    >
+                      <MonitorPlay className="w-3.5 h-3.5 text-emerald-400" />
+                      IINA
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = (item.Type === 'Series' && episodes.length > 0) ? episodes[0] : item;
+                        handleOpenExternal(target, 'potplayer');
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer border border-zinc-700"
+                      title="调用 Windows 本地 PotPlayer 播放器"
+                    >
+                      <MonitorPlay className="w-3.5 h-3.5 text-amber-400" />
+                      PotPlayer
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = (item.Type === 'Series' && episodes.length > 0) ? episodes[0] : item;
+                        handleCopyStreamLink(target);
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer border border-zinc-700"
+                      title="复制小雅直链 (可粘贴到 Infuse / VLC)"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-zinc-400" />
+                      复制直链
                     </button>
 
                     {isAdmin && (
@@ -623,6 +686,37 @@ export const SenPlayerModal: React.FC<SenPlayerModalProps> = ({
                               <p className="text-[10px] text-zinc-500 line-clamp-2">
                                 {ep.Overview || '暂无剧情简介'}
                               </p>
+                            </div>
+
+                            {/* Quick Action Tools */}
+                            <div className="flex items-center justify-between pt-1.5 border-t border-zinc-800/80" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyStreamLink(ep)}
+                                className="text-[10px] text-zinc-400 hover:text-white flex items-center gap-1 hover:bg-zinc-800 px-1.5 py-0.5 rounded transition cursor-pointer"
+                                title="复制小雅直链"
+                              >
+                                <Copy className="w-3 h-3" />
+                                复制直链
+                              </button>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenExternal(ep, 'iina')}
+                                  className="text-[10px] text-emerald-400 hover:text-emerald-300 font-mono font-bold px-1.5 py-0.5 rounded hover:bg-zinc-800 transition cursor-pointer"
+                                  title="唤起 macOS IINA"
+                                >
+                                  IINA
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenExternal(ep, 'potplayer')}
+                                  className="text-[10px] text-amber-400 hover:text-amber-300 font-mono font-bold px-1.5 py-0.5 rounded hover:bg-zinc-800 transition cursor-pointer"
+                                  title="唤起 Windows PotPlayer"
+                                >
+                                  Pot
+                                </button>
+                              </div>
                             </div>
                           </div>
                         );

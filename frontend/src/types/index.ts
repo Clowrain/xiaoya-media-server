@@ -41,6 +41,8 @@ export interface MediaItem {
   MediaSources?: MediaSource[];
   Path?: string;
   IsFolder?: boolean;
+  ChildCount?: number;
+  RecursiveItemCount?: number;
   UserData?: {
     PlaybackPositionTicks?: number;
     Played?: boolean;
