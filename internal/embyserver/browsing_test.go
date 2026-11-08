@@ -148,7 +148,7 @@ func TestSeriesNavigationAndLatest(t *testing.T) {
 		path  string
 		count float64
 		kind  string
-	}{{"/Shows/s/Seasons", 2, "Season"}, {"/Shows/s/Episodes", 2, "Episode"}, {"/Shows/s/Episodes?SeasonId=s2", 1, "Episode"}, {"/Items?ParentId=s&Recursive=True&IncludeItemTypes=Episode", 2, "Episode"}, {"/Shows/NextUp?SeriesId=s", 1, "Episode"}, {"/Shows/NextUp", 0, "Episode"}} {
+	}{{"/Shows/s/Seasons", 2, "Season"}, {"/Shows/s/Episodes", 2, "Episode"}, {"/Shows/s/Episodes?SeasonId=s2", 1, "Episode"}, {"/Items?ParentId=s&Recursive=True&IncludeItemTypes=Episode", 2, "Episode"}, {"/Shows/NextUp?SeriesId=s", 0, "Episode"}, {"/Shows/NextUp", 0, "Episode"}} {
 		m := decodeM(t, browseGet(a, v.path, true))
 		if m["TotalRecordCount"] != v.count {
 			t.Fatal(v.path, m)
@@ -159,9 +159,11 @@ func TestSeriesNavigationAndLatest(t *testing.T) {
 			}
 		}
 	}
+	// NextUp 已按产品决策整体移除（nextup.go 恒返回空集合，见 TestNextUpIsCompletelyRemoved）；
+	// 即使存在播放历史也必须为空。
 	a.db.Exec("INSERT INTO userdata(user_id,item,played) VALUES(?,'e1',1)", uid)
 	m := decodeM(t, browseGet(a, "/Shows/NextUp?SeriesId=s", true))
-	if items := m["Items"].([]any); len(items) != 1 || items[0].(map[string]any)["Id"] != "e2" {
+	if items := m["Items"].([]any); len(items) != 0 {
 		t.Fatal(m)
 	}
 	w := browseGet(a, "/Users/"+uid+"/Items/Latest", true)

@@ -353,8 +353,15 @@ func TestPostgresRatingMigrationSmoke(t *testing.T) {
 	if e := a.postgresSchema(); e != nil {
 		t.Fatalf("postgresSchema 迁移失败: %v", e)
 	}
+	// 空表上 SELECT ... LIMIT 1 会因无行而失败；种子一条 item 再验证 rating 列可用。
+	if _, e := a.db.Exec("INSERT INTO libraries(id,name,path,kind) VALUES('pg-rate','Rate','/pg-rate','movies')"); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := a.db.Exec("INSERT INTO items(id,lib,parent,name,kind,path,url,year,seen) VALUES('pg-rate-1','pg-rate','pg-rate','评分电影','Movie','/pg-rate/a','http://cdn/a.mp4',2024,'t')"); e != nil {
+		t.Fatal(e)
+	}
 	var rating float64
-	if e := a.db.QueryRow("SELECT rating FROM items LIMIT 1").Scan(&rating); e != nil {
+	if e := a.db.QueryRow("SELECT rating FROM items WHERE id='pg-rate-1'").Scan(&rating); e != nil {
 		t.Fatalf("rating 列不可用: %v", e)
 	}
 }

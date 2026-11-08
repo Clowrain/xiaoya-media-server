@@ -382,6 +382,8 @@ func TestSearchHintsSuggestionsYearsGenreItems(t *testing.T) {
 // 命中断言需要 Postgres 方言（ILIKE / media_initials），无 TEST_DATABASE_URL 时自动跳过。
 func TestSearchHintsAndSuggestionsOnPostgres(t *testing.T) {
 	a := testApp(t)
+	uid := routingUID(t, a)
+	tok := routingToken(t, a, uid)
 	if _, e := a.db.Exec("INSERT INTO libraries(id,name,path,kind) VALUES('pg-search','Search','/pg-search','movies')"); e != nil {
 		t.Fatal(e)
 	}
@@ -393,7 +395,9 @@ func TestSearchHintsAndSuggestionsOnPostgres(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	a.serve(w, httptest.NewRequest("GET", "/emby/SearchHints?SearchTerm=流浪", nil))
+	r := httptest.NewRequest("GET", "/emby/SearchHints?SearchTerm=流浪", nil)
+	r.Header.Set("X-Emby-Token", tok)
+	a.serve(w, r)
 	if w.Code != 200 {
 		t.Fatalf("SearchHints 应返回 200: %d %s", w.Code, w.Body.String())
 	}
@@ -413,7 +417,9 @@ func TestSearchHintsAndSuggestionsOnPostgres(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	a.serve(w, httptest.NewRequest("GET", "/emby/SearchSuggestions?query=流浪", nil))
+	r = httptest.NewRequest("GET", "/emby/SearchSuggestions?query=流浪", nil)
+	r.Header.Set("X-Emby-Token", tok)
+	a.serve(w, r)
 	if w.Code != 200 {
 		t.Fatalf("SearchSuggestions 应返回 200: %d %s", w.Code, w.Body.String())
 	}
@@ -447,6 +453,7 @@ func TestServerInfoName(t *testing.T) {
 // 无 TEST_DATABASE_URL 时自动跳过。
 func TestSimilarQueryResultOnPostgres(t *testing.T) {
 	a := testApp(t)
+	tok := routingToken(t, a, routingUID(t, a))
 	if _, e := a.db.Exec("INSERT INTO libraries(id,name,path,kind) VALUES('pg-sim','Sim','/pg-sim','movies')"); e != nil {
 		t.Fatal(e)
 	}
@@ -461,7 +468,9 @@ func TestSimilarQueryResultOnPostgres(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	a.serve(w, httptest.NewRequest("GET", "/emby/Users/anything/Items/pg-s1/Similar?Limit=1", nil))
+	r := httptest.NewRequest("GET", "/emby/Users/anything/Items/pg-s1/Similar?Limit=1", nil)
+	r.Header.Set("X-Emby-Token", tok)
+	a.serve(w, r)
 	if w.Code != 200 {
 		t.Fatalf("Similar 应返回 200: %d %s", w.Code, w.Body.String())
 	}
