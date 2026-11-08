@@ -2,7 +2,7 @@ package embyserver
 
 func (a *App) postgresSchema() error {
 	_, e := a.db.Exec(`
- CREATE EXTENSION IF NOT EXISTS pg_trgm;
+ CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public;
  CREATE TABLE IF NOT EXISTS scan_snapshots(lib TEXT PRIMARY KEY REFERENCES libraries(id) ON DELETE CASCADE,data TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS item_genres(item TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,genre TEXT NOT NULL,PRIMARY KEY(item,genre));
  CREATE INDEX IF NOT EXISTS genres_genre_item ON item_genres(genre,item);

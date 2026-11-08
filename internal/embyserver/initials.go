@@ -33,6 +33,9 @@ func (a *App) initialsSchema() error {
 	if _, e = tx.Exec("SET LOCAL statement_timeout='5min'"); e != nil {
 		return e
 	}
+	if _, e = tx.Exec("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public"); e != nil {
+		return e
+	}
 	if _, e = tx.Exec(initialsSQL); e != nil {
 		return e
 	}

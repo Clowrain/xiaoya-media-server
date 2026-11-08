@@ -33,6 +33,9 @@ func testApp(t *testing.T) *App {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if _, e = base.Exec("CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public"); e != nil {
+		// Log or ignore if extension is already managed or lacking superuser
+	}
 	schema := "test_" + id()
 	if _, e = base.Exec("CREATE SCHEMA " + schema); e != nil {
 		t.Fatal(e)
