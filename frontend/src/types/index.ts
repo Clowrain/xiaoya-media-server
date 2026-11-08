@@ -107,12 +107,16 @@ export interface AListFileItem {
   type?: number;
   full_path?: string;
   parent?: string;
+  source_node_id?: number;
+  in_sqlite?: boolean;
 }
 
 export interface AListBrowseResult {
   path: string;
   items: AListFileItem[];
   total: number;
+  source?: 'sqlite' | 'alist';
+  parent_id?: number;
 }
 
 export interface TmdbConfig {

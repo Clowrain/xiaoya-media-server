@@ -507,6 +507,70 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 		}
 		return true
 
+	case p == "/api/xiaoya/browse" || (p == "/api/alist/browse" && r.URL.Query().Get("source") == "sqlite"):
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "GET required")
+			return true
+		}
+		if h.pipeline == nil {
+			writeErr(w, http.StatusServiceUnavailable, "小雅管线未就绪")
+			return true
+		}
+		if err := h.pipeline.EnsureSQLiteReader(ctx); err != nil {
+			writeErr(w, http.StatusBadGateway, fmt.Sprintf("小雅 SQLite 不可用: %v", err))
+			return true
+		}
+		qv := r.URL.Query()
+		dirPath := qv.Get("path")
+		if dirPath == "" {
+			dirPath = "/"
+		}
+		page, _ := strconv.Atoi(qv.Get("page"))
+		perPage, _ := strconv.Atoi(qv.Get("per_page"))
+		parentID, _ := strconv.ParseInt(qv.Get("parent_id"), 10, 64)
+
+		var res xiaoya.SQLiteBrowseResult
+		err := h.pipeline.Discovery().Reader().WithSnapshot(ctx, func(snapshot *xiaoya.Reader) error {
+			var lErr error
+			res, lErr = snapshot.ListChildren(ctx, parentID, dirPath, page, perPage)
+			return lErr
+		})
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return true
+		}
+
+		type browseItem struct {
+			Name         string `json:"name"`
+			IsDir        bool   `json:"is_dir"`
+			FullPath     string `json:"full_path"`
+			SourceNodeID int64  `json:"source_node_id"`
+			ParentID     int64  `json:"parent_id"`
+			InSQLite     bool   `json:"in_sqlite"`
+			Size         int64  `json:"size"`
+		}
+		items := make([]browseItem, 0, len(res.Items))
+		for _, it := range res.Items {
+			items = append(items, browseItem{
+				Name:         it.Name,
+				IsDir:        it.IsDir,
+				FullPath:     it.FullPath,
+				SourceNodeID: it.ID,
+				ParentID:     it.ParentID,
+				InSQLite:     true,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"path":      res.Current.FullPath,
+			"parent_id": res.Current.ID,
+			"items":     items,
+			"total":     res.Total,
+			"page":      res.Page,
+			"per_page":  res.PerPage,
+			"source":    "sqlite",
+		})
+		return true
+
 	case p == "/api/alist/browse":
 		if r.Method != http.MethodGet {
 			writeErr(w, http.StatusMethodNotAllowed, "GET required")
@@ -529,7 +593,7 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			writeErr(w, http.StatusBadGateway, err.Error())
 			return true
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"path": dirPath, "items": entries, "total": total})
+		writeJSON(w, http.StatusOK, map[string]any{"path": dirPath, "items": entries, "total": total, "source": "alist"})
 		return true
 
 	case p == "/api/alist/search":

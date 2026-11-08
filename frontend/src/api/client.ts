@@ -250,8 +250,8 @@ export async function importResource(path: string, isDir: boolean, trackUpdates:
   });
 }
 
-export async function browseAList(path: string, page: number = 1, perPage: number = 25): Promise<AListBrowseResult> {
-  const qs = new URLSearchParams({ path, page: String(page), per_page: String(perPage) });
+export async function browseAList(path: string, page: number = 1, perPage: number = 25, source: 'sqlite' | 'alist' = 'sqlite'): Promise<AListBrowseResult> {
+  const qs = new URLSearchParams({ path, page: String(page), per_page: String(perPage), source });
   return request(`/api/alist/browse?${qs.toString()}`);
 }
 

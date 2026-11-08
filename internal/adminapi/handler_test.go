@@ -123,6 +123,20 @@ func TestAdminAPIRoutesMonitorSyncCleanupAndTasks(t *testing.T) {
 			t.Fatalf("GET %s failed: %d %s", ep, rec.Code, rec.Body.String())
 		}
 	}
+
+	// 6. GET /api/xiaoya/browse (direct SQLite browse)
+	rBrowse := call(http.MethodGet, "/api/xiaoya/browse?path=/", nil)
+	if rBrowse.Code != http.StatusOK {
+		t.Fatalf("GET /api/xiaoya/browse = %d: %s", rBrowse.Code, rBrowse.Body.String())
+	}
+	var browsePayload struct {
+		Path   string `json:"path"`
+		Source string `json:"source"`
+		Items  []any  `json:"items"`
+	}
+	if err := json.Unmarshal(rBrowse.Body.Bytes(), &browsePayload); err != nil || browsePayload.Source != "sqlite" {
+		t.Fatalf("unexpected xiaoya browse payload: %+v", browsePayload)
+	}
 }
 
 func TestBackgroundSyncPersistsFailureAndInterruptsStaleJobs(t *testing.T) {

@@ -148,6 +148,23 @@ func TestReaderReadOnlyAndZheYueLiangSubtree(t *testing.T) {
 	if len(collected) != 30 {
 		t.Fatalf("collected %d nodes, want 30", len(collected))
 	}
+
+	// Test ListChildren directly browsing SQLite nodes
+	resRoot, err := r.ListChildren(ctx, 0, "/", 1, 10)
+	if err != nil || resRoot.Total < 1 || len(resRoot.Items) < 1 {
+		t.Fatalf("ListChildren root failed: got (%+v, %v)", resRoot, err)
+	}
+	if resRoot.Items[0].Name != "每日更新" {
+		t.Errorf("expected 每日更新 at root, got %s", resRoot.Items[0].Name)
+	}
+
+	resSub, err := r.ListChildren(ctx, 0, "/每日更新/电视剧/国产剧", 1, 10)
+	if err != nil || resSub.Total < 1 || len(resSub.Items) < 1 {
+		t.Fatalf("ListChildren 国产剧 failed: got (%+v, %v)", resSub, err)
+	}
+	if resSub.Items[0].Name != "折月亮 (2026)" {
+		t.Errorf("expected 折月亮 (2026), got %s", resSub.Items[0].Name)
+	}
 	last := collected[len(collected)-1]
 	if last.ID != 641745 || last.Name != "E27" || last.RelPath != "折月亮 (2026)/{tmdb-270431}/Season 1/E27" {
 		t.Fatalf("unexpected last node: %+v", last)

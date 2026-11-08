@@ -675,4 +675,93 @@ func isCategoryKeyword(s string) bool {
 	return false
 }
 
+// SQLiteBrowseResult wraps pagination and node items for directory browsing directly from Xiaoya SQLite.
+type SQLiteBrowseResult struct {
+	Current Node   `json:"current"`
+	Items   []Node `json:"items"`
+	Total   int    `json:"total"`
+	Page    int    `json:"page"`
+	PerPage int    `json:"per_page"`
+}
+
+// ListChildren lists direct child nodes of a directory given path or parentID,
+// supporting instant local pagination directly from Xiaoya's SQLite nodes table.
+func (r *Reader) ListChildren(ctx context.Context, parentID int64, path string, page, perPage int) (SQLiteBrowseResult, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if perPage <= 0 || perPage > 200 {
+		perPage = 50
+	}
+	offset := (page - 1) * perPage
+
+	var currNode Node
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" || cleanPath == "/" {
+		currNode = Node{
+			RawNode:  RawNode{ID: 0, Name: "/", ParentID: 0, IsDir: true},
+			FullPath: "/",
+		}
+	} else if parentID > 0 {
+		var n RawNode
+		var isDirInt int
+		err := r.query().QueryRowContext(ctx, "SELECT id, name, parent_id, is_dir, content FROM nodes WHERE id = ?", parentID).Scan(&n.ID, &n.Name, &n.ParentID, &isDirInt, &n.Content)
+		if err != nil {
+			return SQLiteBrowseResult{}, err
+		}
+		n.IsDir = isDirInt != 0
+		currNode = Node{RawNode: n, FullPath: cleanPath}
+	} else {
+		resolved, err := r.ResolveAnyPath(ctx, cleanPath)
+		if err != nil {
+			return SQLiteBrowseResult{}, err
+		}
+		currNode = resolved
+	}
+
+	targetParentID := currNode.ID
+
+	var total int
+	err := r.query().QueryRowContext(ctx, "SELECT COUNT(*) FROM nodes WHERE parent_id = ?", targetParentID).Scan(&total)
+	if err != nil {
+		return SQLiteBrowseResult{}, err
+	}
+
+	q := "SELECT id, name, parent_id, is_dir, content FROM nodes WHERE parent_id = ? ORDER BY is_dir DESC, name ASC LIMIT ? OFFSET ?"
+	rows, err := r.query().QueryContext(ctx, q, targetParentID, perPage, offset)
+	if err != nil {
+		return SQLiteBrowseResult{}, err
+	}
+	defer rows.Close()
+
+	var items []Node
+	for rows.Next() {
+		var n RawNode
+		var isDirInt int
+		if err := rows.Scan(&n.ID, &n.Name, &n.ParentID, &isDirInt, &n.Content); err != nil {
+			return SQLiteBrowseResult{}, err
+		}
+		n.IsDir = isDirInt != 0
+		itemPath := n.Name
+		if currNode.FullPath == "/" {
+			itemPath = "/" + n.Name
+		} else {
+			itemPath = strings.TrimRight(currNode.FullPath, "/") + "/" + n.Name
+		}
+		items = append(items, Node{
+			RawNode:  n,
+			FullPath: itemPath,
+			RelPath:  strings.TrimPrefix(itemPath, "/"),
+		})
+	}
+
+	return SQLiteBrowseResult{
+		Current: currNode,
+		Items:   items,
+		Total:   total,
+		Page:    page,
+		PerPage: perPage,
+	}, rows.Err()
+}
+
 
