@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -51,8 +52,12 @@ func TestAdminAPIRoutesMonitorSyncCleanupAndTasks(t *testing.T) {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
 
+	strmTxtPath := filepath.Join(tmp, "strm.txt")
+	_ = os.WriteFile(strmTxtPath, []byte("每日更新/电视剧/国产剧/折月亮 (2026)/{tmdb-270431}/Season 1/折月亮.2026.S01E01.strm#http://xiaoya.host:5678/d/每日更新/电视剧/国产剧/折月亮/01.mp4\n"), 0644)
+
 	cfg := config.Default()
 	cfg.Xiaoya.SQLitePath = sqlitePath
+	cfg.Xiaoya.StrmTextPath = strmTxtPath
 	cfg.STRM.OutputRoot = filepath.Join(tmp, "strm-out")
 	cfg.Monitor.Roots = []string{"/每日更新/电视剧/国产剧"}
 

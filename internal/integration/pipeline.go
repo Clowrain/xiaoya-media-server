@@ -484,8 +484,26 @@ func (p *Pipeline) SyncRootsFromManifest(ctx context.Context, roots []discovery.
 }
 
 func (p *Pipeline) RunFullSyncRoot(ctx context.Context, rootID string) (discovery.SyncBatch, error) {
+	rootPath := rootID
+	if p.store != nil {
+		if r, err := p.store.GetMonitorRoot(ctx, rootID); err == nil {
+			rootPath = r.RootPath
+		}
+	}
 	if p.manifest == nil || !p.manifest.Available() {
-		return discovery.SyncBatch{}, errors.New("strm.txt 权威清单未就绪，请检查宿主机小雅主目录挂载")
+		err := errors.New("strm.txt 权威清单未就绪，请检查宿主机小雅主目录挂载")
+		var batch discovery.SyncBatch
+		if p.store != nil {
+			batch, _ = p.store.CreateBatch(ctx, rootID, rootPath, "full", false)
+			batch.Status = discovery.BatchFailed
+			batch.ErrorMessage = err.Error()
+			batch.FinishedAt = time.Now().Unix()
+			_ = p.store.FinishBatch(ctx, batch)
+			_ = p.store.UpdateMonitorRootStatus(ctx, rootID, 0, batch.ID, discovery.BatchFailed, err.Error(), batch.FinishedAt)
+		} else {
+			batch = discovery.SyncBatch{RootID: rootID, Status: discovery.BatchFailed, ErrorMessage: err.Error()}
+		}
+		return batch, err
 	}
 	root, err := p.store.GetMonitorRoot(ctx, rootID)
 	if err != nil {
@@ -493,7 +511,18 @@ func (p *Pipeline) RunFullSyncRoot(ctx context.Context, rootID string) (discover
 	}
 	batches, sErr := p.SyncRootsFromManifest(ctx, []discovery.MonitorRoot{root})
 	if sErr != nil {
-		return discovery.SyncBatch{}, sErr
+		var batch discovery.SyncBatch
+		if p.store != nil {
+			batch, _ = p.store.CreateBatch(ctx, rootID, root.RootPath, "full", false)
+			batch.Status = discovery.BatchFailed
+			batch.ErrorMessage = sErr.Error()
+			batch.FinishedAt = time.Now().Unix()
+			_ = p.store.FinishBatch(ctx, batch)
+			_ = p.store.UpdateMonitorRootStatus(ctx, rootID, 0, batch.ID, discovery.BatchFailed, sErr.Error(), batch.FinishedAt)
+		} else {
+			batch = discovery.SyncBatch{RootID: rootID, Status: discovery.BatchFailed, ErrorMessage: sErr.Error()}
+		}
+		return batch, sErr
 	}
 	if b, ok := batches[rootID]; ok {
 		return b, nil

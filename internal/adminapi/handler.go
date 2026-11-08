@@ -550,14 +550,14 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			writeErr(w, http.StatusServiceUnavailable, "小雅管线未就绪")
 			return true
 		}
-		if err := h.pipeline.EnsureSQLiteReader(ctx); err != nil {
-			writeErr(w, http.StatusBadGateway, fmt.Sprintf("小雅 SQLite 不可用: %v", err))
-			return true
-		}
 		qv := r.URL.Query()
 		dirPath := qv.Get("path")
 		if dirPath == "" {
 			dirPath = "/"
+		}
+		if h.pipeline.Discovery() == nil || h.pipeline.Discovery().Reader() == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"path": dirPath, "source": "sqlite", "items": []any{}})
+			return true
 		}
 		page, _ := strconv.Atoi(qv.Get("page"))
 		perPage, _ := strconv.Atoi(qv.Get("per_page"))
