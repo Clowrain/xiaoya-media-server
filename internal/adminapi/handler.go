@@ -610,15 +610,30 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 		if limit <= 0 || limit > 1000 {
 			limit = 100
 		}
-		entries, err := h.pipeline.ManifestScanner().FindMatching(ctx, kw, limit)
+		raw := qv.Get("raw") == "1" || strings.EqualFold(qv.Get("raw"), "true")
+		if raw {
+			entries, err := h.pipeline.ManifestScanner().FindMatching(ctx, kw, limit)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return true
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"query": kw,
+				"items": entries,
+				"total": len(entries),
+			})
+			return true
+		}
+
+		aggEntries, err := h.pipeline.ManifestScanner().FindAggregated(ctx, kw, limit)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return true
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"query": kw,
-			"items": entries,
-			"total": len(entries),
+			"items": aggEntries,
+			"total": len(aggEntries),
 		})
 		return true
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -80,6 +81,29 @@ func TestManifestScannerFindMatching(t *testing.T) {
 	}
 	if results[0].EpisodeNum != 1 || results[1].EpisodeNum != 2 {
 		t.Errorf("unexpected episodes: %+v", results)
+	}
+
+	// Test aggregated search
+	agg, err := scanner.FindAggregated(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("FindAggregated failed: %v", err)
+	}
+	// 3 works: 奥本海默 (1), 走马上任 (2 eps), 折月亮 (1 ep)
+	if len(agg) != 3 {
+		t.Fatalf("expected 3 aggregated works, got %d", len(agg))
+	}
+	var zmsr *AggregatedManifestItem
+	for i := range agg {
+		if strings.Contains(agg[i].Title, "走马上任") {
+			zmsr = &agg[i]
+			break
+		}
+	}
+	if zmsr == nil || zmsr.EpisodeCount != 2 {
+		t.Errorf("expected 走马上任 to have 2 episodes, got %+v", zmsr)
+	}
+	if zmsr.MediaType != "Series" {
+		t.Errorf("expected Series media type, got %s", zmsr.MediaType)
 	}
 }
 

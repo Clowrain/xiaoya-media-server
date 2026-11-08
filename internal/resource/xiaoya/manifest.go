@@ -23,16 +23,29 @@ var (
 
 // ManifestEntry represents a parsed line from Xiaoya's strm.txt.
 type ManifestEntry struct {
-	LineNumber int    `json:"line_number"`
-	RelPath    string `json:"rel_path"`
-	PlayURL    string `json:"play_url"`
-	Title      string `json:"title"`
-	Year       int    `json:"year,omitempty"`
-	TmdbID     string `json:"tmdb_id,omitempty"`
-	SeasonNum  int    `json:"season_number,omitempty"`
-	EpisodeNum int    `json:"episode_number,omitempty"`
-	MediaType  string `json:"media_type"` // "Movie" or "Series"
-	Category   string `json:"category,omitempty"`
+	LineNumber     int    `json:"line_number"`
+	RelPath        string `json:"rel_path"`
+	PlayURL        string `json:"play_url"`
+	Title          string `json:"title"`
+	Year           int    `json:"year,omitempty"`
+	TmdbID         string `json:"tmdb_id,omitempty"`
+	SeasonNum      int    `json:"season_number,omitempty"`
+	EpisodeNum     int    `json:"episode_number,omitempty"`
+	MediaType      string `json:"media_type"` // "Movie" or "Series"
+	Category       string `json:"category,omitempty"`
+	SeriesRootPath string `json:"series_root_path,omitempty"`
+}
+
+// AggregatedManifestItem represents a deduplicated media work (a Movie, or a whole Series with episode count).
+type AggregatedManifestItem struct {
+	Title          string `json:"title"`
+	RelPath        string `json:"rel_path"`
+	PlayURL        string `json:"play_url"`
+	MediaType      string `json:"media_type"` // "Movie" or "Series"
+	Year           int    `json:"year,omitempty"`
+	TmdbID         string `json:"tmdb_id,omitempty"`
+	SeriesRootPath string `json:"series_root_path,omitempty"`
+	EpisodeCount   int    `json:"episode_count,omitempty"`
 }
 
 // ManifestScanner provides high-performance streaming queries against Xiaoya's strm.txt manifest.
@@ -191,7 +204,109 @@ func ParseManifestLine(lineNum int, line string) (*ManifestEntry, error) {
 	titleSeg = strings.TrimSuffix(titleSeg, ".strm")
 	entry.Title = strings.TrimSpace(titleSeg)
 
+	// Extract SeriesRootPath for Series
+	if entry.MediaType == "Series" {
+		seriesDir := ""
+		for i, seg := range segs {
+			if tmdbRegex.MatchString(seg) && i > 0 {
+				seriesDir = strings.Join(segs[:i], "/")
+				break
+			}
+			if strings.HasPrefix(strings.ToLower(seg), "season") && i > 0 {
+				seriesDir = strings.Join(segs[:i], "/")
+				break
+			}
+		}
+		if seriesDir == "" && len(segs) >= 2 {
+			seriesDir = strings.Join(segs[:len(segs)-1], "/")
+		}
+		entry.SeriesRootPath = seriesDir
+	}
+
 	return entry, nil
+}
+
+// FindAggregated scans strm.txt and returns deduplicated works (Movies, and Series aggregated with EpisodeCount).
+func (s *ManifestScanner) FindAggregated(ctx context.Context, query string, limit int) ([]AggregatedManifestItem, error) {
+	if !s.Available() {
+		return nil, fmt.Errorf("strm.txt not found at %s", s.filePath)
+	}
+
+	f, err := os.Open(s.filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	normQuery := strings.ToLower(strings.Trim(strings.TrimSpace(query), "/"))
+	var results []AggregatedManifestItem
+	seriesMap := make(map[string]int) // seriesKey -> index in results
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		if ctx.Err() != nil {
+			return results, ctx.Err()
+		}
+
+		line := scanner.Text()
+		if normQuery != "" && !strings.Contains(strings.ToLower(line), normQuery) {
+			continue
+		}
+
+		entry, err := ParseManifestLine(lineNum, line)
+		if err != nil || entry == nil {
+			continue
+		}
+
+		if entry.MediaType == "Series" {
+			key := entry.SeriesRootPath
+			if key == "" {
+				key = entry.Title
+			}
+			if idx, ok := seriesMap[key]; ok {
+				results[idx].EpisodeCount++
+			} else {
+				if limit > 0 && len(results) >= limit {
+					break
+				}
+				item := AggregatedManifestItem{
+					Title:          entry.Title,
+					RelPath:        entry.SeriesRootPath,
+					PlayURL:        entry.PlayURL,
+					MediaType:      "Series",
+					Year:           entry.Year,
+					TmdbID:         entry.TmdbID,
+					SeriesRootPath: entry.SeriesRootPath,
+					EpisodeCount:   1,
+				}
+				if item.RelPath == "" {
+					item.RelPath = entry.RelPath
+				}
+				seriesMap[key] = len(results)
+				results = append(results, item)
+			}
+		} else {
+			if limit > 0 && len(results) >= limit {
+				break
+			}
+			results = append(results, AggregatedManifestItem{
+				Title:        entry.Title,
+				RelPath:      entry.RelPath,
+				PlayURL:      entry.PlayURL,
+				MediaType:    "Movie",
+				Year:         entry.Year,
+				TmdbID:       entry.TmdbID,
+				EpisodeCount: 1,
+			})
+		}
+	}
+
+	return results, scanner.Err()
 }
 
 // FindMatching scans strm.txt and returns all entries matching the query keyword or path prefix.

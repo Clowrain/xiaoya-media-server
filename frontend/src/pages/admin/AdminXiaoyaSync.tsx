@@ -82,17 +82,17 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
         const res = await request(`/api/xiaoya/manifest/search?query=${encodeURIComponent(targetPath === '/' ? '' : targetPath)}&limit=100`);
         const entries = (res.items || []).map((e: any) => {
           let displayName = e.title || e.rel_path;
-          if (e.media_type === 'Series' && (e.season || e.episode)) {
-            const s = e.season ? `S${String(e.season).padStart(2, '0')}` : 'S01';
-            const ep = e.episode ? `E${String(e.episode).padStart(2, '0')}` : '';
-            displayName = `${e.title || e.rel_path} (${s}${ep})`.trim();
+          const isSeries = e.media_type === 'Series';
+          if (isSeries) {
+            const epTag = e.episode_count ? ` (共 ${e.episode_count} 集)` : '';
+            displayName = `${e.title || e.rel_path}${epTag}`;
           }
           return {
             name: displayName,
-            full_path: '/' + e.rel_path,
-            is_dir: e.media_type === 'Series',
+            full_path: '/' + (e.series_root_path || e.rel_path),
+            is_dir: isSeries,
             size: 0,
-            modified: '',
+            modified: isSeries ? '电视剧' : '电影',
           };
         });
         setAlistItems(entries);
