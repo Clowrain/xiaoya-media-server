@@ -80,13 +80,21 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
     try {
       if (source === 'manifest') {
         const res = await request(`/api/xiaoya/manifest/search?query=${encodeURIComponent(targetPath === '/' ? '' : targetPath)}&limit=100`);
-        const entries = (res.items || []).map((e: any) => ({
-          name: e.title || e.rel_path,
-          full_path: '/' + e.rel_path,
-          is_dir: e.media_type === 'Series',
-          size: 0,
-          modified: '',
-        }));
+        const entries = (res.items || []).map((e: any) => {
+          let displayName = e.title || e.rel_path;
+          if (e.media_type === 'Series' && (e.season || e.episode)) {
+            const s = e.season ? `S${String(e.season).padStart(2, '0')}` : 'S01';
+            const ep = e.episode ? `E${String(e.episode).padStart(2, '0')}` : '';
+            displayName = `${e.title || e.rel_path} (${s}${ep})`.trim();
+          }
+          return {
+            name: displayName,
+            full_path: '/' + e.rel_path,
+            is_dir: e.media_type === 'Series',
+            size: 0,
+            modified: '',
+          };
+        });
         setAlistItems(entries);
         setAlistTotal(entries.length);
         setAlistPath(targetPath);
