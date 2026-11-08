@@ -10,9 +10,13 @@ import { ToastContainer } from './components/Toast';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(getStoredUser());
-  const [currentView, setCurrentView] = useState<'wall' | 'admin'>(() =>
-    window.location.pathname.startsWith('/web/manage') ? 'admin' : 'wall'
-  );
+  const [currentView, setCurrentView] = useState<'wall' | 'admin'>(() => {
+    const user = getStoredUser();
+    if (window.location.pathname.startsWith('/web/manage') && (user?.Policy?.IsAdministrator ?? false)) {
+      return 'admin';
+    }
+    return 'wall';
+  });
   const [showLogs, setShowLogs] = useState<boolean>(false);
   const [matchTargetItem, setMatchTargetItem] = useState<MediaItem | null>(null);
 

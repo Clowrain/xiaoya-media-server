@@ -70,21 +70,21 @@ export const Header: React.FC<HeaderProps> = ({
             <nav className="flex items-center gap-1.5 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800/80">
               <button
                 onClick={() => onViewChange('wall')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all cursor-pointer ${
                   currentView === 'wall'
-                    ? 'bg-zinc-800 text-emerald-400 shadow-sm'
+                    ? 'bg-zinc-800 text-emerald-400 shadow-sm font-semibold'
                     : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
                 }`}
               >
                 <Film className="w-4 h-4" />
-                影视墙
+                影视展示
               </button>
               {isAdmin && (
                 <button
                   onClick={() => onViewChange('admin')}
-                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all cursor-pointer ${
                     currentView === 'admin'
-                      ? 'bg-zinc-800 text-emerald-400 shadow-sm'
+                      ? 'bg-zinc-800 text-emerald-400 shadow-sm font-semibold'
                       : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
                   }`}
                 >

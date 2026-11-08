@@ -23,6 +23,12 @@ export interface MediaItem {
   PremiereDate?: string;
   Overview?: string;
   RunTimeTicks?: number;
+  IndexNumber?: number;
+  ParentIndexNumber?: number;
+  SeriesName?: string;
+  SeriesId?: string;
+  SeasonName?: string;
+  SeasonId?: string;
   ImageTags?: {
     Primary?: string;
     Backdrop?: string;
@@ -35,6 +41,12 @@ export interface MediaItem {
   MediaSources?: MediaSource[];
   Path?: string;
   IsFolder?: boolean;
+  UserData?: {
+    PlaybackPositionTicks?: number;
+    Played?: boolean;
+    PlayCount?: number;
+    UnplayedItemCount?: number;
+  };
 }
 
 export interface MediaSource {

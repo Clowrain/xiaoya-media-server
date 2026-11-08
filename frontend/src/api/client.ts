@@ -128,7 +128,7 @@ export async function changePasswordApi(userId: string, oldPw: string, newPw: st
   });
 }
 
-// Media Wall API
+// Media Wall & SenPlayer API
 export async function fetchLibraryViews(userId: string): Promise<LibraryView[]> {
   const data = await request(`/emby/Users/${userId}/Views`);
   return data.Items || [];
@@ -140,6 +140,51 @@ export async function fetchMediaItems(params: URLSearchParams): Promise<{ Items:
 
 export async function fetchItemDetail(userId: string, itemId: string): Promise<MediaItem> {
   return request(`/emby/Users/${userId}/Items/${itemId}`);
+}
+
+export async function fetchResumeItems(userId: string): Promise<MediaItem[]> {
+  try {
+    const data = await request(`/emby/Users/${userId}/Items/Resume?Limit=12&Recursive=true&Fields=Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources`);
+    return data.Items || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchNextUpItems(userId: string): Promise<MediaItem[]> {
+  try {
+    const data = await request(`/emby/Shows/NextUp?UserId=${userId}&Limit=12&Fields=Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources`);
+    return data.Items || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchLatestItems(userId: string, parentId?: string): Promise<MediaItem[]> {
+  try {
+    const url = `/emby/Users/${userId}/Items/Latest?Limit=16&Fields=Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources${parentId ? `&ParentId=${encodeURIComponent(parentId)}` : ''}`;
+    const data = await request(url);
+    if (Array.isArray(data)) return data;
+    return data.Items || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchSeasons(userId: string, seriesId: string): Promise<MediaItem[]> {
+  const data = await request(`/emby/Users/${userId}/Shows/${encodeURIComponent(seriesId)}/Seasons`);
+  return data.Items || [];
+}
+
+export async function fetchEpisodes(userId: string, seriesId: string, seasonId?: string): Promise<MediaItem[]> {
+  const qs = new URLSearchParams({
+    Fields: 'Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources,MediaStreams',
+  });
+  if (seasonId) {
+    qs.set('SeasonId', seasonId);
+  }
+  const data = await request(`/emby/Users/${userId}/Shows/${encodeURIComponent(seriesId)}/Episodes?${qs.toString()}`);
+  return data.Items || [];
 }
 
 export async function refreshItemMediaInfo(itemId: string): Promise<void> {
