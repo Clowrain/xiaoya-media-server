@@ -518,7 +518,80 @@ func (a *App) browseRoute(w http.ResponseWriter, r *http.Request, u User, p stri
 		return true
 	}
 	if strings.HasPrefix(l, "/displaypreferences/") {
-		respond(w, M{"Id": parts[1], "SortBy": "SortName", "SortOrder": "Ascending", "ViewType": "Poster", "CustomPrefs": M{}, "RememberIndexing": false, "RememberSorting": true})
+		if len(parts) < 2 {
+			fail(w, 400, "缺少 DisplayPreferences id")
+			return true
+		}
+		if r.Method != "GET" && r.Method != "POST" {
+			fail(w, 405, "GET or POST required")
+			return true
+		}
+		client := field(r, "Client")
+		if client == "" {
+			client = r.Header.Get("X-Emby-Client")
+		}
+		key := "dispref:" + u.ID + ":" + client + ":" + parts[1]
+		prefs := M{"Id": parts[1], "SortBy": "SortName", "SortOrder": "Ascending", "IndexBy": "None", "ViewType": "Poster", "CustomPrefs": M{}, "RememberIndexing": false, "RememberSorting": true}
+		type disprefBody struct {
+			SortBy           string `json:"SortBy"`
+			SortOrder        string `json:"SortOrder"`
+			IndexBy          string `json:"IndexBy"`
+			ViewType         string `json:"ViewType"`
+			RememberIndexing bool   `json:"RememberIndexing"`
+			RememberSorting  bool   `json:"RememberSorting"`
+			CustomPrefs      M      `json:"CustomPrefs"`
+		}
+		if r.Method == "POST" {
+			var body disprefBody
+			b, _ := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+			if e := json.Unmarshal(b, &body); e == nil {
+				if body.SortBy == "" {
+					body.SortBy = "SortName"
+				}
+				if body.SortOrder == "" {
+					body.SortOrder = "Ascending"
+				}
+				if body.ViewType == "" {
+					body.ViewType = "Poster"
+				}
+				if body.CustomPrefs == nil {
+					body.CustomPrefs = M{}
+				}
+				if v, e := json.Marshal(body); e == nil {
+					a.db.Exec("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", key, string(v))
+				}
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return true
+		}
+		var stored string
+		if a.db.QueryRow("SELECT v FROM settings WHERE k=?", key).Scan(&stored) == nil {
+			var body disprefBody
+			if e := json.Unmarshal([]byte(stored), &body); e == nil {
+				if body.SortBy != "" {
+					prefs["SortBy"] = body.SortBy
+				}
+				if body.SortOrder != "" {
+					prefs["SortOrder"] = body.SortOrder
+				}
+				if body.IndexBy != "" {
+					prefs["IndexBy"] = body.IndexBy
+				}
+				if body.ViewType != "" {
+					prefs["ViewType"] = body.ViewType
+				}
+				if body.RememberIndexing {
+					prefs["RememberIndexing"] = true
+				}
+				if body.RememberSorting {
+					prefs["RememberSorting"] = true
+				}
+				if body.CustomPrefs != nil {
+					prefs["CustomPrefs"] = body.CustomPrefs
+				}
+			}
+		}
+		respond(w, prefs)
 		return true
 	}
 	if l == "/items/latest" {
@@ -977,7 +1050,7 @@ func browseOrder(r *http.Request) string {
 		dir = " DESC"
 	}
 	for _, key := range strings.Split(strings.ToLower(q(r, "SortBy")), ",") {
-		if col := map[string]string{"sortname": "name", "name": "name", "productionyear": "year", "datecreated": "mtime", "premieredate": "year", "indexnumber": "episode", "parentindexnumber": "season", "random": "id"}[key]; col != "" {
+		if col := map[string]string{"sortname": "name", "name": "name", "seriessortname": "name", "productionyear": "year", "datecreated": "mtime", "datelastmediaadded": "mtime", "premieredate": "year", "indexnumber": "episode", "parentindexnumber": "season", "communityrating": "rating", "random": "id"}[key]; col != "" {
 			out = append(out, col+dir)
 		}
 	}

@@ -17,16 +17,20 @@ import (
 )
 
 type nfo struct {
-	Title   string `xml:"title"`
-	Plot    string `xml:"plot"`
-	Year    int    `xml:"year"`
-	Season  int    `xml:"season"`
-	Episode int    `xml:"episode"`
+	Title   string  `xml:"title"`
+	Plot    string  `xml:"plot"`
+	Year    int     `xml:"year"`
+	Season  int     `xml:"season"`
+	Episode int     `xml:"episode"`
+	Rating  float64 `xml:"rating"`
 }
 
 var epPattern = regexp.MustCompile(`(?i)S(\d{1,3})E(\d{1,4})`)
 
-func localInfo(path string, x *Item) {
+// localInfo returns the sidecar rating so the scan can persist it without
+// extending Item; zero means the parsed NFO carried no usable rating.
+func localInfo(path string, x *Item) float64 {
+	rating := 0.0
 	base := strings.TrimSuffix(path, filepath.Ext(path))
 	dir := filepath.Dir(path)
 	for _, p := range []string{base + ".nfo", filepath.Join(dir, "movie.nfo"), filepath.Join(dir, "tvshow.nfo")} {
@@ -49,6 +53,9 @@ func localInfo(path string, x *Item) {
 			if n.Episode > 0 {
 				x.Episode = n.Episode
 			}
+			if n.Rating > 0 {
+				rating = n.Rating
+			}
 			break
 		}
 	}
@@ -58,6 +65,7 @@ func localInfo(path string, x *Item) {
 			break
 		}
 	}
+	return rating
 }
 func (a *App) scanAll() {
 	for _, l := range a.libraries() {
@@ -215,7 +223,7 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 			tx.Rollback()
 		}
 	}()
-	save := func(x Item) error {
+	save := func(x Item, rating float64) error {
 		if tx == nil {
 			if e := begin(); e != nil {
 				return e
@@ -224,6 +232,13 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 		_, e := stmt.Exec(x.ID, x.Lib, x.Parent, x.Name, x.Kind, x.Path, x.URL, x.Overview, x.Poster, x.Year, x.Season, x.Episode, x.Mtime, x.Size, gen)
 		if e != nil {
 			return e
+		}
+		// The rating column lives outside cols/Item; persist sidecar ratings in
+		// the same transaction. Unrated files never overwrite an existing value.
+		if rating > 0 {
+			if _, e := tx.Exec("UPDATE items SET rating=? WHERE path=?", rating, x.Path); e != nil {
+				return e
+			}
 		}
 		batch++
 		if batch >= 500 {
@@ -282,18 +297,20 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 				}
 				series := Item{ID: digest(seriesPath)[:32], Lib: lib, Parent: lib, Name: seriesTitle, Kind: "Series", Path: seriesPath, Year: seriesYear}
 				if lastSeries != seriesPath {
-					localInfo(filepath.Join(seriesPath, "tvshow.strm"), &series)
+					seriesRating := localInfo(filepath.Join(seriesPath, "tvshow.strm"), &series)
 					if entries, rErr := os.ReadDir(seriesPath); rErr == nil && series.Overview == "" {
 						for _, ent := range entries {
 							if ent.IsDir() && tmdb.IsPureMetadataTagDir(ent.Name()) {
-								localInfo(filepath.Join(seriesPath, ent.Name(), "tvshow.strm"), &series)
+								if r := localInfo(filepath.Join(seriesPath, ent.Name(), "tvshow.strm"), &series); r > 0 {
+									seriesRating = r
+								}
 							}
 						}
 					}
 					if series.Poster == "" {
 						series.Poster = seriesFallbackPoster(seriesPath)
 					}
-					if e := save(series); e != nil {
+					if e := save(series, seriesRating); e != nil {
 						return e
 					}
 					lastSeries = seriesPath
@@ -316,9 +333,9 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 						}
 					}
 					if lastSeason != seasonPath {
-						localInfo(filepath.Join(seasonPath, "season.strm"), &season)
+						seasonRating := localInfo(filepath.Join(seasonPath, "season.strm"), &season)
 						season.Poster = seasonPoster(seasonPath, season.Season)
-						if e := save(season); e != nil {
+						if e := save(season, seasonRating); e != nil {
 							return e
 						}
 						lastSeason = seasonPath
@@ -362,8 +379,8 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 		} else {
 			x.URL = "file://" + path
 		}
-		localInfo(path, &x)
-		return save(x)
+		rating := localInfo(path, &x)
+		return save(x, rating)
 	})
 	if scanErr != nil {
 		return
