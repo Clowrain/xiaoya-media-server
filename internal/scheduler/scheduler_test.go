@@ -55,8 +55,11 @@ func TestSchedulerInitAndSTRMConsistencySelfHeal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list scheduled tasks: %v", err)
 	}
-	if len(tasks) != 7 {
-		t.Fatalf("expected 7 scheduled tasks, got %d", len(tasks))
+	if len(tasks) != 8 {
+		t.Fatalf("expected 8 scheduled tasks, got %d", len(tasks))
+	}
+	if !sched.HasTask("hot_directory_reconcile") {
+		t.Fatalf("expected hot_directory_reconcile task to be registered")
 	}
 
 	// Register an ACTIVE manual media resource, generate its STRM, delete the STRM on disk, and verify self-heal.

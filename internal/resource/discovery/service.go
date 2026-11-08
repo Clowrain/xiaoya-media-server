@@ -264,6 +264,9 @@ func (s *Service) commitSQLiteChunk(ctx context.Context, batch *SyncBatch, rootN
 		}
 		if queued {
 			pending = append(pending, r.ID)
+			if !r.IsDir && batch.RootID != "" {
+				_ = s.store.TouchHotDirectory(ctx, batch.RootID, filepath.Dir(r.SourcePath), r.SourceParentID, true)
+			}
 		}
 	}
 	if err = tx.Commit(); err != nil {
@@ -686,6 +689,9 @@ func (s *Service) commitManual(ctx context.Context, b *SyncBatch, m ManualSnapsh
 		b.TotalSeen++
 		if queued {
 			pending = append(pending, r.ID)
+			if !r.IsDir && b.RootID != "" {
+				_ = s.store.TouchHotDirectory(ctx, b.RootID, filepath.Dir(r.SourcePath), r.SourceParentID, true)
+			}
 		}
 	}
 	for _, p := range m.Missing {
@@ -726,3 +732,72 @@ func (s *Service) RegisterManualResource(ctx context.Context, p, rel, name strin
 	}
 	return rs[0], nil
 }
+
+// ScanHotDirectory performs targeted point-reconciliation on an active series directory,
+// detecting newly added, renamed, or modified episodes without running an expensive
+// full-library scan. Backoff is adjusted automatically based on whether changes were found.
+func (s *Service) ScanHotDirectory(ctx context.Context, hotID string) (int, error) {
+	hot, err := s.store.GetHotDirectory(ctx, hotID)
+	if err != nil {
+		return 0, err
+	}
+	if !hot.Enabled {
+		return 0, nil
+	}
+
+	reader := s.Reader()
+	if reader == nil {
+		return 0, errors.New("小雅 SQLite 未连接")
+	}
+
+	var hotNode xiaoya.Node
+	var subNodes []xiaoya.Node
+	err = reader.WithSnapshot(ctx, func(view *xiaoya.Reader) error {
+		node, e := view.ResolvePath(ctx, hot.DirPath)
+		if e != nil {
+			return e
+		}
+		hotNode = node
+		if !hotNode.IsDir {
+			subNodes = append(subNodes, hotNode)
+			return nil
+		}
+		_, e = view.WalkSubtreeBatched(ctx, hotNode, 500, func(page []xiaoya.Node) error {
+			subNodes = append(subNodes, page...)
+			return nil
+		})
+		return e
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	batch := SyncBatch{
+		ID:        StableID(fmt.Sprintf("hot:%s:%d", hot.ID, time.Now().UnixNano())),
+		RootID:    hot.RootID,
+		RootPath:  hot.DirPath,
+		ScanMode:  ScanModeIncremental,
+		Status:    BatchRunning,
+		StartedAt: time.Now().Unix(),
+	}
+
+	pending, chunkErr := s.commitSQLiteChunk(ctx, &batch, hotNode.ID, subNodes)
+	if chunkErr != nil {
+		return 0, chunkErr
+	}
+
+	if len(pending) > 0 {
+		if matErr := s.materializePending(ctx, &batch, pending); matErr != nil {
+			return 0, matErr
+		}
+	}
+
+	changesCount := int(batch.AddedCount + batch.ModifiedCount + batch.RenamedCount + batch.MovedCount)
+	hasChanges := changesCount > 0
+
+	// Touch hot directory to update backoff interval
+	_ = s.store.TouchHotDirectory(ctx, hot.RootID, hot.DirPath, hot.SourceNodeID, hasChanges)
+
+	return changesCount, nil
+}
+

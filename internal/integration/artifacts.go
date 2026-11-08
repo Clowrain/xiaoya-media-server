@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"xiaoya-media-server/internal/embyserver"
 	"xiaoya-media-server/internal/metadata/tmdb"
 	"xiaoya-media-server/internal/resource/discovery"
 	"xiaoya-media-server/internal/strm"
@@ -142,7 +143,28 @@ func (p *Pipeline) publishMatchedArtifacts(ctx context.Context, res discovery.Me
 		if err := writeImageIfMissing(ctx, base+"-poster.jpg", series.PosterURL); err != nil {
 			return err
 		}
-		return writeImageIfMissing(ctx, base+"-fanart.jpg", series.BackdropURL)
+		if err := writeImageIfMissing(ctx, base+"-fanart.jpg", series.BackdropURL); err != nil {
+			return err
+		}
+		if p.app != nil {
+			_ = p.app.PublishDirectMedia(embyserver.DirectMediaPublication{
+				MediaType:     "MOVIE",
+				LocalSTRM:     path,
+				StreamURL:     res.SourceContent,
+				Title:         series.Title,
+				OriginalTitle: series.OriginalTitle,
+				Year:          series.Year,
+				Rating:        series.Rating,
+				Overview:      series.Overview,
+				Tagline:       series.Tagline,
+				Premiered:     series.Premiered,
+				RuntimeMin:    series.RuntimeMin,
+				TMDBID:        series.TMDBID,
+				PosterPath:    base + "-poster.jpg",
+				BackdropPath:  base + "-fanart.jpg",
+			})
+		}
+		return nil
 	}
 
 	if series == nil {
@@ -191,7 +213,40 @@ func (p *Pipeline) publishMatchedArtifacts(ctx context.Context, res discovery.Me
 		return err
 	}
 	if episode != nil {
-		return writeImageIfMissing(ctx, base+"-thumb.jpg", episode.ThumbURL)
+		if err := writeImageIfMissing(ctx, base+"-thumb.jpg", episode.ThumbURL); err != nil {
+			return err
+		}
+	}
+	if p.app != nil {
+		epTitle := fmt.Sprintf("第 %d 集", identity.EpisodeNumber)
+		epPlot := ""
+		epThumb := ""
+		if episode != nil {
+			if episode.Title != "" {
+				epTitle = episode.Title
+			}
+			epPlot = episode.Overview
+			epThumb = base + "-thumb.jpg"
+		}
+		_ = p.app.PublishDirectMedia(embyserver.DirectMediaPublication{
+			MediaType:     "EPISODE",
+			LocalSTRM:     path,
+			StreamURL:     res.SourceContent,
+			Title:         series.Title,
+			OriginalTitle: series.OriginalTitle,
+			Year:          series.Year,
+			Rating:        series.Rating,
+			Overview:      series.Overview,
+			Premiered:     series.Premiered,
+			TMDBID:        series.TMDBID,
+			PosterPath:    filepath.Join(seriesDir, "poster.jpg"),
+			BackdropPath:  filepath.Join(seriesDir, "fanart.jpg"),
+			SeasonNumber:  seasonNumber,
+			EpisodeNumber: identity.EpisodeNumber,
+			EpisodeTitle:  epTitle,
+			EpisodePlot:   epPlot,
+			EpisodeThumb:  epThumb,
+		})
 	}
 	return nil
 }

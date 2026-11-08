@@ -345,6 +345,9 @@ func (s *SQLStore) EnsureSchema(ctx context.Context) error {
 	if err := s.ensureV2MediaColumns(ctx); err != nil {
 		return err
 	}
+	if err := s.EnsureHotDirectoriesSchema(ctx); err != nil {
+		return err
+	}
 	// If `items` exists in the same DB (unified PostgreSQL), ensure `availability` column exists.
 	if s.dialect == "postgres" {
 		if _, err := s.db.ExecContext(ctx, "ALTER TABLE IF EXISTS items ADD COLUMN IF NOT EXISTS availability TEXT NOT NULL DEFAULT 'AVAILABLE'"); err != nil {

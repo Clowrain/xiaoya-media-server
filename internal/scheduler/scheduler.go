@@ -103,6 +103,13 @@ func New(store *discovery.SQLStore, pipeline *integration.Pipeline, monitorInter
 			return s.pipeline.RunMetadataMatchJobs(ctx, 20)
 		},
 	})
+	s.register(TaskSpec{
+		Key:      "hot_directory_reconcile",
+		Name:     "热目录定点对账（退避调度）",
+		Interval: 5 * time.Minute,
+		Enabled:  true,
+		Fn:       s.runHotDirectoryReconcile,
+	})
 	return s
 }
 
@@ -345,6 +352,32 @@ func (s *Scheduler) recheckFiles(ctx context.Context, attachments bool) error {
 	}
 	s.pipeline.FlushScopedLibraryScans()
 	return first
+}
+
+func (s *Scheduler) runHotDirectoryReconcile(ctx context.Context) error {
+	if s.pipeline == nil || s.pipeline.Discovery() == nil {
+		return nil
+	}
+	now := time.Now().Unix()
+	dueList, err := s.store.GetDueHotDirectories(ctx, now, 10)
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, hot := range dueList {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if _, err := s.pipeline.Discovery().ScanHotDirectory(ctx, hot.ID); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	if len(dueList) > 0 {
+		s.pipeline.FlushScopedLibraryScans()
+	}
+	return firstErr
 }
 
 func (s *Scheduler) HasTask(key string) bool {

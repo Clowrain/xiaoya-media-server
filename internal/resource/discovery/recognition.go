@@ -32,9 +32,9 @@ func ParseMediaIdentity(res MediaResource) ParsedMediaIdentity {
 	}
 
 	seasonHint, seasonEvidence := seasonFromPath(parts)
-	season, episode, ok := tmdb.ParseSeasonEpisode(strings.TrimSuffix(res.Name, filepath.Ext(res.Name)), seasonHint)
+	epInfo := tmdb.ParseEpisodeInfo(strings.TrimSuffix(res.Name, filepath.Ext(res.Name)), seasonHint)
 	seriesIdx := seriesIndex(parts, seasonEvidence >= 0)
-	if !ok || seriesIdx < 0 {
+	if !epInfo.Found || seriesIdx < 0 {
 		return ParsedMediaIdentity{MediaType: "EPISODE", State: "NEEDS_CONFIRMATION", Evidence: "episode number or series directory is ambiguous"}
 	}
 	seriesTitle, year := tmdb.ParseTitleAndYear(parts[seriesIdx])
@@ -46,9 +46,16 @@ func ParseMediaIdentity(res MediaResource) ParsedMediaIdentity {
 	if seasonEvidence >= 0 {
 		evidence = "explicit Season directory"
 	}
+	if epInfo.IsDateEpisode {
+		evidence = "variety show air date (" + epInfo.AirDate + ")"
+	}
+	if epInfo.Segment != "" {
+		evidence += " [segment: " + epInfo.Segment + "]"
+	}
 	return ParsedMediaIdentity{
 		MediaType: "EPISODE", Title: seriesTitle, Year: year, ParentID: parentID,
-		SeasonNumber: season, EpisodeNumber: episode, State: "READY_FOR_MATCH", Evidence: evidence,
+		SeasonNumber: epInfo.Season, EpisodeNumber: epInfo.Episode, Segment: epInfo.Segment,
+		State: "READY_FOR_MATCH", Evidence: evidence,
 	}
 }
 

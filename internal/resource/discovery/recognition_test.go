@@ -14,6 +14,11 @@ func TestParseMediaIdentityFlatEpisodeAndMovie(t *testing.T) {
 	if movie.MediaType != "MOVIE" || movie.Title != "八仙！" || movie.Year != 2026 {
 		t.Fatalf("movie identity=%+v", movie)
 	}
+
+	variety := ParseMediaIdentity(MediaResource{SourcePath: "/每日更新/综艺/歌手2024/20240510.上集.mp4", Name: "20240510.上集.mp4"})
+	if variety.MediaType != "EPISODE" || variety.Title != "歌手2024" || variety.Segment != "上集" || variety.State != "READY_FOR_MATCH" {
+		t.Fatalf("variety identity=%+v", variety)
+	}
 }
 
 func TestPersistV2IdentityCreatesMediaVersionAndJob(t *testing.T) {

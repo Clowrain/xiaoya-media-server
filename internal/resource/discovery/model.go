@@ -207,6 +207,7 @@ type ParsedMediaIdentity struct {
 	ParentID      string `json:"parent_id"`
 	SeasonNumber  int    `json:"season_number"`
 	EpisodeNumber int    `json:"episode_number"`
+	Segment       string `json:"segment,omitempty"`
 	State         string `json:"state"`
 	Evidence      string `json:"evidence"`
 }
@@ -220,10 +221,27 @@ type RecognitionPending struct {
 	Year          int    `json:"year"`
 	SeasonNumber  int    `json:"season_number"`
 	EpisodeNumber int    `json:"episode_number"`
+	Segment       string `json:"segment,omitempty"`
 	State         string `json:"state"`
 	Evidence      string `json:"evidence"`
 	ExternalID    string `json:"external_id"`
 	UpdatedAt     int64  `json:"updated_at"`
+}
+
+// HotDirectory represents an actively updated media series directory
+// scheduled for targeted point-reconciliation with backoff (30 -> 60 -> 120 -> 360 min).
+type HotDirectory struct {
+	ID                   string `json:"id"`
+	RootID               string `json:"root_id"`
+	DirPath              string `json:"dir_path"`
+	SourceNodeID         int64  `json:"source_node_id"`
+	IntervalSec          int64  `json:"interval_sec"`
+	ConsecutiveUnchanged int64  `json:"consecutive_unchanged"`
+	LastScannedAt        int64  `json:"last_scanned_at"`
+	NextDueAt            int64  `json:"next_due_at"`
+	Enabled              bool   `json:"enabled"`
+	CreatedAt            int64  `json:"created_at"`
+	UpdatedAt            int64  `json:"updated_at"`
 }
 
 // CleanupImpactPreview describes affected artifacts before manual cleanup confirmation (`keep` policy).
