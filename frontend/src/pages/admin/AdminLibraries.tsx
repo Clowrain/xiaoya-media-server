@@ -32,8 +32,9 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
 
   // Form states - Add
   const [addName, setAddName] = useState('');
-  const [addKind, setAddKind] = useState('movies');
-  const [addPath, setAddPath] = useState('/media/strm/电影');
+  const [addKind, setAddKind] = useState('tvshows');
+  const [addPaths, setAddPaths] = useState<string[]>(['/media/strm']);
+  const [addInputPath, setAddInputPath] = useState('');
 
   // Form states - Edit
   const [editName, setEditName] = useState('');
@@ -139,17 +140,42 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
     }
   };
 
+  const handleAddCreatePath = (pathToAdd?: string) => {
+    const p = (pathToAdd ?? addInputPath).trim();
+    if (!p) return;
+    if (addPaths.includes(p)) {
+      notifyToast('该路径已在列表中', 'warning');
+      return;
+    }
+    setAddPaths(prev => [...prev, p]);
+    if (!pathToAdd) setAddInputPath('');
+  };
+
+  const handleRemoveCreatePath = (pathToRemove: string) => {
+    if (addPaths.length <= 1) {
+      notifyToast('媒体库至少需要保留一个目录', 'warning');
+      return;
+    }
+    setAddPaths(prev => prev.filter(p => p !== pathToRemove));
+  };
+
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!addName.trim() || !addPath.trim()) {
-      notifyToast('媒体库名称与目录路径不能为空', 'error');
+    let finalPaths = [...addPaths];
+    if (addInputPath.trim() && !finalPaths.includes(addInputPath.trim())) {
+      finalPaths.push(addInputPath.trim());
+    }
+    if (!addName.trim() || finalPaths.length === 0) {
+      notifyToast('媒体库名称与至少一个目录路径不能为空', 'error');
       return;
     }
     try {
-      await createAdminLibrary(addName.trim(), addKind, [addPath.trim()]);
+      await createAdminLibrary(addName.trim(), addKind, finalPaths);
       notifyToast(`成功创建媒体库「${addName}」`, 'success');
       setShowAddModal(false);
       setAddName('');
+      setAddPaths(['/media/strm']);
+      setAddInputPath('');
       loadLibraries();
     } catch (err: any) {
       notifyToast(err.message || '创建媒体库失败', 'error');
@@ -485,42 +511,69 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
                 </select>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                  媒体文件夹路径 (支持手动输入或点选浏览)
+              {/* Multiple Associated Paths */}
+              <div className="space-y-2 pt-1 border-t border-zinc-800/60">
+                <label className="block text-xs font-semibold text-zinc-400">
+                  关联存储路径 ({addPaths.length})
                 </label>
-                <div className="flex items-center gap-2">
+                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                  {addPaths.map((p) => (
+                    <div
+                      key={p}
+                      className="flex items-center justify-between p-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono"
+                    >
+                      <span className="text-zinc-200 truncate mr-2" title={p}>{p}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveCreatePath(p)}
+                        className="p-1 rounded text-zinc-500 hover:text-rose-400 transition shrink-0"
+                        title="从列表中移除"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Add path input */}
+                <div className="flex items-center gap-2 pt-1">
                   <input
                     type="text"
-                    required
-                    value={addPath}
-                    onChange={(e) => setAddPath(e.target.value)}
-                    placeholder="/media/strm/电影"
-                    className="flex-1 px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-emerald-400 focus:outline-none focus:border-emerald-500"
+                    value={addInputPath}
+                    onChange={(e) => setAddInputPath(e.target.value)}
+                    placeholder="/media/strm 或其它已挂载目录"
+                    className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-zinc-200 focus:outline-none focus:border-emerald-500"
                   />
                   <button
                     type="button"
                     onClick={() => {
-                      setCurrentSelectedPath(addPath || '/media/strm');
+                      setCurrentSelectedPath(addInputPath || '/media/strm');
                       setPickerTarget('add');
                     }}
-                    className="px-3 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition shrink-0"
+                    className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium shrink-0"
                   >
-                    浏览目录
+                    浏览
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddCreatePath()}
+                    className="px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-emerald-400 text-xs font-medium shrink-0"
+                  >
+                    添加
                   </button>
                 </div>
 
                 {/* Quick Shortcuts */}
                 <div className="flex items-center gap-1.5 mt-2 flex-wrap text-[11px]">
-                  <span className="text-zinc-500">快捷预设:</span>
+                  <span className="text-zinc-500">快捷添加:</span>
                   {['/media/strm', '/media/strm/电影', '/media/strm/电视剧'].map((p) => (
                     <button
                       key={p}
                       type="button"
-                      onClick={() => setAddPath(p)}
+                      onClick={() => handleAddCreatePath(p)}
                       className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono"
                     >
-                      {p}
+                      +{p}
                     </button>
                   ))}
                 </div>
@@ -821,7 +874,15 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
           isOpen={!!pickerTarget}
           initialPath={currentSelectedPath}
           onSelect={(selected) => {
-            if (pickerTarget === 'add') setAddPath(selected);
+            if (pickerTarget === 'add') {
+              const selectedPath = selected.trim();
+              if (selectedPath) {
+                if (!addPaths.includes(selectedPath)) {
+                  setAddPaths((prev) => [...prev, selectedPath]);
+                }
+                setAddInputPath('');
+              }
+            }
             if (pickerTarget === 'folder') setNewFolderPath(selected);
             if (pickerTarget === 'edit-folder') setEditNewPath(selected);
           }}
