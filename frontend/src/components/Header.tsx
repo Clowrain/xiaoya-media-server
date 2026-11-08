@@ -5,7 +5,10 @@ import {
   Search, Cast, Menu, Play, Star 
 } from 'lucide-react';
 import { changePasswordApi, notifyToast } from '../api/client';
-import { APP_VERSION, BUILD_COMMIT, BUILD_TIME } from '../version';
+import { 
+  APP_VERSION, BUILD_COMMIT, BUILD_TIME, 
+  GITHUB_REPO_URL, getCommitUrl, formatCommitHash 
+} from '../version';
 
 interface HeaderProps {
   user: User;
@@ -82,12 +85,16 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
               <span className="font-black text-xl tracking-tight text-white flex items-center gap-1.5">
                 emby
-                <span 
-                  className="px-1.5 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 font-mono text-[9px] font-bold tracking-tight"
-                  title={`版本: ${APP_VERSION} (${BUILD_COMMIT})`}
+                <a 
+                  href={getCommitUrl(BUILD_COMMIT)}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="px-1.5 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 hover:text-white font-mono text-[9px] font-bold tracking-tight hover:underline"
+                  title={`版本: ${APP_VERSION} (Commit: ${BUILD_COMMIT}) · 点击查看提交记录`}
                 >
-                  {APP_VERSION}
-                </span>
+                  {APP_VERSION} <span className="opacity-75">({formatCommitHash(BUILD_COMMIT)})</span>
+                </a>
               </span>
             </div>
           </div>

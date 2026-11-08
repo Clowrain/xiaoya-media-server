@@ -174,7 +174,8 @@ func (c *Client) postJSON(ctx context.Context, apiPath string, reqBody, outData 
 func (c *Client) postWithUserAgent(ctx context.Context, apiPath string, reqBody, outData any, ua string) error {
 	tok, err := c.ensureToken(ctx)
 	if err != nil {
-		return err
+		// Degrade to anonymous request if login credentials fail, as Xiaoya AList is public by default
+		tok = ""
 	}
 	err = c.postOnce(ctx, apiPath, reqBody, outData, ua, tok)
 	var rejected *apiError

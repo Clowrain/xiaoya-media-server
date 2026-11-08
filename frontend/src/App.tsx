@@ -7,7 +7,10 @@ import { MediaWall } from './pages/MediaWall';
 import { AdminLayout } from './pages/admin/AdminLayout';
 import { LogDrawer } from './components/LogDrawer';
 import { ToastContainer } from './components/Toast';
-import { APP_VERSION, BUILD_COMMIT, BUILD_TIME } from './version';
+import { 
+  APP_VERSION, BUILD_COMMIT, BUILD_TIME, 
+  GITHUB_REPO_URL, getCommitUrl, formatCommitHash 
+} from './version';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(getStoredUser());
@@ -176,11 +179,21 @@ export const App: React.FC = () => {
 
       <footer className="py-5 border-t border-zinc-900 bg-zinc-950/60 text-center text-xs text-zinc-500 font-mono">
         <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
-          <span className="text-zinc-400 font-medium">小雅媒体中心 Xiaoya Media Server</span>
+          <a href={GITHUB_REPO_URL} target="_blank" rel="noreferrer" className="text-zinc-400 hover:text-white transition">
+            小雅媒体中心 Xiaoya Media Server
+          </a>
           <span className="text-zinc-700">•</span>
           <span className="text-zinc-300 font-semibold">{APP_VERSION}</span>
           <span className="text-zinc-700">•</span>
-          <span className="text-emerald-400 font-mono">Build: {BUILD_COMMIT}</span>
+          <a
+            href={getCommitUrl(BUILD_COMMIT)}
+            target="_blank"
+            rel="noreferrer"
+            className="text-emerald-400 hover:text-emerald-300 underline decoration-dotted transition"
+            title={`Commit: ${BUILD_COMMIT}`}
+          >
+            Build: {formatCommitHash(BUILD_COMMIT)}
+          </a>
           <span className="text-zinc-700">•</span>
           <span className="text-zinc-500">{BUILD_TIME}</span>
         </div>

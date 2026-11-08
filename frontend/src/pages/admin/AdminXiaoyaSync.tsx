@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   FolderSync, Database, HardDrive, RefreshCw, Plus, 
   Trash2, Play, ChevronRight, Folder, FileVideo, 
-  Search, ArrowLeft, ArrowRight, CheckCircle2, BookmarkPlus 
+  Search, ArrowLeft, ArrowRight, CheckCircle2, BookmarkPlus,
+  ExternalLink, AlertCircle 
 } from 'lucide-react';
 import { SystemOverview, MonitorRoot, AListFileItem, AdminJob, AdminLibrary } from '../../types';
 import { 
@@ -10,7 +11,10 @@ import {
   updateMonitorRoot, deleteMonitorRoot, triggerSync, 
   importResource, browseAList, searchAList, notifyToast, fetchAdminJobs, fetchAdminLibraries, request
 } from '../../api/client';
-import { APP_VERSION, BUILD_COMMIT, BUILD_TIME } from '../../version';
+import { 
+  APP_VERSION, BUILD_COMMIT, BUILD_TIME, 
+  GITHUB_REPO_URL, getCommitUrl, formatCommitHash 
+} from '../../version';
 
 interface AdminXiaoyaSyncProps {
   onOpenLogs: () => void;
@@ -28,8 +32,8 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
   const [newInterval, setNewInterval] = useState<number>(3600);
   const [newEnabled, setNewEnabled] = useState<boolean>(true);
 
-  // AList / SQLite File Explorer State
-  const [browseSource, setBrowseSource] = useState<'sqlite' | 'alist'>('sqlite');
+  // AList File Explorer State
+  const [browseSource, setBrowseSource] = useState<'alist' | 'manifest'>('alist');
   const [alistPath, setAlistPath] = useState<string>('/');
   const [alistItems, setAlistItems] = useState<AListFileItem[]>([]);
   const [alistTotal, setAlistTotal] = useState<number>(0);
@@ -38,6 +42,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
   const [searchInput, setSearchInput] = useState<string>('');
   const [activeSearch, setActiveSearch] = useState<string>('');
   const [alistLoading, setAlistLoading] = useState<boolean>(false);
+  const [alistError, setAlistError] = useState<string>('');
   const [jobs, setJobs] = useState<AdminJob[]>([]);
   const [jobsError, setJobsError] = useState('');
   const [libraries, setLibraries] = useState<AdminLibrary[]>([]);
@@ -68,25 +73,43 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
     }
   };
 
-  // Browse Directory (SQLite / AList)
-  const loadDirectory = async (targetPath: string = alistPath, page: number = 1, source: 'sqlite' | 'alist' = browseSource) => {
+  // Browse Directory (AList / Manifest)
+  const loadDirectory = async (targetPath: string = alistPath, page: number = 1, source: 'alist' | 'manifest' = browseSource) => {
     setAlistLoading(true);
+    setAlistError('');
     try {
-      const res = await browseAList(targetPath, page, alistPerPage, source);
-      const items = res.items || [];
-      setAlistItems(items);
-      const total = typeof res.total === 'number' && res.total > 0 ? res.total : items.length;
-      setAlistTotal(total);
-      setAlistPath(res.path || targetPath);
-      setAlistPage(page);
+      if (source === 'manifest') {
+        const res = await request(`/api/xiaoya/manifest/search?query=${encodeURIComponent(targetPath === '/' ? '' : targetPath)}&limit=100`);
+        const entries = (res.items || []).map((e: any) => ({
+          name: e.title || e.rel_path,
+          full_path: '/' + e.rel_path,
+          is_dir: e.media_type === 'Series',
+          size: 0,
+          modified: '',
+        }));
+        setAlistItems(entries);
+        setAlistTotal(entries.length);
+        setAlistPath(targetPath);
+        setAlistPage(1);
+      } else {
+        const res = await browseAList(targetPath, page, alistPerPage, 'alist');
+        const items = res.items || [];
+        setAlistItems(items);
+        const total = typeof res.total === 'number' && res.total > 0 ? res.total : items.length;
+        setAlistTotal(total);
+        setAlistPath(res.path || targetPath);
+        setAlistPage(page);
+      }
     } catch (err: any) {
-      notifyToast(err.message || '读取目录失败', 'error');
+      const msg = err.message || '读取 AList 目录失败';
+      setAlistError(msg);
+      notifyToast(msg, 'error');
     } finally {
       setAlistLoading(false);
     }
   };
 
-  const handleSourceChange = (newSource: 'sqlite' | 'alist') => {
+  const handleSourceChange = (newSource: 'alist' | 'manifest') => {
     if (newSource === browseSource) return;
     setBrowseSource(newSource);
     setActiveSearch('');
@@ -120,7 +143,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
 
   useEffect(() => {
     loadSystemInfo();
-    loadDirectory('/', 1, 'sqlite');
+    loadDirectory('/', 1, 'alist');
     loadJobs();
     fetchAdminLibraries().then(setLibraries).catch(err => notifyToast(err.message, 'error'));
   }, []);
@@ -286,20 +309,39 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
           </div>
         </div>
 
-        <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 flex items-center justify-between">
-          <div>
-            <div className="text-xs text-zinc-400">系统版本与编译号</div>
-            <div className="text-xs text-emerald-400 font-bold font-mono mt-0.5">
-              {overview?.version || APP_VERSION} <span className="text-zinc-400 font-normal">({overview?.build_number || BUILD_COMMIT})</span>
+        <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 flex items-center justify-between overflow-hidden">
+          <div className="min-w-0 pr-2">
+            <div className="text-xs text-zinc-400">系统版本与代码提交</div>
+            <div className="text-xs text-emerald-400 font-bold font-mono mt-0.5 flex items-center gap-1.5 flex-wrap">
+              <a
+                href={GITHUB_REPO_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="hover:underline text-white flex items-center gap-0.5"
+                title="访问 GitHub 项目主页"
+              >
+                {overview?.version || APP_VERSION}
+              </a>
+              <span className="text-zinc-500">/</span>
+              <a
+                href={getCommitUrl(overview?.git_commit || overview?.build_number || BUILD_COMMIT)}
+                target="_blank"
+                rel="noreferrer"
+                className="text-emerald-400 hover:text-emerald-300 font-mono underline decoration-dotted flex items-center gap-0.5"
+                title={`查看本次提交 Commit: ${overview?.git_commit || overview?.build_number || BUILD_COMMIT}`}
+              >
+                <span>({formatCommitHash(overview?.git_commit || overview?.build_number || BUILD_COMMIT)})</span>
+                <ExternalLink className="w-3 h-3 inline" />
+              </a>
             </div>
-            <div className="text-[10px] text-zinc-500 font-mono mt-0.5">
-              构建: {overview?.build_time || BUILD_TIME}
+            <div className="text-[10px] text-zinc-500 font-mono mt-0.5 truncate">
+              构建: {overview?.build_time && overview.build_time !== 'unknown' ? overview.build_time : BUILD_TIME}
             </div>
           </div>
           <button
             type="button"
             onClick={onOpenLogs}
-            className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer"
+            className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer shrink-0"
           >
             打开日志
           </button>
@@ -450,37 +492,37 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
               <div className="flex items-center p-0.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs">
                 <button
                   type="button"
-                  onClick={() => handleSourceChange('sqlite')}
-                  className={`px-2.5 py-1 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                    browseSource === 'sqlite'
-                      ? 'bg-emerald-600 text-white shadow-sm'
-                      : 'text-zinc-400 hover:text-zinc-200'
-                  }`}
-                  title="直接查询小雅本地 SQLite 索引数据库，极速且入库100%匹配"
-                >
-                  <Database className="w-3.5 h-3.5" />
-                  小雅本地库 (SQLite)
-                  <span className="text-[10px] px-1 py-0.5 rounded bg-emerald-700/60 text-emerald-200">推荐</span>
-                </button>
-                <button
-                  type="button"
                   onClick={() => handleSourceChange('alist')}
                   className={`px-2.5 py-1 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
                     browseSource === 'alist'
                       ? 'bg-emerald-600 text-white shadow-sm'
                       : 'text-zinc-400 hover:text-zinc-200'
                   }`}
-                  title="通过 AList HTTP API 实时读取网盘最新挂载目录"
+                  title="通过 AList HTTP API 实时读取网盘挂载目录（直连网盘，支持挑选监控路径）"
                 >
                   <FolderSync className="w-3.5 h-3.5" />
-                  网盘实时 (AList)
+                  网盘实时目录 (AList)
+                  <span className="text-[10px] px-1 py-0.5 rounded bg-emerald-700/60 text-emerald-200">推荐</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSourceChange('manifest')}
+                  className={`px-2.5 py-1 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    browseSource === 'manifest'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                  title="直接查询 strm.txt 清单索引，已精准内嵌 TMDB 官方 ID"
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  官方清单检索 (strm.txt)
                 </button>
               </div>
             </div>
             <p className="text-xs text-zinc-400 mt-1">
-              {browseSource === 'sqlite'
-                ? '已连接小雅 SQLite 本地索引库，目录响应耗时 <2ms，整剧追更与入库保障 100% 成功'
-                : '通过 AList 接口实时列出网盘，可浏览刚转存但小雅离线库尚未爬取的全新资源'}
+              {browseSource === 'alist'
+                ? '通过 AList 接口实时列出网盘目录，点击右侧「设为监控」即可直接配置到追更列表'
+                : '基于官方 70 万行 strm.txt 权威索引，直接秒级定位已刮削好的全集与电影'}
             </p>
           </div>
 
@@ -601,7 +643,22 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                 <tr>
                   <td colSpan={4} className="py-12 text-center text-zinc-500">
                     <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-emerald-500" />
-                    正在读取 {browseSource === 'sqlite' ? '小雅 SQLite 索引' : 'AList 实时目录'}...
+                    正在读取 {browseSource === 'manifest' ? 'strm.txt 官方清单' : 'AList 实时网盘目录'}...
+                  </td>
+                </tr>
+              ) : alistError ? (
+                <tr>
+                  <td colSpan={4} className="py-12 text-center text-amber-400">
+                    <AlertCircle className="w-6 h-6 mx-auto mb-2 text-rose-400" />
+                    <p className="font-semibold text-zinc-200">未能连接或读取 AList 目录</p>
+                    <p className="text-xs text-rose-300 mt-1 max-w-md mx-auto">{alistError}</p>
+                    <button
+                      type="button"
+                      onClick={() => loadDirectory(alistPath, 1, browseSource)}
+                      className="mt-3 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium cursor-pointer"
+                    >
+                      重新尝试加载
+                    </button>
                   </td>
                 </tr>
               ) : alistList.length === 0 ? (
@@ -635,11 +692,11 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                             >
                               {item.name}
                             </button>
-                            {browseSource === 'sqlite' && item.source_node_id && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-400 font-mono shrink-0" title={`小雅 SQLite 节点 ID: ${item.source_node_id}`}>
+                            {item.source_node_id ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-400 font-mono shrink-0" title={`小雅节点 ID: ${item.source_node_id}`}>
                                 #{item.source_node_id}
                               </span>
-                            )}
+                            ) : null}
                           </div>
                         ) : (
                           <div className="flex flex-col">
