@@ -1227,7 +1227,7 @@ func (a *App) single(w http.ResponseWriter, r *http.Request, u User, i string) {
 		return
 	}
 	if strings.HasPrefix(i, "person-") {
-		a.personDetail(w, r, i)
+		a.personDetail(w, r, u, i)
 		return
 	}
 	x, e := a.item(i)

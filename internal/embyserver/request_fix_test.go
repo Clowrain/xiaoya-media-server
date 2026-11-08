@@ -77,7 +77,7 @@ func TestRequestFixActorsAndConcurrency(t *testing.T) {
 	a.db.Exec("INSERT INTO items(id,lib,parent,name,kind,path,seen) VALUES('i','l','l','i','Movie','/i','s')")
 	a.db.Exec("INSERT INTO item_people VALUES('i','person-empty','Empty','','Actor',''),('i','person-photo','Photo','','Actor','https://image.tmdb.org/t/p/w185/photo.jpg')")
 	w := httptest.NewRecorder()
-	a.persons(w, httptest.NewRequest("GET", "/Persons", nil))
+	a.persons(w, httptest.NewRequest("GET", "/Persons", nil), User{})
 	if strings.Contains(w.Body.String(), "Empty") || !strings.Contains(w.Body.String(), "Primary") {
 		t.Fatal(w.Body.String())
 	}

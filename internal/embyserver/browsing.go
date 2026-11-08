@@ -544,8 +544,8 @@ func (a *App) browseRoute(w http.ResponseWriter, r *http.Request, u User, p stri
 		a.items(w, r, u, false)
 		return true
 	}
-	if l == "/persons" {
-		a.persons(w, r)
+	if l == "/persons" || strings.HasSuffix(l, "/persons") {
+		a.persons(w, r, u)
 		return true
 	}
 	if len(parts) >= 2 && strings.EqualFold(parts[0], "persons") {
@@ -560,7 +560,7 @@ func (a *App) browseRoute(w http.ResponseWriter, r *http.Request, u User, p stri
 			clone.URL.Path = "/Items/" + i + "/Images/" + parts[3]
 			a.serveImage(w, clone, i)
 		} else {
-			a.personDetail(w, r, i)
+			a.personDetail(w, r, u, i)
 		}
 		return true
 	}
@@ -603,27 +603,43 @@ type jsonCapture struct {
 func (c *jsonCapture) Header() http.Header         { return c.header }
 func (c *jsonCapture) Write(b []byte) (int, error) { return c.buf.Write(b) }
 func (c *jsonCapture) WriteHeader(int)             {}
-func (a *App) personDTO(i, name string) M {
-	m := M{"Id": i, "Name": name, "Type": "Person", "ServerId": a.serverID, "IsFolder": false, "ImageTags": a.libraryImageTags(i), "BackdropImageTags": []string{}, "Overview": "", "PrimaryImageAspectRatio": 2.0 / 3, "UserData": M{"Played": false, "IsFavorite": false}}
+func (a *App) personDTO(i, name, uid string) M {
+	var isFav bool
+	if a.db != nil && uid != "" {
+		var n int
+		a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", uid, i).Scan(&n)
+		isFav = (n > 0)
+	}
+	m := M{"Id": i, "Name": name, "Type": "Person", "ServerId": a.serverID, "IsFolder": false, "ImageTags": a.libraryImageTags(i), "BackdropImageTags": []string{}, "Overview": "", "PrimaryImageAspectRatio": 2.0 / 3, "UserData": M{"Played": false, "IsFavorite": isFav, "PlaybackPositionTicks": 0}}
 	var n int
 	a.db.QueryRow("SELECT count(DISTINCT item) FROM item_people WHERE person=?", i).Scan(&n)
 	m["MovieCount"] = n
 	return m
 }
-func (a *App) personDetail(w http.ResponseWriter, r *http.Request, i string) {
+func (a *App) personDetail(w http.ResponseWriter, r *http.Request, u User, i string) {
 	var name string
 	if a.db.QueryRow("SELECT name FROM item_people WHERE person=? LIMIT 1", i).Scan(&name) != nil {
 		fail(w, 404, "演员不存在")
 		return
 	}
-	respond(w, a.personDTO(i, name))
+	respond(w, a.personDTO(i, name, u.ID))
 }
-func (a *App) persons(w http.ResponseWriter, r *http.Request) {
+func (a *App) persons(w http.ResponseWriter, r *http.Request, u User) {
 	where := "1=1"
-	if a.hideMissingActors() {
-		where += " AND EXISTS (SELECT 1 FROM item_people visible WHERE visible.person=item_people.person AND visible.thumb<>'' AND NOT EXISTS (SELECT 1 FROM actor_image_failures f WHERE f.person=visible.person AND f.path=visible.thumb AND f.expires>extract(epoch from now())))"
-	}
 	args := []any{}
+	if a.hideMissingActors() {
+		where += " AND EXISTS (SELECT 1 FROM item_people visible WHERE visible.person=item_people.person AND visible.thumb<>'' AND NOT EXISTS (SELECT 1 FROM actor_image_failures f WHERE f.person=visible.person AND f.path=visible.thumb AND f.expires>?))"
+		args = append(args, time.Now().Unix())
+	}
+	filters := strings.ToLower(q(r, "Filters"))
+	if strings.EqualFold(q(r, "IsFavorite"), "true") || strings.Contains(filters, "isfavorite") {
+		where += " AND person IN (SELECT item FROM user_favorites WHERE user_id=?)"
+		args = append(args, u.ID)
+	}
+	if strings.EqualFold(q(r, "IsFavorite"), "false") {
+		where += " AND person NOT IN (SELECT item FROM user_favorites WHERE user_id=?)"
+		args = append(args, u.ID)
+	}
 	if s := q(r, "SearchTerm"); s != "" {
 		where += " AND name ILIKE ?"
 		args = append(args, "%"+s+"%")
@@ -644,7 +660,7 @@ func (a *App) persons(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.Count < 0 && !strings.EqualFold(q(r, "EnableTotalRecordCount"), "false") {
 		if e = a.db.QueryRow("SELECT count(DISTINCT person) FROM item_people WHERE "+where, args...).Scan(&p.Count); e != nil {
-			fail(w, 500, "演员查询失败")
+			fail(w, 500, "演员查询失败: "+e.Error())
 			return
 		}
 	}
@@ -697,7 +713,20 @@ func (a *App) persons(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []M{}
 	for _, pair := range pairs {
-		out = append(out, M{"Id": pair[0], "Name": pair[1], "Type": "Person", "ImageTags": a.libraryImageTags(pair[0]), "IsFolder": false})
+		var isFav bool
+		if a.db != nil && u.ID != "" {
+			var n int
+			a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", u.ID, pair[0]).Scan(&n)
+			isFav = (n > 0)
+		}
+		out = append(out, M{
+			"Id":        pair[0],
+			"Name":      pair[1],
+			"Type":      "Person",
+			"ImageTags": a.libraryImageTags(pair[0]),
+			"IsFolder":  false,
+			"UserData":  M{"Played": false, "IsFavorite": isFav, "PlaybackPositionTicks": 0},
+		})
 	}
 	if p.Count < 0 {
 		p.Count = p.Position + len(out)

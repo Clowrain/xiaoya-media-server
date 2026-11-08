@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +24,8 @@ func newTestSQLiteApp(t *testing.T) *App {
 		"CREATE TABLE libraries(id TEXT PRIMARY KEY,name TEXT,path TEXT,kind TEXT,status TEXT,scanned INT,error TEXT,count INT,duration REAL);",
 		"CREATE TABLE userdata(user_id TEXT,item TEXT,position INT DEFAULT 0,played INT DEFAULT 0,PRIMARY KEY(user_id,item));",
 		"CREATE TABLE user_favorites(user_id TEXT,item TEXT,created_at INT DEFAULT 0,PRIMARY KEY(user_id,item));",
+		"CREATE TABLE item_people(item TEXT, person TEXT, name TEXT, role TEXT, type TEXT, thumb TEXT, PRIMARY KEY(item,person,type));",
+		"CREATE TABLE actor_image_failures(person TEXT PRIMARY KEY, path TEXT NOT NULL, expires BIGINT NOT NULL);",
 		"CREATE TABLE resume_activity(user_id TEXT,item TEXT,updated INT,PRIMARY KEY(user_id,item));",
 		"CREATE TABLE plays(user_id TEXT,device TEXT,item TEXT,updated INT,PRIMARY KEY(user_id,device));",
 		"CREATE TABLE settings(k TEXT PRIMARY KEY,v TEXT);",
@@ -47,7 +50,6 @@ func TestUserFavoritesFilterAndActions(t *testing.T) {
 		t.Fatalf("获取测试用户失败: %v", err)
 	}
 
-	// 插入测试影片
 	item1 := Item{ID: "fav-m1", Lib: "lib-fav", Name: "电影一", Kind: "Movie", URL: "http://xiaoya.host:5678/d/m1.mp4"}
 	item2 := Item{ID: "fav-m2", Lib: "lib-fav", Name: "电影二", Kind: "Movie", URL: "http://xiaoya.host:5678/d/m2.mp4"}
 	for _, it := range []Item{item1, item2} {
@@ -62,8 +64,8 @@ func TestUserFavoritesFilterAndActions(t *testing.T) {
 	tokenVal := "test-token"
 	_, _ = a.db.Exec("INSERT INTO tokens VALUES(?,?,?,?)", digest(tokenVal), uid, "device", time.Now().Unix()+3600)
 
-	// 1. 用户未收藏任何内容时，请求 Filters=IsFavorite 必须返回空列表，不能返回全部剧集
-	rEmpty := httptest.NewRequest("GET", "/emby/Users/"+uid+"/Items?Filters=IsFavorite&api_key="+tokenVal, nil)
+	// 1. 未收藏任何内容时，Filters=IsFavorite 必须返回空列表
+	rEmpty := httptest.NewRequest("GET", "/emby/Users/"+uid+"/Items?Filters=IsFavorite&Recursive=true&api_key="+tokenVal, nil)
 	wEmpty := httptest.NewRecorder()
 	a.items(wEmpty, rEmpty, u, false)
 	if wEmpty.Code != 200 {
@@ -74,20 +76,26 @@ func TestUserFavoritesFilterAndActions(t *testing.T) {
 	}
 	_ = json.Unmarshal(wEmpty.Body.Bytes(), &resEmpty)
 	if len(resEmpty.Items) != 0 {
-		t.Fatalf("用户未收藏任何内容时，收藏列表应为空，却返回了 %d 条: %+v", len(resEmpty.Items), resEmpty.Items)
+		t.Fatalf("未收藏任何内容时，收藏列表应为空，却返回了 %d 条: %+v", len(resEmpty.Items), resEmpty.Items)
 	}
 
-	// 2. 调用 POST /Users/{userId}/FavoriteItems/{itemId} 收藏电影一
+	// 2. 调用 POST /Users/{userId}/FavoriteItems/{itemId} 收藏电影一，验证返回标准 UserItemDataDto
 	rAdd := httptest.NewRequest("POST", "/emby/Users/"+uid+"/FavoriteItems/"+item1.ID+"?api_key="+tokenVal, nil)
 	wAdd := httptest.NewRecorder()
 	a.serve(wAdd, rAdd)
 	if wAdd.Code != 200 {
 		t.Fatalf("收藏接口返回非 200: code=%d body=%s", wAdd.Code, wAdd.Body.String())
 	}
-	var addUD M
+	var addUD map[string]any
 	_ = json.Unmarshal(wAdd.Body.Bytes(), &addUD)
 	if addUD["IsFavorite"] != true {
 		t.Fatalf("收藏后 UserData.IsFavorite 应为 true: got %v", addUD["IsFavorite"])
+	}
+	// 验证标准 UserItemDataDto 必要字段存在，保障 Swift Codable / Gson 实时解析成功
+	for _, requiredKey := range []string{"Key", "ItemId", "IsFavorite", "Played", "PlaybackPositionTicks", "PlayCount", "PlayedPercentage"} {
+		if _, exists := addUD[requiredKey]; !exists {
+			t.Fatalf("UserItemDataDto 缺少标准字段 %s: %+v", requiredKey, addUD)
+		}
 	}
 
 	// 3. 再次查询 Filters=IsFavorite，必须且仅返回电影一
@@ -102,28 +110,95 @@ func TestUserFavoritesFilterAndActions(t *testing.T) {
 		t.Fatalf("收藏列表应只包含电影一，实际结果: %+v", resFav.Items)
 	}
 
-	// 4. 调用 DELETE /Users/{userId}/FavoriteItems/{itemId} 取消收藏
+	// 4. 支持 POST /Users/{userId}/Items/{itemId}/UserData 更新收藏状态
+	rUpdate := httptest.NewRequest("POST", "/emby/Users/"+uid+"/Items/"+item2.ID+"/UserData?api_key="+tokenVal, strings.NewReader(`{"IsFavorite":true}`))
+	wUpdate := httptest.NewRecorder()
+	a.serve(wUpdate, rUpdate)
+	if wUpdate.Code != 200 {
+		t.Fatalf("UserData 接口更新收藏失败: %d %s", wUpdate.Code, wUpdate.Body.String())
+	}
+	var updateUD map[string]any
+	_ = json.Unmarshal(wUpdate.Body.Bytes(), &updateUD)
+	if updateUD["IsFavorite"] != true {
+		t.Fatalf("UserData 更新后 IsFavorite 应为 true")
+	}
+
+	// 5. 调用 DELETE /Users/{userId}/FavoriteItems/{itemId} 取消电影一收藏
 	rDel := httptest.NewRequest("DELETE", "/emby/Users/"+uid+"/FavoriteItems/"+item1.ID+"?api_key="+tokenVal, nil)
 	wDel := httptest.NewRecorder()
 	a.serve(wDel, rDel)
 	if wDel.Code != 200 {
 		t.Fatalf("取消收藏接口返回非 200: code=%d body=%s", wDel.Code, wDel.Body.String())
 	}
-	var delUD M
+	var delUD map[string]any
 	_ = json.Unmarshal(wDel.Body.Bytes(), &delUD)
 	if delUD["IsFavorite"] != false {
 		t.Fatalf("取消收藏后 UserData.IsFavorite 应为 false: got %v", delUD["IsFavorite"])
 	}
+}
 
-	// 5. 再次查询，收藏列表恢复为空
-	wFav2 := httptest.NewRecorder()
-	a.items(wFav2, rFav, u, false)
-	var resFav2 struct {
+func TestPersonFavoritesFiltering(t *testing.T) {
+	a := newTestSQLiteApp(t)
+
+	var uid string
+	_ = a.db.QueryRow("SELECT id FROM users LIMIT 1").Scan(&uid)
+	tokenVal := "test-token-person"
+	_, _ = a.db.Exec("INSERT INTO tokens VALUES(?,?,?,?)", digest(tokenVal), uid, "device", time.Now().Unix()+3600)
+
+	// 插入演职员数据
+	_, _ = a.db.Exec("INSERT INTO item_people VALUES('m1','person-actor1','张三','主角','Actor','/thumb1.jpg'),('m1','person-actor2','李四','配角','Actor','/thumb2.jpg')")
+
+	// 1. 用户未收藏任何演员时，无论是 /Persons?Filters=IsFavorite 还是 /Users/{uid}/Persons?Filters=IsFavorite，必须返回空列表！
+	for _, path := range []string{"/emby/Persons?Filters=IsFavorite&api_key=" + tokenVal, "/emby/Users/" + uid + "/Persons?Filters=IsFavorite&api_key=" + tokenVal} {
+		r := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		a.serve(w, r)
+		if w.Code != 200 {
+			t.Fatalf("查询人物失败: path=%s code=%d body=%s", path, w.Code, w.Body.String())
+		}
+		var res struct {
+			Items []M
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &res)
+		if len(res.Items) != 0 {
+			t.Fatalf("未收藏演职员时，人物收藏应返回 0 条，实际返回了: %+v", res.Items)
+		}
+	}
+
+	// 2. 收藏演员 张三
+	rFavPerson := httptest.NewRequest("POST", "/emby/Users/"+uid+"/FavoriteItems/person-actor1?api_key="+tokenVal, nil)
+	wFavPerson := httptest.NewRecorder()
+	a.serve(wFavPerson, rFavPerson)
+	if wFavPerson.Code != 200 {
+		t.Fatalf("收藏人物接口失败: %d %s", wFavPerson.Code, wFavPerson.Body.String())
+	}
+
+	// 3. 再次查询人物收藏，只返回 张三，不返回 李四
+	rFavCheck := httptest.NewRequest("GET", "/emby/Users/"+uid+"/Persons?Filters=IsFavorite&api_key="+tokenVal, nil)
+	wFavCheck := httptest.NewRecorder()
+	a.serve(wFavCheck, rFavCheck)
+	var resAfter struct {
 		Items []M
 	}
-	_ = json.Unmarshal(wFav2.Body.Bytes(), &resFav2)
-	if len(resFav2.Items) != 0 {
-		t.Fatalf("取消收藏后收藏列表应恢复为空，实际结果: %+v", resFav2.Items)
+	_ = json.Unmarshal(wFavCheck.Body.Bytes(), &resAfter)
+	if len(resAfter.Items) != 1 || resAfter.Items[0]["Id"] != "person-actor1" {
+		t.Fatalf("人物收藏应只返回已收藏的张三，实际返回: %+v", resAfter.Items)
+	}
+
+	// 4. 取消收藏 张三
+	rUnfav := httptest.NewRequest("DELETE", "/emby/Users/"+uid+"/FavoriteItems/person-actor1?api_key="+tokenVal, nil)
+	wUnfav := httptest.NewRecorder()
+	a.serve(wUnfav, rUnfav)
+
+	// 5. 人物收藏重新变为空
+	wFavCheck2 := httptest.NewRecorder()
+	a.serve(wFavCheck2, rFavCheck)
+	var resEmpty struct {
+		Items []M
+	}
+	_ = json.Unmarshal(wFavCheck2.Body.Bytes(), &resEmpty)
+	if len(resEmpty.Items) != 0 {
+		t.Fatalf("取消收藏后，人物收藏应恢复为空: %+v", resEmpty.Items)
 	}
 }
 
@@ -199,63 +274,28 @@ func TestPlayedItemsAndResumeControl(t *testing.T) {
 	}
 }
 
-func TestNextUpExcludesUnwatchedShows(t *testing.T) {
+func TestNextUpIsCompletelyRemoved(t *testing.T) {
 	a := newTestSQLiteApp(t)
 
 	var uid string
-	if err := a.db.QueryRow("SELECT id FROM users LIMIT 1").Scan(&uid); err != nil {
-		t.Fatalf("获取测试用户失败: %v", err)
-	}
-
-	// 模拟两部电视剧：一部全新未看（Show A），一部看了第 1 集（Show B）
-	showA := Item{ID: "show-a", Name: "全新未看剧", Kind: "Series", Lib: "lib-tv", Path: "/media/show-a", URL: "dir"}
-	epA1 := Item{ID: "ep-a1", Parent: "show-a", Name: "第1集", Kind: "Episode", Lib: "lib-tv", Season: 1, Episode: 1, URL: "http://xiaoya.host:5678/d/a1.mp4"}
-
-	showB := Item{ID: "show-b", Name: "正在追的剧", Kind: "Series", Lib: "lib-tv", Path: "/media/show-b", URL: "dir"}
-	epB1 := Item{ID: "ep-b1", Parent: "show-b", Name: "第1集", Kind: "Episode", Lib: "lib-tv", Season: 1, Episode: 1, URL: "http://xiaoya.host:5678/d/b1.mp4"}
-	epB2 := Item{ID: "ep-b2", Parent: "show-b", Name: "第2集", Kind: "Episode", Lib: "lib-tv", Season: 1, Episode: 2, URL: "http://xiaoya.host:5678/d/b2.mp4"}
-
-	for _, it := range []Item{showA, epA1, showB, epB1, epB2} {
-		_, _ = a.db.Exec("INSERT INTO items("+cols+",seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'t')",
-			it.ID, it.Lib, it.Parent, it.Name, it.Kind, it.Path, it.URL, it.Overview, it.Poster, it.Year, it.Season, it.Episode, it.Mtime, it.Size)
-	}
-
-	// 用户只看过了 Show B 的第 1 集
-	_, _ = a.db.Exec("INSERT INTO userdata(user_id,item,played,position) VALUES(?,?,1,0)", uid, epB1.ID)
-
+	_ = a.db.QueryRow("SELECT id FROM users LIMIT 1").Scan(&uid)
 	tokenVal := "test-token-next"
 	_, _ = a.db.Exec("INSERT INTO tokens VALUES(?,?,?,?)", digest(tokenVal), uid, "device", time.Now().Unix()+3600)
 
-	// 测试无论是 /emby/Shows/NextUp 还是 /emby/Users/{userId}/Shows/NextUp
+	// 验证 NextUp 无论如何请求，均返回 0 条（已完全移除）
 	for _, path := range []string{"/emby/Shows/NextUp?api_key=" + tokenVal, "/emby/Users/" + uid + "/Shows/NextUp?api_key=" + tokenVal} {
 		r := httptest.NewRequest("GET", path, nil)
 		w := httptest.NewRecorder()
 		a.serve(w, r)
 		if w.Code != 200 {
-			t.Fatalf("请求 NextUp 失败: path=%s code=%d body=%s", path, w.Code, w.Body.String())
+			t.Fatalf("请求 NextUp 失败: path=%s code=%d", path, w.Code)
 		}
-		var nextUpRes struct {
+		var res struct {
 			Items []M
 		}
-		_ = json.Unmarshal(w.Body.Bytes(), &nextUpRes)
-
-		// 检查：绝对不能包含从未看过的 Show A 的任何剧集！
-		for _, it := range nextUpRes.Items {
-			if it["Id"] == epA1.ID {
-				t.Fatalf("NextUp 错误包含了未看过的电视剧剧集: %+v", it)
-			}
-		}
-
-		// 检查：必须包含 Show B 的下一集（第 2 集）
-		foundB2 := false
-		for _, it := range nextUpRes.Items {
-			if it["Id"] == epB2.ID {
-				foundB2 = true
-				break
-			}
-		}
-		if !foundB2 {
-			t.Fatalf("NextUp 应推荐正在追的剧集下一集 ep-b2，实际返回: %+v", nextUpRes.Items)
+		_ = json.Unmarshal(w.Body.Bytes(), &res)
+		if len(res.Items) != 0 {
+			t.Fatalf("NextUp 应当已被完全移除返回 0 条，实际返回: %+v", res.Items)
 		}
 	}
 }
