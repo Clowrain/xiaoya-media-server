@@ -39,6 +39,7 @@ RUN apk add --no-cache \
       ffmpeg \
       postgresql16 \
       postgresql16-client \
+      postgresql16-contrib \
       su-exec \
       wget \
     && mkdir -p /data /media/strm /xiaoya-db /etc/xiaoya-media-server /run/postgresql
