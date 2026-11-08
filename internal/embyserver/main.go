@@ -1337,9 +1337,15 @@ func (a *App) dto(x Item) M {
 		m["MediaSources"] = []M{a.source(x, "")}
 	}
 	a.enrich(x, m)
-	if x.Kind == "Movie" {
+	if x.Kind == "Movie" || x.Kind == "Series" {
 		delete(m, "IndexNumber")
 		delete(m, "ParentIndexNumber")
+	}
+	if x.Year <= 0 {
+		delete(m, "ProductionYear")
+	}
+	if x.Kind == "Season" {
+		m["IndexNumber"] = x.Season
 	}
 	return m
 }

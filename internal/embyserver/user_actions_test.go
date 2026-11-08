@@ -21,7 +21,7 @@ func newTestSQLiteApp(t *testing.T) *App {
 	t.Cleanup(func() { rawDB.Close() })
 	tables := []string{
 		"CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT,hash TEXT,admin INT,first_admin INT,max_devices INT);",
-		"CREATE TABLE items(id TEXT PRIMARY KEY,lib TEXT,parent TEXT,name TEXT,kind TEXT,path TEXT,url TEXT,overview TEXT,poster TEXT,year INT,season INT,episode INT,mtime INT,size INT,seen TEXT);",
+		"CREATE TABLE items(id TEXT PRIMARY KEY,lib TEXT,parent TEXT,name TEXT,kind TEXT,path TEXT,url TEXT,overview TEXT,poster TEXT,year INT,season INT,episode INT,mtime INT,size INT,seen TEXT,rating DOUBLE DEFAULT 0);",
 		"CREATE TABLE libraries(id TEXT PRIMARY KEY,name TEXT,path TEXT,kind TEXT,status TEXT,scanned INT,error TEXT,count INT,duration REAL);",
 		"CREATE TABLE userdata(user_id TEXT,item TEXT,position INT DEFAULT 0,played INT DEFAULT 0,PRIMARY KEY(user_id,item));",
 		"CREATE TABLE user_favorites(user_id TEXT,item TEXT,created_at INT DEFAULT 0,PRIMARY KEY(user_id,item));",

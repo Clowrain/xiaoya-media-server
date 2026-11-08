@@ -3,6 +3,7 @@ package embyserver
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -225,6 +226,14 @@ func (a *App) pageItems(r *http.Request, u User, where string, args []any, order
 					return nil, p, "", false, e
 				}
 				n.Values = append(n.Values, fmt.Sprint(updated))
+			} else if col == "rating" {
+				// rating lives outside cols/Item; read the cursor key like the resume column above.
+				var rating float64
+				e = a.db.QueryRow("SELECT rating FROM items WHERE id=?", last.ID).Scan(&rating)
+				if e != nil {
+					return nil, p, "", false, e
+				}
+				n.Values = append(n.Values, strconv.FormatFloat(rating, 'g', -1, 64))
 			} else {
 				n.Values = append(n.Values, itemSortValue(last, col))
 			}
@@ -268,9 +277,12 @@ func (a *App) listDTO(x Item, r *http.Request, u User) M {
 	if !u.API && r != nil && x.URL != "" && strings.Contains(strings.ToLower(q(r, "Fields")), "mediasources") {
 		m["MediaSources"] = []M{a.viewerSource(x, r, u)}
 	}
-	if x.Kind == "Movie" {
+	if x.Kind == "Movie" || x.Kind == "Series" {
 		delete(m, "IndexNumber")
 		delete(m, "ParentIndexNumber")
+	}
+	if x.Year <= 0 {
+		delete(m, "ProductionYear")
 	}
 
 	if x.Kind == "Season" {
@@ -278,6 +290,67 @@ func (a *App) listDTO(x Item, r *http.Request, u User) M {
 		m["SeriesId"] = x.Parent
 	}
 	return m
+}
+
+// Episode rows in a listing still need their series/season ancestry; one chunked
+// join query serves the whole page without sidecar reads or probe triggers.
+func (a *App) attachSeriesInfo(items []Item, out []M) {
+	if a.db == nil {
+		return
+	}
+	rowOf := map[string]int{}
+	ids := []string{}
+	for i, x := range items {
+		if x.Kind == "Episode" {
+			rowOf[x.ID] = i
+			ids = append(ids, x.ID)
+		}
+	}
+	for start := 0; start < len(ids); start += 500 {
+		end := start + 500
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[start:end]
+		args := make([]any, len(chunk))
+		for j, v := range chunk {
+			args[j] = v
+		}
+		rows, e := a.db.Query(`SELECT ep.id, se.id, se.name, sr.id, sr.name
+FROM items ep
+LEFT JOIN items se ON se.id = ep.parent AND se.kind = 'Season'
+LEFT JOIN items sr ON sr.id = CASE WHEN se.id IS NOT NULL THEN se.parent ELSE ep.parent END
+WHERE ep.id IN (`+strings.TrimRight(strings.Repeat("?,", len(chunk)), ",")+`)`, args...)
+		if e != nil {
+			return
+		}
+		for rows.Next() {
+			var id, seasonID, seasonName, seriesID, seriesName sql.NullString
+			if e := rows.Scan(&id, &seasonID, &seasonName, &seriesID, &seriesName); e != nil {
+				continue
+			}
+			i, ok := rowOf[id.String]
+			if !ok {
+				continue
+			}
+			if seasonID.Valid && seasonID.String != "" {
+				out[i]["SeasonId"] = seasonID.String
+				if seasonName.Valid {
+					out[i]["SeasonName"] = seasonName.String
+				}
+			}
+			if seriesID.Valid && seriesID.String != "" {
+				out[i]["SeriesId"] = seriesID.String
+				if seriesName.Valid {
+					out[i]["SeriesName"] = seriesName.String
+				}
+			}
+		}
+		rows.Close()
+		if e := rows.Err(); e != nil {
+			return
+		}
+	}
 }
 
 func (a *App) listDTOs(items []Item, r *http.Request, u User) []M {
@@ -289,7 +362,11 @@ func (a *App) listDTOs(items []Item, r *http.Request, u User) []M {
 		args = append(args, x.ID)
 		m := a.listDTO(x, r, u)
 		if !m["IsFolder"].(bool) {
-			m["MediaSourceCount"] = 1
+			if sources, ok := m["MediaSources"].([]M); ok {
+				m["MediaSourceCount"] = len(sources)
+			} else {
+				delete(m, "MediaSourceCount")
+			}
 		}
 		out = append(out, m)
 	}
@@ -325,6 +402,7 @@ func (a *App) listDTOs(items []Item, r *http.Request, u User) []M {
 			}
 		}
 	}
+	a.attachSeriesInfo(items, out)
 	return out
 }
 

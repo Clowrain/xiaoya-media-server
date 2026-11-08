@@ -49,6 +49,8 @@ func (a *App) postgresSchema() error {
  ALTER TABLE item_people SET (autovacuum_vacuum_scale_factor=0.05,autovacuum_analyze_scale_factor=0.02);
  ALTER TABLE item_metadata SET (autovacuum_vacuum_scale_factor=0.05,autovacuum_analyze_scale_factor=0.02);
  ALTER TABLE items SET (autovacuum_vacuum_scale_factor=0.02,autovacuum_analyze_scale_factor=0.01);
+ ALTER TABLE items ADD COLUMN IF NOT EXISTS rating DOUBLE PRECISION NOT NULL DEFAULT 0;
+ CREATE INDEX IF NOT EXISTS items_rating_id ON items(rating,id) WHERE rating>0;
  `)
 	return e
 }
