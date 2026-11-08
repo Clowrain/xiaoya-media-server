@@ -7,6 +7,7 @@ import { MediaWall } from './pages/MediaWall';
 import { AdminLayout } from './pages/admin/AdminLayout';
 import { LogDrawer } from './components/LogDrawer';
 import { ToastContainer } from './components/Toast';
+import { APP_VERSION, BUILD_COMMIT, BUILD_TIME } from './version';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(getStoredUser());
@@ -111,6 +112,18 @@ export const App: React.FC = () => {
 
       <LogDrawer isOpen={showLogs} onClose={() => setShowLogs(false)} />
       <ToastContainer />
+
+      <footer className="py-5 border-t border-zinc-900 bg-zinc-950/60 text-center text-xs text-zinc-500 font-mono">
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+          <span className="text-zinc-400 font-medium">小雅媒体中心 Xiaoya Media Server</span>
+          <span className="text-zinc-700">•</span>
+          <span className="text-zinc-300 font-semibold">{APP_VERSION}</span>
+          <span className="text-zinc-700">•</span>
+          <span className="text-emerald-400 font-mono">Build: {BUILD_COMMIT}</span>
+          <span className="text-zinc-700">•</span>
+          <span className="text-zinc-500">{BUILD_TIME}</span>
+        </div>
+      </footer>
     </div>
   );
 };

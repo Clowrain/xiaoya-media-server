@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { User } from '../types';
 import { Film, Settings, Terminal, LogOut, Key, User as UserIcon, Check } from 'lucide-react';
 import { changePasswordApi, notifyToast } from '../api/client';
+import { APP_VERSION, BUILD_COMMIT, BUILD_TIME } from '../version';
 
 interface HeaderProps {
   user: User;
@@ -57,9 +58,17 @@ export const Header: React.FC<HeaderProps> = ({
                 <Film className="w-5 h-5 text-white" />
               </div>
               <div className="flex flex-col">
-                <span className="font-bold text-base tracking-tight bg-gradient-to-r from-zinc-100 to-zinc-400 bg-clip-text text-transparent">
-                  小雅媒体中心
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-base tracking-tight bg-gradient-to-r from-zinc-100 to-zinc-400 bg-clip-text text-transparent">
+                    小雅媒体中心
+                  </span>
+                  <span 
+                    className="px-1.5 py-0.5 rounded-md bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 font-mono text-[10px] font-bold tracking-tight shadow-sm"
+                    title={`系统版本: ${APP_VERSION} · 编译号: ${BUILD_COMMIT} · 时间: ${BUILD_TIME}`}
+                  >
+                    {APP_VERSION} <span className="opacity-70">({BUILD_COMMIT})</span>
+                  </span>
+                </div>
                 <span className="text-[10px] text-zinc-500 font-mono tracking-wider -mt-0.5">
                   XIAOYA MEDIA SERVER
                 </span>
@@ -149,11 +158,14 @@ export const Header: React.FC<HeaderProps> = ({
                         setShowUserMenu(false);
                         onLogout();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 transition"
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 transition cursor-pointer"
                     >
                       <LogOut className="w-4 h-4" />
                       退出登录
                     </button>
+                    <div className="px-3 py-1.5 border-t border-zinc-800/80 text-[10px] text-zinc-500 font-mono text-center">
+                      {APP_VERSION} · {BUILD_COMMIT}
+                    </div>
                   </div>
                 </>
               )}

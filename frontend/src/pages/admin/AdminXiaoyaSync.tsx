@@ -10,6 +10,7 @@ import {
   updateMonitorRoot, deleteMonitorRoot, triggerSync, 
   importResource, browseAList, searchAList, notifyToast, fetchAdminJobs, fetchAdminLibraries, request
 } from '../../api/client';
+import { APP_VERSION, BUILD_COMMIT, BUILD_TIME } from '../../version';
 
 interface AdminXiaoyaSyncProps {
   onOpenLogs: () => void;
@@ -281,8 +282,13 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
 
         <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 flex items-center justify-between">
           <div>
-            <div className="text-xs text-zinc-400">全链路运行日志</div>
-            <div className="text-xs text-emerald-400 font-medium mt-1">实时诊断就绪</div>
+            <div className="text-xs text-zinc-400">系统版本与编译号</div>
+            <div className="text-xs text-emerald-400 font-bold font-mono mt-0.5">
+              {overview?.version || APP_VERSION} <span className="text-zinc-400 font-normal">({overview?.build_number || BUILD_COMMIT})</span>
+            </div>
+            <div className="text-[10px] text-zinc-500 font-mono mt-0.5">
+              构建: {overview?.build_time || BUILD_TIME}
+            </div>
           </div>
           <button
             type="button"

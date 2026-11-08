@@ -1,15 +1,21 @@
 # syntax=docker/dockerfile:1
 
 FROM --platform=$BUILDPLATFORM node:22-alpine AS ui-builder
+ARG VERSION=v2.1.0
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
 WORKDIR /src
 # Build React frontend
 COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm install
 COPY frontend/ ./frontend/
-RUN cd frontend && npm run build
+RUN cd frontend && VITE_APP_VERSION=${VERSION} VITE_BUILD_COMMIT=${GIT_COMMIT} VITE_BUILD_TIME=${BUILD_TIME} npm run build
 
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 ARG TARGETARCH
+ARG VERSION=v2.1.0
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
 WORKDIR /src
 
 RUN apk add --no-cache git ca-certificates tzdata
@@ -21,7 +27,7 @@ COPY . .
 COPY --from=ui-builder /src/web/index.html ./web/index.html
 COPY --from=ui-builder /src/web/assets/ ./web/assets/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
-    go build -trimpath -ldflags="-s -w" -o /out/xiaoya-media-server ./cmd/server
+    go build -trimpath -ldflags="-s -w -X 'xiaoya-media-server/internal/version.Version=${VERSION}' -X 'xiaoya-media-server/internal/version.GitCommit=${GIT_COMMIT}' -X 'xiaoya-media-server/internal/version.BuildTime=${BUILD_TIME}'" -o /out/xiaoya-media-server ./cmd/server
 
 FROM alpine:3.21
 LABEL org.opencontainers.image.title="xiaoya-media-server" \

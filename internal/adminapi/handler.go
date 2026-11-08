@@ -19,6 +19,7 @@ import (
 	"xiaoya-media-server/internal/resource/discovery"
 	"xiaoya-media-server/internal/resource/xiaoya"
 	"xiaoya-media-server/internal/scheduler"
+	"xiaoya-media-server/internal/version"
 )
 
 type Handler struct {
@@ -784,6 +785,10 @@ func (h *Handler) handleSystemOverview(ctx context.Context, w http.ResponseWrite
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":              "ok",
 		"service":             "xiaoya-media-server",
+		"version":             version.Version,
+		"git_commit":          version.GitCommit,
+		"build_number":        version.GitCommit,
+		"build_time":          version.BuildTime,
 		"nfo_policy":          "prefer",
 		"deletion_policy":     "keep",
 		"sqlite_path":         sqlitePath,
