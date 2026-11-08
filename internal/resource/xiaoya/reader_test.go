@@ -117,6 +117,12 @@ func TestReaderReadOnlyAndZheYueLiangSubtree(t *testing.T) {
 		t.Fatalf("ResolveAnyPath file got (%+v, %v)", file, err)
 	}
 
+	// Verify ResolveAnyPath allows fuzzy matching title when release year is present in SQLite
+	fuzzyNode, err := r.ResolveAnyPath(ctx, "/每日更新/电视剧/国产剧/折月亮")
+	if err != nil || fuzzyNode.ID != 641716 || fuzzyNode.Name != "折月亮 (2026)" {
+		t.Fatalf("ResolveAnyPath fuzzy matching failed: got (%+v, %v)", fuzzyNode, err)
+	}
+
 	// Batched walk with tiny pageSize=5 to verify cursor pagination across all 30 nodes
 	var collected []Node
 	stats, err := r.WalkSubtreeBatched(ctx, root1, 5, func(batch []Node) error {

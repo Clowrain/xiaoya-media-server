@@ -171,16 +171,17 @@ func (r *Reader) DataVersion(ctx context.Context) (int64, error) {
 // Returns ErrPathNotFound if any segment is missing, ErrAmbiguousPath if duplicate sibling names exist,
 // and ErrNotDirectory if any resolved segment is not a directory.
 func (r *Reader) ResolvePath(ctx context.Context, rootPath string) (Node, error) {
-	return r.resolvePath(ctx, rootPath, true)
+	return r.resolvePath(ctx, rootPath, true, false)
 }
 
 // ResolveAnyPath resolves either a file or directory. It is used only by an
 // explicit administrator import; monitor roots continue to require a directory.
+// Administrator imports allow fuzzy fallback (e.g. matching title when release year is present).
 func (r *Reader) ResolveAnyPath(ctx context.Context, rootPath string) (Node, error) {
-	return r.resolvePath(ctx, rootPath, false)
+	return r.resolvePath(ctx, rootPath, false, true)
 }
 
-func (r *Reader) resolvePath(ctx context.Context, rootPath string, requireDir bool) (Node, error) {
+func (r *Reader) resolvePath(ctx context.Context, rootPath string, requireDir, allowFuzzy bool) (Node, error) {
 	normPath, segments, err := NormalizeMonitorPath(rootPath)
 	if err != nil {
 		return Node{}, err
@@ -216,8 +217,29 @@ func (r *Reader) resolvePath(ctx context.Context, rootPath string, requireDir bo
 		}
 		rows.Close()
 
+		if len(matches) == 0 && allowFuzzy {
+			// Fallback: check if siblings match after trimming whitespace or matching title without release year.
+			sRows, sErr := r.query().QueryContext(ctx, "SELECT id, name, parent_id, is_dir, content FROM nodes WHERE parent_id = ? ORDER BY id ASC", parentID)
+			if sErr == nil {
+				var siblings []RawNode
+				for sRows.Next() {
+					var sn RawNode
+					var isDirI int
+					if err := sRows.Scan(&sn.ID, &sn.Name, &sn.ParentID, &isDirI, &sn.Content); err == nil {
+						sn.IsDir = isDirI != 0
+						siblings = append(siblings, sn)
+					}
+				}
+				sRows.Close()
+				fallbackMatches := matchFuzzySegment(siblings, seg)
+				if len(fallbackMatches) == 1 {
+					matches = fallbackMatches
+				}
+			}
+		}
+
 		if len(matches) == 0 {
-			return Node{}, fmt.Errorf("%w: segment %q in %q (parent_id=%d)", ErrPathNotFound, seg, normPath, parentID)
+			return Node{}, fmt.Errorf("%w: 该路径尚未进入小雅 SQLite，暂不能入库（等待小雅数据库更新后重试）: segment %q in %q (parent_id=%d)", ErrPathNotFound, seg, normPath, parentID)
 		}
 		if len(matches) > 1 {
 			return Node{}, fmt.Errorf("%w: %d sibling nodes named %q under parent_id=%d in %q", ErrAmbiguousPath, len(matches), seg, parentID, normPath)
@@ -227,7 +249,7 @@ func (r *Reader) resolvePath(ctx context.Context, rootPath string, requireDir bo
 			return Node{}, fmt.Errorf("%w: segment %q (id=%d) in %q", ErrNotDirectory, seg, current.ID, normPath)
 		}
 		parentID = current.ID
-		builtSegments = append(builtSegments, seg)
+		builtSegments = append(builtSegments, current.Name)
 	}
 
 	return Node{
@@ -495,3 +517,34 @@ func (r *Reader) WalkNewUnderRoot(ctx context.Context, root Node, after, high in
 	})
 	return err
 }
+
+func matchFuzzySegment(siblings []RawNode, target string) []RawNode {
+	tClean := strings.TrimSpace(target)
+	var exactTrim []RawNode
+	var titleOnly []RawNode
+	for _, n := range siblings {
+		nClean := strings.TrimSpace(n.Name)
+		if nClean == tClean || strings.EqualFold(nClean, tClean) {
+			exactTrim = append(exactTrim, n)
+			continue
+		}
+		if syN, syT := stripYear(nClean), stripYear(tClean); syN != "" && syN == syT {
+			titleOnly = append(titleOnly, n)
+		}
+	}
+	if len(exactTrim) > 0 {
+		return exactTrim
+	}
+	return titleOnly
+}
+
+func stripYear(s string) string {
+	s = strings.TrimSpace(s)
+	for _, p := range []string{"(", "（", "[", "【"} {
+		if idx := strings.Index(s, p); idx > 0 {
+			s = s[:idx]
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
