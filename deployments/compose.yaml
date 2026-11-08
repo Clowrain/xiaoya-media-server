@@ -44,7 +44,8 @@ services:
       DATA_DIR: /data
       MEDIA_ROOTS: /media
       STRM_OUTPUT_ROOT: /media/strm
-      XIAOYA_SQLITE_PATH: /xiaoya-db/${XIAOYA_SQLITE_FILENAME:-strm_internal.db}
+      XIAOYA_STRM_PATH: ${XIAOYA_STRM_PATH:-/xiaoya-db/strm.txt}
+      XIAOYA_SQLITE_PATH: /xiaoya-db/${XIAOYA_SQLITE_FILENAME:-data/strm_internal.db}
       MONITOR_ENABLED: ${MONITOR_ENABLED:-true}
       MONITOR_INTERVAL: ${MONITOR_INTERVAL:-10m}
       MONITOR_ROOTS: ${MONITOR_ROOTS:-}
@@ -56,8 +57,8 @@ services:
       TMDB_API_KEY: ${TMDB_API_KEY:-}
       TMDB_LANGUAGE: ${TMDB_LANGUAGE:-zh-CN}
     volumes:
-      # 必须将小雅 SQLite 所在父目录以只读 (:ro) 方式挂载，确保同时可见 .db / .db-wal / .db-shm
-      - ${XIAOYA_DB_DIR:?请设置小雅 SQLite 所在宿主机目录 XIAOYA_DB_DIR}:/xiaoya-db:ro
+      # 将小雅主目录挂载进容器只读 (:ro)，容器内可直接访问 /xiaoya-db/strm.txt
+      - ${XIAOYA_DIR:-${XIAOYA_DB_DIR:?请设置小雅所在宿主机目录 XIAOYA_DIR}}:/xiaoya-db:ro
       # 本地 STRM 输出及附件落地目录（读写）
       - ${MEDIA_DIR:-./data/media}:/media
       # 应用持久化数据目录（封面缓存、媒体探测缓存、PostgreSQL 自动备份）
