@@ -3,7 +3,7 @@ import {
   FolderSync, Database, HardDrive, RefreshCw, Plus, 
   Trash2, Play, ChevronRight, Folder, FileVideo, 
   Search, ArrowLeft, ArrowRight, CheckCircle2, BookmarkPlus,
-  ExternalLink, AlertCircle 
+  ExternalLink, AlertCircle, ListChecks, X, Clock 
 } from 'lucide-react';
 import { SystemOverview, MonitorRoot, AListFileItem, AdminJob, AdminLibrary } from '../../types';
 import { 
@@ -45,10 +45,12 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
   const [alistError, setAlistError] = useState<string>('');
   const [jobs, setJobs] = useState<AdminJob[]>([]);
   const [jobsError, setJobsError] = useState('');
+  const [showJobsDrawer, setShowJobsDrawer] = useState<boolean>(false);
   const [libraries, setLibraries] = useState<AdminLibrary[]>([]);
   const [libraryID, setLibraryID] = useState('');
   const [outputDir, setOutputDir] = useState('');
   const hasRunningJob = jobs.some(j => j.status === 'RUNNING');
+  const activeJobs = jobs.filter(j => j.kind !== 'task');
 
   const loadJobs = async () => {
     try { setJobs(await fetchAdminJobs()); setJobsError(''); }
@@ -227,6 +229,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
     try {
       const job = await triggerSync(id, full);
       setJobs(current => [job, ...current.filter(j => j.id !== job.id)]);
+      setShowJobsDrawer(true);
     } catch (err: any) {
       notifyToast(err.message || '提交同步失败', 'error');
     }
@@ -252,6 +255,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
     try {
       const job = await importResource(itemPath, item.is_dir, track, libraryID, outputDir, browseSource);
       setJobs(current => [job, ...current.filter(j => j.id !== job.id)]);
+      setShowJobsDrawer(true);
       if (track) {
         notifyToast('已提交整剧追更，监控目录已同步添加', 'success');
         setTimeout(() => loadSystemInfo(), 500);
@@ -352,44 +356,36 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
               构建: {overview?.build_time && overview.build_time !== 'unknown' ? overview.build_time : BUILD_TIME}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onOpenLogs}
-            className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer shrink-0"
-          >
-            打开日志
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowJobsDrawer(true)}
+              className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer border border-zinc-700/60"
+              title="查看最近的同步与入库任务记录"
+            >
+              <ListChecks className="w-3.5 h-3.5 text-emerald-400" />
+              <span>任务记录</span>
+              {hasRunningJob ? (
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500"></span>
+                </span>
+              ) : activeJobs.length > 0 ? (
+                <span className="px-1.5 py-0.2 rounded-full bg-zinc-700 text-[10px] text-zinc-300 font-mono">
+                  {activeJobs.length}
+                </span>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              onClick={onOpenLogs}
+              className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer shrink-0"
+            >
+              打开日志
+            </button>
+          </div>
         </div>
       </div>
-
-      <section aria-live="polite" aria-label="同步与入库任务" className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold">同步与入库任务</h3>
-          <button type="button" onClick={loadJobs} className="rounded-lg px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">刷新</button>
-        </div>
-        {jobsError && <p className="mt-2 text-sm text-rose-300">{jobsError}</p>}
-        <div className="mt-2 divide-y divide-zinc-800">
-          {jobs.filter(j => j.kind !== 'task').slice(0, 8).map(job => {
-            const r = job.result;
-            const unindexed = r?.unindexed_strms?.length ?? r?.batches?.reduce((sum,b) => sum + (b.unindexed_strm_count ?? 0),0) ?? 0;
-            const status = job.status === 'SUCCESS' && unindexed > 0 ? '生成完成' : {RUNNING: '运行中', SUCCESS: '全部成功', PARTIAL: '部分失败', FAILED: '全部失败', INTERRUPTED: '已中断，可重新提交'}[job.status];
-            const count = (key: 'added_count' | 'modified_count' | 'renamed_count' | 'moved_count' | 'missing_count' | 'restored_count' | 'failed_count') => r?.batches?.reduce((sum, b) => sum + b[key], 0) ?? 0;
-            const changed = count('modified_count') + count('renamed_count') + count('moved_count');
-            const errors = [...new Set([job.error, ...(r?.errors?.length ? r.errors : (r?.batches?.map(b => b.error_message) ?? []))].filter(Boolean))];
-            const subject = r?.source_path || r?.batches?.map(b => b.root_path).join('、') || (job.kind === 'import' ? job.scope.slice(7) : job.scope.startsWith('scan:/') ? job.scope.slice(5) : '监控目录');
-            return <div key={job.id} className="py-3 text-sm">
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <span className={job.status === 'SUCCESS' ? 'text-emerald-300' : job.status === 'RUNNING' ? 'text-sky-300' : 'text-amber-300'}>{status}</span>
-                <span className="min-w-0 break-all text-zinc-200">{subject}</span>
-              </div>
-              {r && job.kind === 'sync' && <p className="mt-1 text-zinc-400">新增 {count('added_count')} · 变更 {changed} · 缺失 {count('missing_count')} · 恢复 {count('restored_count')} · 处理失败 {count('failed_count')}{unindexed > 0 && <span className="ml-2 text-amber-300">已生成，未收录 {unindexed}</span>}</p>}
-              {r && job.kind === 'import' && <p className="mt-1 text-zinc-400">文件成功 {r.imported_files ?? 0} · 失败 {r.failed_files ?? 0} · STRM {r.generated_strms?.length ?? 0}{!!r.unindexed_strms?.length && <span className="ml-2 text-amber-300">已生成，未收录 {r.unindexed_strms.length}</span>}</p>}
-              {errors.map(error => <p key={error} className="mt-1 break-all text-rose-300">{error}</p>)}
-            </div>;
-          })}
-          {!jobsError && jobs.every(j => j.kind === 'task') && <p className="py-2 text-sm text-zinc-400">提交同步或入库后，结果会显示在这里。</p>}
-        </div>
-      </section>
 
       {/* Monitor Roots Management */}
       <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-4">
@@ -854,6 +850,124 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Sync & Import Jobs Drawer */}
+      {showJobsDrawer && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm transition-opacity">
+          <div 
+            className="fixed inset-0 -z-10" 
+            onClick={() => setShowJobsDrawer(false)} 
+          />
+          <div className="w-full max-w-xl h-full bg-zinc-950 border-l border-zinc-800 flex flex-col shadow-2xl animate-in slide-in-from-right duration-300">
+            {/* Drawer Header */}
+            <div className="px-6 py-4 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-900/60">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-emerald-950 border border-emerald-500/30 flex items-center justify-center">
+                  <ListChecks className="w-4 h-4 text-emerald-400" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+                    同步与入库任务
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 font-mono">
+                      {activeJobs.length} 条记录
+                    </span>
+                  </h2>
+                  <p className="text-xs text-zinc-500">
+                    查看小雅 STRM 发现、增量同步与 AList 入库任务执行状态
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={loadJobs}
+                  className="p-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 hover:text-white transition"
+                  title="刷新任务列表"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowJobsDrawer(false)}
+                  className="p-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Drawer Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {jobsError && (
+                <div className="p-3 rounded-xl bg-rose-950/30 border border-rose-900/40 text-sm text-rose-300">
+                  {jobsError}
+                </div>
+              )}
+
+              {activeJobs.length === 0 ? (
+                <div className="py-20 text-center text-zinc-500">
+                  <ListChecks className="w-12 h-12 mx-auto mb-3 text-zinc-700" />
+                  <p>暂无同步或入库任务记录</p>
+                  <p className="text-xs text-zinc-600 mt-1">提交同步或入库后，任务进度会实时展示在这里</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-zinc-800/80">
+                  {activeJobs.map(job => {
+                    const r = job.result;
+                    const unindexed = r?.unindexed_strms?.length ?? r?.batches?.reduce((sum, b) => sum + (b.unindexed_strm_count ?? 0), 0) ?? 0;
+                    const status = job.status === 'SUCCESS' && unindexed > 0 
+                      ? '生成完成' 
+                      : ({ RUNNING: '运行中', SUCCESS: '全部成功', PARTIAL: '部分失败', FAILED: '全部失败', INTERRUPTED: '已中断，可重新提交' } as Record<string, string>)[job.status] || job.status;
+                    const count = (key: 'added_count' | 'modified_count' | 'renamed_count' | 'moved_count' | 'missing_count' | 'restored_count' | 'failed_count') => r?.batches?.reduce((sum, b) => sum + b[key], 0) ?? 0;
+                    const changed = count('modified_count') + count('renamed_count') + count('moved_count');
+                    const errors = [...new Set([job.error, ...(r?.errors?.length ? r.errors : (r?.batches?.map(b => b.error_message) ?? []))].filter(Boolean))];
+                    const subject = r?.source_path || r?.batches?.map(b => b.root_path).join('、') || (job.kind === 'import' ? job.scope.slice(7) : job.scope.startsWith('scan:/') ? job.scope.slice(5) : '监控目录');
+
+                    return (
+                      <div key={job.id} className="py-3.5 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                              job.status === 'SUCCESS' ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/30' :
+                              job.status === 'RUNNING' ? 'bg-sky-950/80 text-sky-400 border border-sky-500/30 animate-pulse' :
+                              'bg-amber-950/80 text-amber-400 border border-amber-500/30'
+                            }`}>
+                              {status}
+                            </span>
+                            <span className="text-xs font-semibold text-zinc-200 truncate" title={subject}>
+                              {subject}
+                            </span>
+                          </div>
+                        </div>
+
+                        {r && job.kind === 'sync' && (
+                          <p className="text-xs text-zinc-400">
+                            新增 {count('added_count')} · 变更 {changed} · 缺失 {count('missing_count')} · 恢复 {count('restored_count')} · 处理失败 {count('failed_count')}
+                            {unindexed > 0 && <span className="ml-2 text-amber-300">已生成，未收录 {unindexed}</span>}
+                          </p>
+                        )}
+
+                        {r && job.kind === 'import' && (
+                          <p className="text-xs text-zinc-400">
+                            文件成功 {r.imported_files ?? 0} · 失败 {r.failed_files ?? 0} · STRM {r.generated_strms?.length ?? 0}
+                            {!!r.unindexed_strms?.length && <span className="ml-2 text-amber-300">已生成，未收录 {r.unindexed_strms.length}</span>}
+                          </p>
+                        )}
+
+                        {errors.map(error => (
+                          <p key={error} className="text-xs break-all text-rose-300 bg-rose-950/20 p-2 rounded-lg border border-rose-900/30">
+                            {error}
+                          </p>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
