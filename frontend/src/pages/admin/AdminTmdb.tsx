@@ -25,6 +25,7 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
     ProxyURL: '',
     RateLimitMs: 250,
     AutoScrape: true,
+    SaveArtifactsToMediaDir: false,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -355,6 +356,25 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
               onChange={(e) => setConfig({ ...config, RateLimitMs: Number(e.target.value) })}
               className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-zinc-100 focus:outline-none focus:border-emerald-500"
             />
+          </div>
+
+          <div className="col-span-full border-t border-zinc-800/80 pt-3">
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!config.SaveArtifactsToMediaDir}
+                onChange={(e) => setConfig({ ...config, SaveArtifactsToMediaDir: e.target.checked })}
+                className="w-4 h-4 rounded bg-zinc-950 border-zinc-700 text-emerald-500 focus:ring-0 mt-0.5"
+              />
+              <div>
+                <span className="text-xs font-semibold text-zinc-200">
+                  写入本地海报与 NFO 元数据文件到媒体目录 (推荐 1T 高速固态 / 本地硬盘开启)
+                </span>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  开启后，刮削成功会自动将 poster.jpg、fanart.jpg、单集剧照与标准 tvshow/episodedetails.nfo 异步下载并保存到 NAS 影视目录。若本地存在文件，播放器与网页端将直接极速读取本地固态硬盘文件，不再消耗外网带宽走远程代理。
+                </p>
+              </div>
+            </label>
           </div>
 
           <div className="col-span-full pt-2 flex items-center justify-end">

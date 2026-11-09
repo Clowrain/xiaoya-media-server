@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"xiaoya-media-server/internal/metadata/tmdb"
 )
 
 func (a *App) browseSchema() error {
@@ -90,7 +92,7 @@ func (a *App) indexMetadataGeneration(lib, generation string, jobs ...string) er
 			if _, e = tx.Exec("INSERT INTO item_metadata VALUES(?,?) ON CONFLICT(item) DO UPDATE SET data=excluded.data", x.ID, string(b)); e != nil {
 				break
 			}
-			if n.Title != "" || n.Plot != "" || n.Year > 0 {
+			if n.Title != "" || n.Plot != "" || n.Year > 0 || n.ThumbURL != "" || n.PosterURL != "" {
 				newName := x.Name
 				if n.Title != "" && x.Kind != "Season" {
 					var manual string
@@ -106,7 +108,32 @@ func (a *App) indexMetadataGeneration(lib, generation string, jobs ...string) er
 				if n.Year > 0 {
 					newYear = n.Year
 				}
-				if _, e = tx.Exec("UPDATE items SET name=?,overview=?,year=? WHERE id=?", newName, newOverview, newYear, x.ID); e != nil {
+				newPoster := x.Poster
+				if n.ThumbURL != "" {
+					newPoster = n.ThumbURL
+				} else if n.PosterURL != "" && newPoster == "" {
+					newPoster = n.PosterURL
+				}
+				newSeason := x.Season
+				newEpisode := x.Episode
+				if x.Kind == "Episode" && (newSeason <= 0 || newEpisode <= 0) {
+					if sNum, eNum, ok := tmdb.ParseSeasonEpisode(x.Name, 1); ok {
+						if newSeason <= 0 {
+							newSeason = sNum
+						}
+						if newEpisode <= 0 {
+							newEpisode = eNum
+						}
+					} else if sNum, eNum, ok := tmdb.ParseSeasonEpisode(filepath.Base(x.Path), 1); ok {
+						if newSeason <= 0 {
+							newSeason = sNum
+						}
+						if newEpisode <= 0 {
+							newEpisode = eNum
+						}
+					}
+				}
+				if _, e = tx.Exec("UPDATE items SET name=?,overview=?,year=?,poster=?,season=?,episode=? WHERE id=?", newName, newOverview, newYear, newPoster, newSeason, newEpisode, x.ID); e != nil {
 					break
 				}
 			}
@@ -211,18 +238,35 @@ func (a *App) imagePath(i, kind string) string {
 	if e != nil {
 		return ""
 	}
+	// 1. Prioritize local physical disk files: Zero-network overhead, instant SSD local response!
+	dir := filepath.Dir(x.Path)
+	if x.Kind == "Series" || x.Kind == "Season" {
+		dir = x.Path
+	}
+	base := strings.TrimSuffix(x.Path, filepath.Ext(x.Path))
 	if x.Kind == "Episode" && (kind == "Primary" || kind == "Thumb") {
 		if p := episodeThumb(x); p != "" {
 			return p
 		}
-		if x.Poster != "" {
-			if p := safeImage(x.Poster); p != "" {
-				return p
+	}
+	names := map[string][]string{
+		"Primary":  {"poster", "folder", "cover"},
+		"Backdrop": {"backdrop", "fanart"},
+		"Thumb":    {"thumb", "landscape"},
+		"Logo":     {"logo", "clearlogo"},
+		"Banner":   {"banner"},
+	}[kind]
+	for _, n := range names {
+		for _, ext := range []string{".jpg", ".png", ".webp", ".jpeg"} {
+			for _, p := range []string{base + "-" + n + ext, filepath.Join(dir, n+ext)} {
+				if p = safeImage(p); p != "" {
+					return p
+				}
 			}
 		}
 	}
 	if kind == "Primary" {
-		if x.Kind == "Series" && x.Poster == "" {
+		if x.Kind == "Series" {
 			if p := safeImage(seriesFallbackPoster(x.Path)); p != "" {
 				return p
 			}
@@ -232,23 +276,12 @@ func (a *App) imagePath(i, kind string) string {
 				return p
 			}
 		}
+	}
+
+	// 2. Fallback to cached or database-persisted poster URL / sidecar metadata
+	if x.Poster != "" && (kind == "Primary" || (x.Kind == "Episode" && kind == "Thumb")) {
 		if p := safeImage(x.Poster); p != "" {
 			return p
-		}
-	}
-	dir := filepath.Dir(x.Path)
-	if x.Kind == "Series" || x.Kind == "Season" {
-		dir = x.Path
-	}
-	base := strings.TrimSuffix(x.Path, filepath.Ext(x.Path))
-	names := map[string][]string{"Primary": {"poster", "folder"}, "Backdrop": {"backdrop", "fanart"}, "Thumb": {"thumb", "landscape"}, "Logo": {"logo", "clearlogo"}, "Banner": {"banner"}}[kind]
-	for _, n := range names {
-		for _, ext := range []string{".jpg", ".png", ".webp", ".jpeg"} {
-			for _, p := range []string{base + "-" + n + ext, filepath.Join(dir, n+ext)} {
-				if p = safeImage(p); p != "" {
-					return p
-				}
-			}
 		}
 	}
 	meta := a.metadata(x)

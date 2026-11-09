@@ -245,9 +245,13 @@ func MapStandardEpisodePath(outputRoot, sourcePath, relPath string, preserveSour
 	if seriesIdx < 0 || seriesIdx >= len(parts)-1 {
 		return "", false, nil
 	}
-	seriesTitle, _ := tmdb.ParseTitleAndYear(parts[seriesIdx])
+	seriesTitle, seriesYear := tmdb.ParseTitleAndYear(parts[seriesIdx])
 	if seriesTitle == "" {
 		seriesTitle = parts[seriesIdx]
+	}
+	seriesDirName := parts[seriesIdx]
+	if seriesYear > 0 && !strings.Contains(seriesDirName, strconv.Itoa(seriesYear)) {
+		seriesDirName = fmt.Sprintf("%s (%d)", seriesTitle, seriesYear)
 	}
 	seasonHint := season
 	if !seasonDetected {
@@ -268,9 +272,52 @@ func MapStandardEpisodePath(outputRoot, sourcePath, relPath string, preserveSour
 	} else {
 		season = 1
 	}
-	prefix := append([]string(nil), parts[:seriesIdx+1]...)
+	prefix := append([]string(nil), parts[:seriesIdx]...)
+	prefix = append(prefix, seriesDirName)
 	prefix = append(prefix, fmt.Sprintf("Season %d", season))
 	prefix = append(prefix, fmt.Sprintf("%s - S%02dE%02d.strm", seriesTitle, season, episodeNum))
+	path := filepath.Join(append([]string{filepath.Clean(outputRoot)}, prefix...)...)
+	return path, true, nil
+}
+
+// MapStandardMoviePath maps movies into Emby/Plex standard standalone directory layout:
+//
+//	.../<MovieTitle> (<Year>)/<MovieTitle> (<Year>).strm
+func MapStandardMoviePath(outputRoot, sourcePath, relPath string, preserveSourceStructure bool, maxRunes int, tracker *CollisionTracker) (string, bool, error) {
+	chosen := sourcePath
+	if !preserveSourceStructure && strings.TrimSpace(relPath) != "" {
+		chosen = relPath
+	}
+	parts, err := sanitizeRelativeSegments(chosen)
+	if err != nil || len(parts) < 1 {
+		return "", false, err
+	}
+	isMovie := false
+	for _, part := range parts {
+		if part == "电影" || strings.EqualFold(part, "movies") || strings.EqualFold(part, "movie") {
+			isMovie = true
+			break
+		}
+	}
+	if !isMovie {
+		return "", false, nil
+	}
+	file := parts[len(parts)-1]
+	stem := StripMediaStem(file)
+	title, year := tmdb.ParseTitleAndYear(stem)
+	if title == "" {
+		title = stem
+	}
+	formattedName := title
+	if year > 0 && !strings.Contains(formattedName, strconv.Itoa(year)) {
+		formattedName = fmt.Sprintf("%s (%d)", title, year)
+	}
+	prefix := append([]string(nil), parts[:len(parts)-1]...)
+	// If the parent directory is not already the movie directory itself, introduce the standalone folder
+	if len(prefix) == 0 || (!strings.EqualFold(prefix[len(prefix)-1], formattedName) && !strings.EqualFold(prefix[len(prefix)-1], title)) {
+		prefix = append(prefix, formattedName)
+	}
+	prefix = append(prefix, formattedName+".strm")
 	path := filepath.Join(append([]string{filepath.Clean(outputRoot)}, prefix...)...)
 	return path, true, nil
 }

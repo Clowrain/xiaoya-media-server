@@ -140,6 +140,7 @@ export interface TmdbConfig {
   ProxyURL: string;
   RateLimitMs: number;
   AutoScrape: boolean;
+  SaveArtifactsToMediaDir?: boolean;
 }
 
 export interface TmdbSearchResult {

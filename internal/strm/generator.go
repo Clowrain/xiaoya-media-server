@@ -299,6 +299,12 @@ func (e *Engine) writeOwnedSTRM(ctx context.Context, root string, res discovery.
 			return "", err
 		}
 		if !standard {
+			base, standard, err = MapStandardMoviePath(root, res.SourcePath, res.RelPath, e.cfg.PreserveSourceStructure, e.cfg.MaxPathLength, e.tracker)
+			if err != nil {
+				return "", err
+			}
+		}
+		if !standard {
 			base, err = MapLocalSTRMPath(root, res.SourcePath, res.RelPath, e.cfg.PreserveSourceStructure, e.cfg.MaxPathLength, nil)
 		}
 		if err != nil {
@@ -345,11 +351,6 @@ func (e *Engine) writeOwnedSTRM(ctx context.Context, root string, res discovery.
 	}
 	if err != nil {
 		return "", err
-	}
-	if res.OriginType == discovery.OriginXiaoyaSQLite {
-		if err := writeStandardNFO(root, p, res); err != nil {
-			return "", err
-		}
 	}
 	if e.cfg.OnMediaMaterialized != nil {
 		e.cfg.OnMediaMaterialized(p)

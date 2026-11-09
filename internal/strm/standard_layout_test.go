@@ -43,8 +43,21 @@ func TestSQLiteEpisodeMaterializesStandardSTRMAndNFO(t *testing.T) {
 	if rs[0].LocalSTRMPath != want {
 		t.Fatalf("strm path=%q, want %q", rs[0].LocalSTRMPath, want)
 	}
-	nfo, err := os.ReadFile(strings.TrimSuffix(want, ".strm") + ".nfo")
-	if err != nil || !strings.Contains(string(nfo), "episodedetails") || !strings.Contains(string(nfo), "<episode>1</episode>") {
-		t.Fatalf("standard episode NFO missing: err=%v content=%s", err, nfo)
+	// Under the new zero-nfo pure STRM policy, companion placeholder NFO must NOT be created.
+	nfoPath := strings.TrimSuffix(want, ".strm") + ".nfo"
+	if _, err := os.Stat(nfoPath); !os.IsNotExist(err) {
+		t.Fatalf("expected companion NFO not to be created, but found %s", nfoPath)
+	}
+}
+
+func TestMovieStandardLayout(t *testing.T) {
+	root := t.TempDir()
+	path, ok, err := MapStandardMoviePath(root, "/每日更新/电影/华语电影/八仙！ (2026).mp4", "", true, 235, nil)
+	if err != nil || !ok {
+		t.Fatalf("MapStandardMoviePath failed: ok=%v, err=%v", ok, err)
+	}
+	want := filepath.Join(root, "每日更新", "电影", "华语电影", "八仙！ (2026)", "八仙！ (2026).strm")
+	if path != want {
+		t.Fatalf("got movie path=%q, want %q", path, want)
 	}
 }

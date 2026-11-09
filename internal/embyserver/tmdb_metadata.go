@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"encoding/xml"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -68,12 +71,13 @@ CREATE TABLE IF NOT EXISTS tmdb_item_matches(
 }
 
 type tmdbStoredSettings struct {
-	Enabled  bool   `json:"enabled"`
-	APIKey   string `json:"api_key"`
-	Language string `json:"language"`
-	BaseURL  string `json:"base_url"`
-	ImageURL string `json:"image_url"`
-	ProxyURL string `json:"proxy_url,omitempty"`
+	Enabled                 bool   `json:"enabled"`
+	APIKey                  string `json:"api_key"`
+	Language                string `json:"language"`
+	BaseURL                 string `json:"base_url"`
+	ImageURL                string `json:"image_url"`
+	ProxyURL                string `json:"proxy_url,omitempty"`
+	SaveArtifactsToMediaDir bool   `json:"save_artifacts_to_media_dir"`
 }
 
 func (a *App) currentTMDBSettings() tmdbStoredSettings {
@@ -121,6 +125,7 @@ func (a *App) currentTMDBSettings() tmdbStoredSettings {
 				if stored.ProxyURL != "" {
 					s.ProxyURL = stored.ProxyURL
 				}
+				s.SaveArtifactsToMediaDir = stored.SaveArtifactsToMediaDir
 			}
 		}
 	}
@@ -360,6 +365,12 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 			} else if cached, ok := a.cachedTMDBMeta(epKey); ok {
 				return tmdbMetaToSidecar(cached)
 			}
+		} else if x.Kind == "Episode" {
+			// Even under forceRefresh, if this season's episodes were populated during the
+			// current cascade or recently stored in cache, reuse it to avoid repeated HTTP calls per episode!
+			if cached, ok := a.cachedTMDBMeta(epKey); ok {
+				return tmdbMetaToSidecar(cached)
+			}
 		}
 		sMeta, eps, err := cli.GetTVSeason(ctx, tmdbID, seasonNum)
 		if err != nil {
@@ -376,7 +387,11 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 		}
 		if x.Kind == "Episode" {
 			if epMeta := eps[epNum]; epMeta != nil {
-				return tmdbMetaToSidecar(epMeta)
+				sc := tmdbMetaToSidecar(epMeta)
+				if sc.ThumbURL == "" && sc.PosterURL == "" && sMeta != nil && sMeta.PosterURL != "" {
+					sc.ThumbURL = sMeta.PosterURL
+				}
+				return sc
 			}
 		}
 	}
@@ -487,8 +502,134 @@ func (a *App) refreshSingleItemMetadata(itemID string, force bool) error {
 		if txErr = tx.Commit(); txErr != nil {
 			return txErr
 		}
+		a.maybePersistArtifactsToDisk(cur, n)
 	}
 	return nil
+}
+
+func downloadAndSaveImage(ctx context.Context, targetPath, rawURL string) error {
+	if strings.TrimSpace(rawURL) == "" || strings.TrimSpace(targetPath) == "" {
+		return nil
+	}
+	if st, err := os.Stat(targetPath); err == nil && st.Size() > 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("image status %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+	if err != nil || len(data) == 0 {
+		return err
+	}
+	return os.WriteFile(targetPath, data, 0644)
+}
+
+func (a *App) maybePersistArtifactsToDisk(cur Item, n sidecar) {
+	if !a.currentTMDBSettings().SaveArtifactsToMediaDir {
+		return
+	}
+	if strings.TrimSpace(cur.Path) == "" {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		switch cur.Kind {
+		case "Series":
+			seriesDir := cur.Path
+			if n.Title != "" || n.Plot != "" {
+				seriesPayload, err := xml.MarshalIndent(struct {
+					XMLName   xml.Name `xml:"tvshow"`
+					Title     string   `xml:"title,omitempty"`
+					Plot      string   `xml:"plot,omitempty"`
+					Premiered string   `xml:"premiered,omitempty"`
+					Year      int      `xml:"year,omitempty"`
+					Rating    float64  `xml:"rating,omitempty"`
+					TMDB      string   `xml:"tmdbid,omitempty"`
+				}{Title: n.Title, Plot: n.Plot, Premiered: n.Premiered, Year: n.Year, Rating: n.Rating, TMDB: n.TMDB}, "", "  ")
+				if err == nil {
+					_ = os.WriteFile(filepath.Join(seriesDir, "tvshow.nfo"), append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), seriesPayload...), 0644)
+				}
+			}
+			if n.PosterURL != "" {
+				_ = downloadAndSaveImage(ctx, filepath.Join(seriesDir, "poster.jpg"), n.PosterURL)
+			}
+			if n.BackdropURL != "" {
+				_ = downloadAndSaveImage(ctx, filepath.Join(seriesDir, "fanart.jpg"), n.BackdropURL)
+			}
+		case "Season":
+			seasonDir := cur.Path
+			payload, err := xml.MarshalIndent(struct {
+				XMLName xml.Name `xml:"season"`
+				Season  int      `xml:"seasonnumber"`
+			}{Season: cur.Season}, "", "  ")
+			if err == nil {
+				_ = os.WriteFile(filepath.Join(seasonDir, "season.nfo"), append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), payload...), 0644)
+			}
+			if n.PosterURL != "" {
+				_ = downloadAndSaveImage(ctx, filepath.Join(seasonDir, "poster.jpg"), n.PosterURL)
+			}
+		case "Episode":
+			base := strings.TrimSuffix(cur.Path, filepath.Ext(cur.Path))
+			if n.Title != "" || n.Plot != "" {
+				epPayload, err := xml.MarshalIndent(struct {
+					XMLName   xml.Name `xml:"episodedetails"`
+					Title     string   `xml:"title,omitempty"`
+					Plot      string   `xml:"plot,omitempty"`
+					Premiered string   `xml:"aired,omitempty"`
+					Season    int      `xml:"season"`
+					Episode   int      `xml:"episode"`
+					Rating    float64  `xml:"rating,omitempty"`
+				}{Title: n.Title, Plot: n.Plot, Premiered: n.Premiered, Season: cur.Season, Episode: cur.Episode, Rating: n.Rating}, "", "  ")
+				if err == nil {
+					_ = os.WriteFile(base+".nfo", append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), epPayload...), 0644)
+				}
+			}
+			thumbURL := n.ThumbURL
+			if thumbURL == "" {
+				thumbURL = n.PosterURL
+			}
+			if thumbURL != "" {
+				_ = downloadAndSaveImage(ctx, base+"-thumb.jpg", thumbURL)
+			}
+		case "Movie":
+			base := strings.TrimSuffix(cur.Path, filepath.Ext(cur.Path))
+			movieDir := filepath.Dir(cur.Path)
+			if n.Title != "" || n.Plot != "" {
+				moviePayload, err := xml.MarshalIndent(struct {
+					XMLName   xml.Name `xml:"movie"`
+					Title     string   `xml:"title,omitempty"`
+					Plot      string   `xml:"plot,omitempty"`
+					Premiered string   `xml:"premiered,omitempty"`
+					Year      int      `xml:"year,omitempty"`
+					Rating    float64  `xml:"rating,omitempty"`
+					TMDB      string   `xml:"tmdbid,omitempty"`
+				}{Title: n.Title, Plot: n.Plot, Premiered: n.Premiered, Year: n.Year, Rating: n.Rating, TMDB: n.TMDB}, "", "  ")
+				if err == nil {
+					_ = os.WriteFile(base+".nfo", append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), moviePayload...), 0644)
+					_ = os.WriteFile(filepath.Join(movieDir, "movie.nfo"), append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), moviePayload...), 0644)
+				}
+			}
+			if n.PosterURL != "" {
+				_ = downloadAndSaveImage(ctx, filepath.Join(movieDir, "poster.jpg"), n.PosterURL)
+			}
+			if n.BackdropURL != "" {
+				_ = downloadAndSaveImage(ctx, filepath.Join(movieDir, "fanart.jpg"), n.BackdropURL)
+			}
+		}
+	}()
 }
 
 // Admin TMDB endpoints: /admin/tmdb, /admin/tmdb/test, /admin/tmdb/search, /admin/tmdb/match
@@ -504,14 +645,15 @@ func (a *App) adminTMDB(w http.ResponseWriter, r *http.Request, path string) {
 				masked = "••••••"
 			}
 			respond(w, M{
-				"Enabled":    s.Enabled,
-				"Configured": s.APIKey != "",
-				"MaskedKey":  masked,
-				"Language":   s.Language,
-				"BaseURL":    s.BaseURL,
-				"ImageURL":   s.ImageURL,
-				"ProxyURL":   s.ProxyURL,
-				"NFOPolicy":  "prefer",
+				"Enabled":                 s.Enabled,
+				"Configured":              s.APIKey != "",
+				"MaskedKey":               masked,
+				"Language":                s.Language,
+				"BaseURL":                 s.BaseURL,
+				"ImageURL":                s.ImageURL,
+				"ProxyURL":                s.ProxyURL,
+				"NFOPolicy":               "prefer",
+				"SaveArtifactsToMediaDir": s.SaveArtifactsToMediaDir,
 			})
 			return
 		}
@@ -521,18 +663,22 @@ func (a *App) adminTMDB(w http.ResponseWriter, r *http.Request, path string) {
 		}
 		cur := a.currentTMDBSettings()
 		var req struct {
-			Enabled  *bool   `json:"Enabled"`
-			APIKey   *string `json:"APIKey"`
-			Language *string `json:"Language"`
-			BaseURL  *string `json:"BaseURL"`
-			ImageURL *string `json:"ImageURL"`
-			ProxyURL *string `json:"ProxyURL"`
+			Enabled                 *bool   `json:"Enabled"`
+			APIKey                  *string `json:"APIKey"`
+			Language                *string `json:"Language"`
+			BaseURL                 *string `json:"BaseURL"`
+			ImageURL                *string `json:"ImageURL"`
+			ProxyURL                *string `json:"ProxyURL"`
+			SaveArtifactsToMediaDir *bool   `json:"SaveArtifactsToMediaDir"`
 		}
 		if !body(w, r, &req) {
 			return
 		}
 		if req.Enabled != nil {
 			cur.Enabled = *req.Enabled
+		}
+		if req.SaveArtifactsToMediaDir != nil {
+			cur.SaveArtifactsToMediaDir = *req.SaveArtifactsToMediaDir
 		}
 		if req.APIKey != nil && strings.TrimSpace(*req.APIKey) != "" {
 			cur.APIKey = strings.TrimSpace(*req.APIKey)
