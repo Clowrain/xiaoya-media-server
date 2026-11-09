@@ -100,3 +100,32 @@ func TestThirdPartyUserConfigurationShape(t *testing.T) {
 		}
 	}
 }
+
+func TestServerDomainsExtensionEndpoint(t *testing.T) {
+	a := &App{}
+	for _, p := range []string{"/emby/System/Ext/ServerDomains", "/System/Ext/ServerDomains", "/emby/system/ext/serverdomains"} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", p, nil)
+		r.Host = "192.168.1.100:8096"
+		a.serve(w, r)
+		if w.Code != 200 {
+			t.Fatalf("path %s returned %d: %s", p, w.Code, w.Body.String())
+		}
+		var resp struct {
+			Ok   bool `json:"ok"`
+			Data []struct {
+				Name string `json:"name"`
+				URL  string `json:"url"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if !resp.Ok || len(resp.Data) == 0 {
+			t.Fatalf("expected ok=true and non-empty lines, got %+v", resp)
+		}
+		if resp.Data[0].URL != "http://192.168.1.100:8096" {
+			t.Fatalf("unexpected line url: %s", resp.Data[0].URL)
+		}
+	}
+}

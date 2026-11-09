@@ -444,6 +444,27 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		respond(w, a.serverInfo())
 		return
 	}
+	// Third-party client multi-domain extension endpoint (SenPlayer, VidHub, AfuseKt, etc.)
+	if l == "/system/ext/serverdomains" {
+		scheme := "http"
+		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			scheme = "https"
+		}
+		host := r.Host
+		if host == "" {
+			host = "127.0.0.1:8096"
+		}
+		respond(w, M{
+			"ok": true,
+			"data": []M{
+				{
+					"name": "当前线路 (直连)",
+					"url":  fmt.Sprintf("%s://%s", scheme, host),
+				},
+			},
+		})
+		return
+	}
 	// Emby web hits Branding on the login screen, before any token exists.
 	if l == "/branding/configuration" {
 		respond(w, M{"LoginDisclaimer": "", "CustomCss": "", "SplashscreenEnabled": false})
