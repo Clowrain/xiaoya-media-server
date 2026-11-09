@@ -1,0 +1,131 @@
+package embyserver
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
+func TestHandleUnifiedLogsCompatAndFiltering(t *testing.T) {
+	a := &App{}
+
+	// Clean logger for reproducible test
+	sysLogger.clear()
+
+	// Add test entries
+	sysLogger.add(&LogEntry{
+		ID:         "log-1",
+		Time:       time.Now(),
+		Level:      "INFO",
+		Category:   "http",
+		Method:     "GET",
+		Path:       "/emby/System/Info",
+		Status:     200,
+		DurationMs: 1.5,
+		Client:     "SenPlayer/2.1",
+		IP:         "192.168.1.100",
+		Message:    "系统信息查询",
+	})
+
+	sysLogger.add(&LogEntry{
+		ID:         "log-2",
+		Time:       time.Now(),
+		Level:      "302",
+		Category:   "playback",
+		Method:     "GET",
+		Path:       "/emby/Videos/123/stream.mp4",
+		Status:     302,
+		DurationMs: 12.3,
+		Client:     "Infuse/7.6",
+		IP:         "192.168.1.101",
+		Target:     "https://aliyun.example.com/play/123.mp4",
+		Message:    "播放 302 重定向成功",
+	})
+
+	sysLogger.add(&LogEntry{
+		ID:         "log-3",
+		Time:       time.Now(),
+		Level:      "ERROR",
+		Category:   "sync",
+		Title:      "小雅增量同步",
+		Message:    "清单同步超时",
+		Error:      "context deadline exceeded",
+	})
+
+	// 1. Test GET /admin/logs with default params
+	{
+		r := httptest.NewRequest(http.MethodGet, "/admin/logs", nil)
+		w := httptest.NewRecorder()
+		a.handleUnifiedLogs(w, r)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+
+		var resp map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to parse json: %v", err)
+		}
+
+		logs, ok := resp["logs"].([]interface{})
+		if !ok || len(logs) != 3 {
+			t.Fatalf("expected 3 logs in 'logs' key, got %#v", resp["logs"])
+		}
+
+		items, ok := resp["Items"].([]interface{})
+		if !ok || len(items) != 3 {
+			t.Fatalf("expected 3 logs in 'Items' key, got %#v", resp["Items"])
+		}
+
+		// Verify first item is latest (log-3)
+		first := logs[0].(map[string]interface{})
+		if first["level"] != "ERROR" || first["msg"] == "" || first["source"] == "" {
+			t.Fatalf("expected populated msg and source, got %#v", first)
+		}
+	}
+
+	// 2. Test filter by level=ERROR
+	{
+		r := httptest.NewRequest(http.MethodGet, "/admin/logs?level=ERROR", nil)
+		w := httptest.NewRecorder()
+		a.handleUnifiedLogs(w, r)
+
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		logs := resp["logs"].([]interface{})
+		if len(logs) != 1 {
+			t.Fatalf("expected 1 error log, got %d", len(logs))
+		}
+	}
+
+	// 3. Test filter by source=playback
+	{
+		r := httptest.NewRequest(http.MethodGet, "/admin/logs?source=playback", nil)
+		w := httptest.NewRecorder()
+		a.handleUnifiedLogs(w, r)
+
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		logs := resp["logs"].([]interface{})
+		if len(logs) != 1 {
+			t.Fatalf("expected 1 playback log, got %d", len(logs))
+		}
+	}
+
+	// 4. Test DELETE /admin/logs
+	{
+		r := httptest.NewRequest(http.MethodDelete, "/admin/logs", nil)
+		w := httptest.NewRecorder()
+		a.handleUnifiedLogs(w, r)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 on delete, got %d", w.Code)
+		}
+
+		if sysLogger.count() != 0 {
+			t.Fatalf("expected logger empty after clear, got %d", sysLogger.count())
+		}
+	}
+}

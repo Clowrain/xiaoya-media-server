@@ -17,6 +17,7 @@ type LogEntry struct {
 	Time       time.Time `json:"time"`
 	Level      string    `json:"level"`       // "INFO", "WARN", "ERROR", "302"
 	Category   string    `json:"category"`    // "playback", "redirect", "http", "scan", "sync", "tmdb", "error"
+	Source     string    `json:"source,omitempty"` // Alias for Category (frontend compat)
 	Title      string    `json:"title"`       // e.g. "播放重定向 302", "客户端请求", "小雅增量同步"
 	Method     string    `json:"method"`      // GET, POST, PUT, DELETE...
 	Path       string    `json:"path"`        // /emby/Videos/...
@@ -26,6 +27,7 @@ type LogEntry struct {
 	IP         string    `json:"ip"`          // Client IP
 	Target     string    `json:"target,omitempty"` // 302 Location or upstream target
 	Message    string    `json:"message"`     // Human-readable summary
+	Msg        string    `json:"msg,omitempty"`    // Alias for Message (frontend compat)
 	Detail     string    `json:"detail,omitempty"`  // Extra metadata or upstream response
 	Error      string    `json:"error,omitempty"`   // Error description if any
 }
@@ -44,6 +46,18 @@ var sysLogger = &systemLogRing{
 func (r *systemLogRing) add(e *LogEntry) {
 	if e == nil {
 		return
+	}
+	if e.Source == "" {
+		e.Source = e.Category
+	}
+	if e.Msg == "" {
+		if e.Message != "" {
+			e.Msg = e.Message
+		} else if e.Title != "" {
+			e.Msg = e.Title
+		} else if e.Path != "" {
+			e.Msg = fmt.Sprintf("%s %s (%d)", e.Method, e.Path, e.Status)
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -65,19 +79,25 @@ func (r *systemLogRing) count() int {
 	return len(r.entries)
 }
 
-func (r *systemLogRing) snapshot(category, keyword string, limit int) []*LogEntry {
+func (r *systemLogRing) snapshot(category, level, keyword string, limit int) []*LogEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if limit <= 0 || limit > 1000 {
 		limit = 300
 	}
 	cat := strings.ToLower(strings.TrimSpace(category))
+	lvl := strings.ToUpper(strings.TrimSpace(level))
 	kw := strings.ToLower(strings.TrimSpace(keyword))
 
 	result := make([]*LogEntry, 0, limit)
 	// Iterate in reverse (latest logs first)
 	for i := len(r.entries) - 1; i >= 0 && len(result) < limit; i-- {
 		e := r.entries[i]
+		if lvl != "" && lvl != "ALL" {
+			if !strings.EqualFold(e.Level, lvl) {
+				continue
+			}
+		}
 		if cat != "" && cat != "all" {
 			if cat == "error" {
 				if e.Level != "ERROR" && e.Status < 400 && e.Error == "" {
@@ -85,6 +105,14 @@ func (r *systemLogRing) snapshot(category, keyword string, limit int) []*LogEntr
 				}
 			} else if cat == "playback" || cat == "redirect" {
 				if e.Category != "playback" && e.Category != "redirect" && e.Level != "302" {
+					continue
+				}
+			} else if cat == "emby" {
+				if e.Category != "http" && e.Category != "playback" && e.Category != "redirect" {
+					continue
+				}
+			} else if cat == "scanner" || cat == "scan" {
+				if e.Category != "scan" {
 					continue
 				}
 			} else if !strings.EqualFold(e.Category, cat) {
@@ -218,8 +246,12 @@ func (a *App) handleUnifiedLogs(w http.ResponseWriter, r *http.Request) {
 
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 	if category == "" {
+		category = strings.TrimSpace(r.URL.Query().Get("source"))
+	}
+	if category == "" {
 		category = "all"
 	}
+	level := strings.TrimSpace(r.URL.Query().Get("level"))
 	keyword := strings.TrimSpace(r.URL.Query().Get("q"))
 	limit := 300
 	if lStr := r.URL.Query().Get("limit"); lStr != "" {
@@ -228,7 +260,7 @@ func (a *App) handleUnifiedLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	items := sysLogger.snapshot(category, keyword, limit)
+	items := sysLogger.snapshot(category, level, keyword, limit)
 
 	// Collect online sessions for header stats
 	onlineCount := 0
@@ -265,6 +297,7 @@ func (a *App) handleUnifiedLogs(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Cache-Control", "no-store")
 	respond(w, M{
+		"logs":            items,
 		"Items":           items,
 		"Entries":         legacyEntries,
 		"Total":           sysLogger.count(),

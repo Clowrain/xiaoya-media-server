@@ -358,13 +358,20 @@ export async function confirmRecognition(resourceID: string, externalID: number 
 }
 
 // Logs API
-export async function fetchLogs(limit: number = 200, level?: string, source?: string, q?: string): Promise<{ logs: (string | LogEntry)[] }> {
+export async function fetchLogs(limit: number = 200, level?: string, source?: string, q?: string): Promise<{ logs: (string | LogEntry)[]; total?: number }> {
   const params: Record<string, string> = { limit: String(limit) };
   if (level) params.level = level;
-  if (source) params.source = source;
+  if (source) {
+    params.source = source;
+    params.category = source;
+  }
   if (q) params.q = q;
   const data = await request(`/admin/logs?${new URLSearchParams(params)}`);
-  return data;
+  const rawList = data?.logs || data?.Items || data?.Entries || (Array.isArray(data) ? data : []);
+  return {
+    ...data,
+    logs: rawList,
+  };
 }
 
 export async function clearLogs(): Promise<void> {

@@ -252,51 +252,99 @@ export const LogDrawer: React.FC<LogDrawerProps> = ({ isOpen, onClose }) => {
                 );
               }
 
-              const lvl = (item.level || 'INFO').toUpperCase();
-              const isErr = lvl === 'ERROR';
-              const isWarn = lvl === 'WARN';
-              const isDebug = lvl === 'DEBUG';
+              const rawLvl = (item.level || 'INFO').toUpperCase();
+              const isErr = rawLvl === 'ERROR';
+              const isWarn = rawLvl === 'WARN';
+              const isDebug = rawLvl === 'DEBUG';
+              const is302 = rawLvl === '302' || item.status === 302;
+              const formattedTime = item.time
+                ? typeof item.time === 'string'
+                  ? item.time.replace('T', ' ').slice(0, 19)
+                  : String(item.time)
+                : '—';
 
               return (
                 <div
                   key={idx}
-                  className={`p-2 rounded-lg border transition flex flex-col gap-1 ${
+                  className={`p-2.5 rounded-lg border transition flex flex-col gap-1.5 ${
                     isErr
                       ? 'bg-rose-950/20 border-rose-900/40 text-rose-200'
                       : isWarn
                       ? 'bg-amber-950/20 border-amber-900/40 text-amber-200'
                       : isDebug
                       ? 'bg-zinc-900/40 border-zinc-800/40 text-zinc-400'
+                      : is302
+                      ? 'bg-sky-950/20 border-sky-900/40 text-sky-200'
                       : 'bg-zinc-900/60 border-zinc-800/80 text-zinc-200'
                   }`}
                 >
-                  <div className="flex items-center gap-2 text-[11px] text-zinc-500">
-                    <span className="text-zinc-400">{item.time || '—'}</span>
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500 font-mono">
+                    <span className="text-zinc-400">{formattedTime}</span>
                     <span
-                      className={`px-1.5 py-0.2 rounded font-bold text-[10px] ${
+                      className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${
                         isErr
                           ? 'bg-rose-900/60 text-rose-300'
                           : isWarn
                           ? 'bg-amber-900/60 text-amber-300'
                           : isDebug
                           ? 'bg-zinc-800 text-zinc-400'
+                          : is302
+                          ? 'bg-sky-950 text-sky-400 border border-sky-500/30'
                           : 'bg-emerald-950 text-emerald-400 border border-emerald-500/20'
                       }`}
                     >
-                      {lvl}
+                      {rawLvl}
                     </span>
-                    {item.source && (
-                      <span className="px-1.5 py-0.2 rounded bg-zinc-800 text-sky-400 text-[10px]">
-                        [{item.source}]
+                    {(item.source || item.category) && (
+                      <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-sky-400 text-[10px]">
+                        [{item.source || item.category}]
+                      </span>
+                    )}
+                    {item.status !== undefined && item.status > 0 && (
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          item.status >= 400
+                            ? 'bg-rose-900/50 text-rose-300'
+                            : item.status === 302
+                            ? 'bg-sky-900/50 text-sky-300'
+                            : 'bg-emerald-900/50 text-emerald-300'
+                        }`}
+                      >
+                        HTTP {item.status}
+                      </span>
+                    )}
+                    {item.duration_ms !== undefined && (
+                      <span className="text-zinc-500 text-[10px]">
+                        {typeof item.duration_ms === 'number' ? `${item.duration_ms.toFixed(1)}ms` : `${item.duration_ms}ms`}
+                      </span>
+                    )}
+                    {item.ip && (
+                      <span className="text-zinc-500 text-[10px]">
+                        IP: {item.ip}
+                      </span>
+                    )}
+                    {item.client && (
+                      <span className="text-zinc-500 text-[10px] truncate max-w-[140px]" title={item.client}>
+                        {item.client}
                       </span>
                     )}
                     {item.trace_id && (
                       <span className="text-zinc-600 text-[10px]">trace:{item.trace_id.slice(0, 8)}</span>
                     )}
                   </div>
-                  <div className="text-xs break-all font-sans whitespace-pre-wrap">
-                    {item.msg}
+                  <div className="text-xs break-all font-sans whitespace-pre-wrap leading-relaxed">
+                    {item.msg || item.message || item.title || (item.path ? `${item.method || 'GET'} ${item.path}` : '—')}
                   </div>
+                  {item.target && (
+                    <div className="text-[11px] text-sky-400 font-mono break-all bg-sky-950/40 px-2 py-1 rounded border border-sky-800/30">
+                      ↳ 302 重定向至: {item.target}
+                    </div>
+                  )}
+                  {item.error && item.error !== (item.msg || item.message) && (
+                    <div className="text-[11px] text-rose-400 font-mono break-all bg-rose-950/40 px-2 py-1 rounded border border-rose-800/30">
+                      错误详情: {item.error}
+                    </div>
+                  )}
                 </div>
               );
             })
