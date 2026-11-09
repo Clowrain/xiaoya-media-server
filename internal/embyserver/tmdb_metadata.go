@@ -733,7 +733,11 @@ func (a *App) downloadAndSaveImage(ctx context.Context, targetPath, rawURL strin
 	if err != nil || len(data) == 0 {
 		return err
 	}
-	return os.WriteFile(targetPath, data, 0644)
+	if wErr := os.WriteFile(targetPath, data, 0644); wErr != nil {
+		RecordGlobalLog("WARN", "tmdb", fmt.Sprintf("写入海报文件失败: %s", targetPath), wErr.Error(), "", "")
+		return wErr
+	}
+	return nil
 }
 
 func (a *App) maybePersistArtifactsToDisk(cur Item, n sidecar) {
@@ -760,7 +764,9 @@ func (a *App) maybePersistArtifactsToDisk(cur Item, n sidecar) {
 					TMDB      string   `xml:"tmdbid,omitempty"`
 				}{Title: n.Title, Plot: n.Plot, Premiered: n.Premiered, Year: n.Year, Rating: n.Rating, TMDB: n.TMDB}, "", "  ")
 				if err == nil {
-					_ = os.WriteFile(filepath.Join(seriesDir, "tvshow.nfo"), append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), seriesPayload...), 0644)
+					if wErr := os.WriteFile(filepath.Join(seriesDir, "tvshow.nfo"), append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), seriesPayload...), 0644); wErr != nil {
+						RecordGlobalLog("WARN", "tmdb", fmt.Sprintf("写入 tvshow.nfo 失败: %s", seriesDir), wErr.Error(), "", "")
+					}
 				}
 			}
 			if n.PosterURL != "" {
@@ -776,7 +782,9 @@ func (a *App) maybePersistArtifactsToDisk(cur Item, n sidecar) {
 				Season  int      `xml:"seasonnumber"`
 			}{Season: cur.Season}, "", "  ")
 			if err == nil {
-				_ = os.WriteFile(filepath.Join(seasonDir, "season.nfo"), append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), payload...), 0644)
+				if wErr := os.WriteFile(filepath.Join(seasonDir, "season.nfo"), append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), payload...), 0644); wErr != nil {
+					RecordGlobalLog("WARN", "tmdb", fmt.Sprintf("写入 season.nfo 失败: %s", seasonDir), wErr.Error(), "", "")
+				}
 			}
 			if n.PosterURL != "" {
 				_ = a.downloadAndSaveImage(ctx, filepath.Join(seasonDir, "poster.jpg"), n.PosterURL)
@@ -794,7 +802,9 @@ func (a *App) maybePersistArtifactsToDisk(cur Item, n sidecar) {
 					Rating    float64  `xml:"rating,omitempty"`
 				}{Title: n.Title, Plot: n.Plot, Premiered: n.Premiered, Season: cur.Season, Episode: cur.Episode, Rating: n.Rating}, "", "  ")
 				if err == nil {
-					_ = os.WriteFile(base+".nfo", append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), epPayload...), 0644)
+					if wErr := os.WriteFile(base+".nfo", append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), epPayload...), 0644); wErr != nil {
+						RecordGlobalLog("WARN", "tmdb", fmt.Sprintf("写入 %s.nfo 失败", filepath.Base(base)), wErr.Error(), "", "")
+					}
 				}
 			}
 			thumbURL := n.ThumbURL
@@ -819,7 +829,9 @@ func (a *App) maybePersistArtifactsToDisk(cur Item, n sidecar) {
 				}{Title: n.Title, Plot: n.Plot, Premiered: n.Premiered, Year: n.Year, Rating: n.Rating, TMDB: n.TMDB}, "", "  ")
 				if err == nil {
 					_ = os.WriteFile(base+".nfo", append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), moviePayload...), 0644)
-					_ = os.WriteFile(filepath.Join(movieDir, "movie.nfo"), append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), moviePayload...), 0644)
+					if wErr := os.WriteFile(filepath.Join(movieDir, "movie.nfo"), append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), moviePayload...), 0644); wErr != nil {
+						RecordGlobalLog("WARN", "tmdb", fmt.Sprintf("写入 movie.nfo 失败: %s", movieDir), wErr.Error(), "", "")
+					}
 				}
 			}
 			if n.PosterURL != "" {
