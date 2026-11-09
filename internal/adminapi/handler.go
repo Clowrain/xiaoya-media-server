@@ -333,19 +333,41 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 		}
 		run := func(ctx context.Context) (string, any, error) {
 			track := req.TrackUpdates
-			// 1. 若显式指定从 AList 实时网盘目录入库
-			if strings.EqualFold(req.Source, "alist") && h.importer != nil {
-				sum, err := h.importer.Import(ctx, req)
-				if track && h.pipeline != nil && h.pipeline.Discovery() != nil {
-					_, _ = h.pipeline.Discovery().RegisterMonitorRoots(ctx, []string{req.Path}, 10*time.Minute)
-				}
-				if err != nil || sum.FailedFiles > 0 {
-					if sum.ImportedFiles > 0 {
-						return "PARTIAL", sum, err
+			// 1. 若显式指定从 AList 实时网盘目录入库：
+			// 优先从 strm.txt 权威清单匹配，使 STRM 物理路径、TMDB 标签及实体 ID 与夜间后台定时同步完全一致。
+			// 若清单未命中或未收录，再回退到 AList 实时目录遍历获取。
+			if strings.EqualFold(req.Source, "alist") {
+				if h.pipeline != nil && h.pipeline.Manifest() != nil && h.pipeline.Manifest().Available() {
+					batch, err := h.pipeline.ImportManifestPath(ctx, req.Path, req.LibraryID, req.OutputDir, &track)
+					if err == nil && batch.TotalSeen > 0 {
+						if track && h.pipeline.Discovery() != nil {
+							_, _ = h.pipeline.Discovery().RegisterMonitorRoots(ctx, []string{req.Path}, 10*time.Minute)
+						}
+						sum := alist.ImportSummary{
+							SourcePath: req.Path, BatchID: batch.ID, ImportedFiles: int(batch.TotalSeen),
+							FailedFiles: int(batch.FailedCount), TrackingEnabled: track,
+							GeneratedSTRMs: append([]string(nil), batch.MaterializedSTRMs...),
+						}
+						if sum.FailedFiles > 0 {
+							return "PARTIAL", sum, nil
+						}
+						return "SUCCESS", sum, nil
 					}
-					return "FAILED", sum, err
 				}
-				return "SUCCESS", sum, nil
+
+				if h.importer != nil {
+					sum, err := h.importer.Import(ctx, req)
+					if track && h.pipeline != nil && h.pipeline.Discovery() != nil {
+						_, _ = h.pipeline.Discovery().RegisterMonitorRoots(ctx, []string{req.Path}, 10*time.Minute)
+					}
+					if err != nil || sum.FailedFiles > 0 {
+						if sum.ImportedFiles > 0 {
+							return "PARTIAL", sum, err
+						}
+						return "FAILED", sum, err
+					}
+					return "SUCCESS", sum, nil
+				}
 			}
 
 			// 2. 默认走官方权威清单 strm.txt 流式毫秒级匹配入库（彻底替代 SQLite）

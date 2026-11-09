@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,5 +201,89 @@ func TestBackgroundSyncPersistsFailureAndInterruptsStaleJobs(t *testing.T) {
 	var result syncResult
 	if j.Status != "FAILED" || json.Unmarshal(j.Result, &result) != nil || len(result.Errors) != 1 || len(result.Batches) != 1 || result.Batches[0].Status != discovery.BatchFailed {
 		t.Fatalf("background failure hidden: %+v %s", j, j.Result)
+	}
+}
+
+func TestAListImportMatchesManifestWhenAvailable(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	bizDB, err := sql.Open("sqlite", filepath.Join(tmp, "biz.db"))
+	if err != nil {
+		t.Fatalf("open biz db: %v", err)
+	}
+	defer bizDB.Close()
+
+	store := discovery.NewSQLStore(bizDB, "sqlite")
+	if err := store.EnsureSchema(ctx); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	strmTxtPath := filepath.Join(tmp, "strm.txt")
+	manifestLine := "每日更新/电视剧/国产剧/走马上任 (2026)/{tmdb-275297}/Season 1/走马上任.2026.S01E01.strm#http://xiaoya.host:5678/d/每日更新/电视剧/国产剧/走马上任/01.mp4?sign=SIGN\n"
+	if err := os.WriteFile(strmTxtPath, []byte(manifestLine), 0644); err != nil {
+		t.Fatalf("write strm.txt: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.Xiaoya.StrmTextPath = strmTxtPath
+	cfg.STRM.OutputRoot = filepath.Join(tmp, "strm-out")
+
+	pipe, err := integration.NewPipeline(ctx, cfg, nil, store)
+	if err != nil {
+		t.Fatalf("NewPipeline: %v", err)
+	}
+	defer pipe.Close()
+
+	h := NewHandler(cfg, store, pipe, nil, nil)
+	adminUser := embyserver.User{ID: "admin", Admin: true}
+
+	// 模拟前端 AList 页面发起入库（req.Source = "alist"，请求路径为 AList 原始路径 "/每日更新/电视剧/国产剧/走马上任"）
+	importBody := alist.ImportRequest{
+		Path:         "/每日更新/电视剧/国产剧/走马上任",
+		Source:       "alist",
+		TrackUpdates: true,
+	}
+	b, _ := json.Marshal(importBody)
+	req := httptest.NewRequest(http.MethodPost, "/api/resources/import", bytes.NewReader(b))
+	rec := httptest.NewRecorder()
+
+	if !h.ServeExtension(rec, req, adminUser) {
+		t.Fatalf("POST /api/resources/import not handled")
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var sum alist.ImportSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &sum); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if len(sum.GeneratedSTRMs) != 1 {
+		t.Fatalf("expected 1 generated STRM file from strm.txt match, got %d (%+v)", len(sum.GeneratedSTRMs), sum.GeneratedSTRMs)
+	}
+
+	strmFile := sum.GeneratedSTRMs[0]
+	if !strings.Contains(strmFile, "走马上任 (2026)") || !strings.Contains(strmFile, "Season 1") {
+		t.Fatalf("expected standard year/season path, got: %s", strmFile)
+	}
+	// 验证生成的 STRM 文件路径是否包含了标准 TMDB/年份格式，而非原 AList 的扁平无年份路径
+	if !filepath.IsAbs(strmFile) {
+		strmFile = filepath.Join(cfg.STRM.OutputRoot, strmFile)
+	}
+	content, err := os.ReadFile(strmFile)
+	if err != nil {
+		t.Fatalf("read generated STRM (%s): %v", strmFile, err)
+	}
+	if len(content) == 0 {
+		t.Fatalf("generated STRM file is empty")
+	}
+
+	// 验证监控目录已成功注册
+	roots, err := store.ListMonitorRoots(ctx)
+	if err != nil || len(roots) == 0 {
+		t.Fatalf("expected registered monitor root, got: %+v (err: %v)", roots, err)
 	}
 }
