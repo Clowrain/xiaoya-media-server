@@ -146,6 +146,9 @@ func (a *App) indexMetadataGeneration(lib, generation string, jobs ...string) er
 	}
 }
 func safeImage(p string) string {
+	if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+		return p
+	}
 	real, e := filepath.EvalSymlinks(p)
 	if e != nil || !allowedMediaPath(real) {
 		return ""
@@ -211,6 +214,11 @@ func (a *App) imagePath(i, kind string) string {
 	if x.Kind == "Episode" && (kind == "Primary" || kind == "Thumb") {
 		if p := episodeThumb(x); p != "" {
 			return p
+		}
+		if x.Poster != "" {
+			if p := safeImage(x.Poster); p != "" {
+				return p
+			}
 		}
 	}
 	if kind == "Primary" {
@@ -432,22 +440,26 @@ func (a *App) serveImage(w http.ResponseWriter, r *http.Request, i string) {
 		http.ServeContent(w, r, "cover", time.Time{}, bytes.NewReader(b))
 		return
 	}
-	if strings.HasPrefix(path, "https://image.tmdb.org/") {
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 		req, e := http.NewRequestWithContext(r.Context(), "GET", path, nil)
 		if e != nil {
 			fail(w, 502, "图片地址无效")
 			return
 		}
-		res, e := posterHTTP.Do(req)
+		cli := posterHTTP
+		if tmdbCli := a.TMDBClient(); tmdbCli != nil && tmdbCli.HTTPClient() != nil {
+			cli = tmdbCli.HTTPClient()
+		}
+		res, e := cli.Do(req)
 		if e != nil {
 			a.markActorImageFailure(i, path)
-			fail(w, 502, "演员图片暂不可用")
+			fail(w, 502, "图片暂不可用")
 			return
 		}
 		defer res.Body.Close()
 		if res.StatusCode != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "image/") {
 			a.markActorImageFailure(i, path)
-			fail(w, 502, "演员图片暂不可用")
+			fail(w, 502, "图片暂不可用")
 			return
 		}
 		b, e := io.ReadAll(io.LimitReader(res.Body, 5<<20+1))

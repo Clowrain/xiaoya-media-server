@@ -264,8 +264,16 @@ func (a *App) listDTO(x Item, r *http.Request, u User) M {
 	}
 	if x.Kind == "Episode" {
 		m["PrimaryImageAspectRatio"] = 16.0 / 9
-		if path := episodeThumb(x); path != "" {
-			m["ImageTags"].(M)["Thumb"] = a.imageTag(x.ID, "Thumb", path)
+		thumbPath := episodeThumb(x)
+		if thumbPath == "" && x.Poster != "" {
+			thumbPath = x.Poster
+		}
+		if thumbPath != "" {
+			if _, ok := m["ImageTags"].(M); !ok {
+				m["ImageTags"] = M{}
+			}
+			m["ImageTags"].(M)["Thumb"] = a.imageTag(x.ID, "Thumb", thumbPath)
+			m["ImageTags"].(M)["Primary"] = a.imageTag(x.ID, "Primary", thumbPath)
 		}
 	}
 	if u.API {

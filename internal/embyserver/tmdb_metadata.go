@@ -258,7 +258,8 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 	if n.TMDB == "" && extractedID != "" {
 		n.TMDB = extractedID
 	}
-	if hasLocalNFO {
+	// Only skip scraping if local NFO is present, has actual content (Plot), and force refresh was not requested.
+	if hasLocalNFO && !forceRefresh && strings.TrimSpace(n.Plot) != "" {
 		return n
 	}
 
@@ -316,7 +317,8 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 				return tmdbMetaToSidecar(cached)
 			}
 		}
-		if meta, err := cli.GetTV(ctx, tmdbID); err == nil && meta != nil {
+		meta, err := cli.GetTV(ctx, tmdbID)
+		if err == nil && meta != nil {
 			a.storeTMDBMeta(key, tmdbID, "Series", meta)
 			return tmdbMetaToSidecar(meta)
 		}
@@ -324,14 +326,31 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 	case "Season", "Episode":
 		tmdbID := n.TMDB
 		if tmdbID == "" {
+			tmdbID = a.findItemTMDBID(x)
+		}
+		if tmdbID == "" {
 			return n
 		}
 		seasonNum := x.Season
 		if seasonNum <= 0 {
 			seasonNum = 1
 		}
+		epNum := x.Episode
+		if epNum <= 0 && x.Kind == "Episode" {
+			if sNum, eNum, ok := tmdb.ParseSeasonEpisode(x.Name, seasonNum); ok {
+				if sNum > 0 {
+					seasonNum = sNum
+				}
+				epNum = eNum
+			} else if sNum, eNum, ok := tmdb.ParseSeasonEpisode(filepath.Base(x.Path), seasonNum); ok {
+				if sNum > 0 {
+					seasonNum = sNum
+				}
+				epNum = eNum
+			}
+		}
 		seasonKey := "tv:" + tmdbID + ":s:" + strconv.Itoa(seasonNum)
-		epKey := seasonKey + ":e:" + strconv.Itoa(x.Episode)
+		epKey := seasonKey + ":e:" + strconv.Itoa(epNum)
 		if !forceRefresh {
 			if x.Kind == "Season" {
 				if cached, ok := a.cachedTMDBMeta(seasonKey); ok {
@@ -348,14 +367,14 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 		if sMeta != nil {
 			a.storeTMDBMeta(seasonKey, tmdbID, "Season", sMeta)
 		}
-		for epNum, epMeta := range eps {
-			a.storeTMDBMeta(seasonKey+":e:"+strconv.Itoa(epNum), tmdbID, "Episode", epMeta)
+		for epIdx, epMeta := range eps {
+			a.storeTMDBMeta(seasonKey+":e:"+strconv.Itoa(epIdx), tmdbID, "Episode", epMeta)
 		}
 		if x.Kind == "Season" && sMeta != nil {
 			return tmdbMetaToSidecar(sMeta)
 		}
 		if x.Kind == "Episode" {
-			if epMeta := eps[x.Episode]; epMeta != nil {
+			if epMeta := eps[epNum]; epMeta != nil {
 				return tmdbMetaToSidecar(epMeta)
 			}
 		}
@@ -393,7 +412,7 @@ func (a *App) refreshSingleItemMetadata(itemID string, force bool) error {
 			return txErr
 		}
 		_, txErr = tx.Exec("INSERT INTO item_metadata VALUES(?,?) ON CONFLICT(item) DO UPDATE SET data=excluded.data", cur.ID, string(b))
-		if txErr == nil && (n.Title != "" || n.Plot != "" || n.Year > 0) {
+		if txErr == nil && (n.Title != "" || n.Plot != "" || n.Year > 0 || n.ThumbURL != "" || n.PosterURL != "") {
 			newName := cur.Name
 			if n.Title != "" && cur.Kind != "Season" {
 				// Respect manual display name override if present
@@ -410,7 +429,35 @@ func (a *App) refreshSingleItemMetadata(itemID string, force bool) error {
 			if n.Plot != "" {
 				newOverview = n.Plot
 			}
-			_, txErr = tx.Exec("UPDATE items SET name=?,overview=?,year=? WHERE id=?", newName, newOverview, newYear, cur.ID)
+			newPoster := cur.Poster
+			if n.ThumbURL != "" {
+				newPoster = n.ThumbURL
+			} else if n.PosterURL != "" {
+				newPoster = n.PosterURL
+			}
+			newSeason := cur.Season
+			newEpisode := cur.Episode
+			if cur.Kind == "Episode" && (newSeason <= 0 || newEpisode <= 0) {
+				if sNum, eNum, ok := tmdb.ParseSeasonEpisode(cur.Name, 1); ok {
+					if newSeason <= 0 {
+						newSeason = sNum
+					}
+					if newEpisode <= 0 {
+						newEpisode = eNum
+					}
+				} else if sNum, eNum, ok := tmdb.ParseSeasonEpisode(filepath.Base(cur.Path), 1); ok {
+					if newSeason <= 0 {
+						newSeason = sNum
+					}
+					if newEpisode <= 0 {
+						newEpisode = eNum
+					}
+				}
+			}
+			_, txErr = tx.Exec("UPDATE items SET name=?,overview=?,year=?,poster=?,season=?,episode=? WHERE id=?", newName, newOverview, newYear, newPoster, newSeason, newEpisode, cur.ID)
+		}
+		if txErr == nil && cur.Kind == "Series" && n.TMDB != "" {
+			_, _ = tx.Exec("INSERT INTO tmdb_item_matches(item,tmdb_id,media_type,updated) VALUES(?,?,?,?) ON CONFLICT(item) DO UPDATE SET tmdb_id=excluded.tmdb_id,media_type=excluded.media_type,updated=excluded.updated", cur.ID, n.TMDB, "tv", time.Now().Unix())
 		}
 		if txErr == nil {
 			_, txErr = tx.Exec("DELETE FROM item_people WHERE item=?", cur.ID)

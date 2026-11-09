@@ -142,6 +142,13 @@ func (c *Client) Configured() bool {
 	return c != nil && c.apiKey != ""
 }
 
+func (c *Client) HTTPClient() *http.Client {
+	if c == nil {
+		return nil
+	}
+	return c.httpClient
+}
+
 func (c *Client) ImageURL(size, relPath string) string {
 	p := strings.TrimSpace(relPath)
 	if p == "" {
