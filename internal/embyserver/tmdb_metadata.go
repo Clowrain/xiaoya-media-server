@@ -258,8 +258,9 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 	if n.TMDB == "" && extractedID != "" {
 		n.TMDB = extractedID
 	}
-	// Only skip scraping if local NFO is present, has actual content (Plot), and force refresh was not requested.
-	if hasLocalNFO && !forceRefresh && strings.TrimSpace(n.Plot) != "" {
+	// Under prefer policy, local non-empty NFO with plot always wins.
+	// Empty/placeholder NFO (missing plot) falls back to TMDB scraping.
+	if hasLocalNFO && strings.TrimSpace(n.Plot) != "" {
 		return n
 	}
 
