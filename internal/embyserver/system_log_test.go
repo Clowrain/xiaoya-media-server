@@ -79,10 +79,25 @@ func TestHandleUnifiedLogsCompatAndFiltering(t *testing.T) {
 			t.Fatalf("expected 3 logs in 'Items' key, got %#v", resp["Items"])
 		}
 
-		// Verify first item is latest (log-3)
+		// Verify last item is latest (log-3) in default ascending chronological order
+		last := logs[len(logs)-1].(map[string]interface{})
+		if last["level"] != "ERROR" || last["msg"] == "" || last["source"] == "" {
+			t.Fatalf("expected populated msg and source, got %#v", last)
+		}
+	}
+
+	// 2. Test order=desc
+	{
+		r := httptest.NewRequest(http.MethodGet, "/admin/logs?order=desc", nil)
+		w := httptest.NewRecorder()
+		a.handleUnifiedLogs(w, r)
+
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		logs := resp["logs"].([]interface{})
 		first := logs[0].(map[string]interface{})
-		if first["level"] != "ERROR" || first["msg"] == "" || first["source"] == "" {
-			t.Fatalf("expected populated msg and source, got %#v", first)
+		if first["id"] != "log-3" {
+			t.Fatalf("expected log-3 first with order=desc, got %v", first["id"])
 		}
 	}
 
@@ -127,5 +142,28 @@ func TestHandleUnifiedLogsCompatAndFiltering(t *testing.T) {
 		if sysLogger.count() != 0 {
 			t.Fatalf("expected logger empty after clear, got %d", sysLogger.count())
 		}
+	}
+}
+
+func TestDetectClientInfo(t *testing.T) {
+	// 1. From X-Emby-Authorization header
+	r1 := httptest.NewRequest("GET", "/emby/Items", nil)
+	r1.Header.Set("X-Emby-Authorization", `MediaBrowser Client="SenPlayer", Device="iPhone", DeviceId="123", Version="2.1.0"`)
+	if got := detectClientInfo(r1); got != "SenPlayer" {
+		t.Fatalf("expected SenPlayer, got %s", got)
+	}
+
+	// 2. From X-Emby-Client header
+	r2 := httptest.NewRequest("GET", "/emby/Items", nil)
+	r2.Header.Set("X-Emby-Client", "VidHub")
+	if got := detectClientInfo(r2); got != "VidHub" {
+		t.Fatalf("expected VidHub, got %s", got)
+	}
+
+	// 3. From User-Agent containing SenPlayer
+	r3 := httptest.NewRequest("GET", "/emby/Items", nil)
+	r3.Header.Set("User-Agent", "SenPlayer/2.1.0 (iOS 17.5)")
+	if got := detectClientInfo(r3); got != "SenPlayer" {
+		t.Fatalf("expected SenPlayer from UA, got %s", got)
 	}
 }

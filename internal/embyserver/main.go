@@ -367,7 +367,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 				Path:       r.URL.Path,
 				Status:     status,
 				DurationMs: durMs,
-				Client:     r.UserAgent(),
+				Client:     detectClientInfo(r),
 				IP:         clientIP(r),
 				Target:     target,
 				Message:    msg,

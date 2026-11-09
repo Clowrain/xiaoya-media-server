@@ -79,7 +79,7 @@ func (r *systemLogRing) count() int {
 	return len(r.entries)
 }
 
-func (r *systemLogRing) snapshot(category, level, keyword string, limit int) []*LogEntry {
+func (r *systemLogRing) snapshot(category, level, keyword, order string, limit int) []*LogEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if limit <= 0 || limit > 1000 {
@@ -90,11 +90,19 @@ func (r *systemLogRing) snapshot(category, level, keyword string, limit int) []*
 	kw := strings.ToLower(strings.TrimSpace(keyword))
 
 	result := make([]*LogEntry, 0, limit)
-	// Iterate in reverse (latest logs first)
+	// Iterate in reverse to collect the latest N matching logs
 	for i := len(r.entries) - 1; i >= 0 && len(result) < limit; i-- {
 		e := r.entries[i]
 		if lvl != "" && lvl != "ALL" {
-			if !strings.EqualFold(e.Level, lvl) {
+			if lvl == "ERROR" {
+				if e.Level != "ERROR" && e.Status < 400 && e.Error == "" {
+					continue
+				}
+			} else if lvl == "INFO" {
+				if e.Level != "INFO" && e.Level != "302" && e.Level != "" && e.Status >= 400 {
+					continue
+				}
+			} else if !strings.EqualFold(e.Level, lvl) {
 				continue
 			}
 		}
@@ -115,7 +123,7 @@ func (r *systemLogRing) snapshot(category, level, keyword string, limit int) []*
 				if e.Category != "scan" {
 					continue
 				}
-			} else if !strings.EqualFold(e.Category, cat) {
+			} else if !strings.EqualFold(e.Category, cat) && !strings.EqualFold(e.Source, cat) {
 				continue
 			}
 		}
@@ -127,6 +135,15 @@ func (r *systemLogRing) snapshot(category, level, keyword string, limit int) []*
 		}
 		result = append(result, e)
 	}
+
+	// Standard terminal flow: chronological order (oldest at top, newest at bottom)
+	// Unless client explicitly requests order=desc (newest on top)
+	if !strings.EqualFold(order, "desc") {
+		for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+			result[i], result[j] = result[j], result[i]
+		}
+	}
+
 	return result
 }
 
@@ -253,6 +270,10 @@ func (a *App) handleUnifiedLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	level := strings.TrimSpace(r.URL.Query().Get("level"))
 	keyword := strings.TrimSpace(r.URL.Query().Get("q"))
+	order := strings.TrimSpace(r.URL.Query().Get("order"))
+	if order == "" {
+		order = "asc" // default chronological order
+	}
 	limit := 300
 	if lStr := r.URL.Query().Get("limit"); lStr != "" {
 		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
@@ -260,7 +281,7 @@ func (a *App) handleUnifiedLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	items := sysLogger.snapshot(category, level, keyword, limit)
+	items := sysLogger.snapshot(category, level, keyword, order, limit)
 
 	// Collect online sessions for header stats
 	onlineCount := 0
@@ -306,4 +327,86 @@ func (a *App) handleUnifiedLogs(w http.ResponseWriter, r *http.Request) {
 		"ProbeWaiting":    0,
 		"Retention":       "内存保留最近1500条全链路日志，支持分类与关键词即时检索",
 	})
+}
+
+// detectClientInfo extracts human-readable client name from Emby authorization headers, params or User-Agent.
+func detectClientInfo(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	// 1. Check X-Emby-Authorization header (e.g. MediaBrowser Client="SenPlayer", Device="iPhone", ...)
+	auth := r.Header.Get("X-Emby-Authorization")
+	if auth == "" {
+		auth = r.Header.Get("Authorization")
+	}
+	if auth != "" {
+		if c := extractAuthClient(auth); c != "" {
+			return c
+		}
+	}
+
+	// 2. Check X-Emby-Client header or query parameter
+	if c := strings.TrimSpace(r.Header.Get("X-Emby-Client")); c != "" {
+		return c
+	}
+	if c := strings.TrimSpace(r.URL.Query().Get("X-Emby-Client")); c != "" {
+		return c
+	}
+
+	// 3. Fallback to User-Agent matching
+	ua := strings.TrimSpace(r.UserAgent())
+	if ua == "" {
+		return "Unknown"
+	}
+	uaLower := strings.ToLower(ua)
+	switch {
+	case strings.Contains(uaLower, "senplayer"):
+		return "SenPlayer"
+	case strings.Contains(uaLower, "infuse"):
+		return "Infuse"
+	case strings.Contains(uaLower, "vidhub"):
+		return "VidHub"
+	case strings.Contains(uaLower, "afusekt"):
+		return "AfuseKt"
+	case strings.Contains(uaLower, "fileball"):
+		return "Fileball"
+	case strings.Contains(uaLower, "forward"):
+		return "Forward"
+	case strings.Contains(uaLower, "hamme"):
+		return "Hamme"
+	case strings.Contains(uaLower, "yamby"):
+		return "Yamby"
+	case strings.Contains(uaLower, "emby"):
+		return "Emby Client"
+	case strings.Contains(uaLower, "cfnetwork") || strings.Contains(uaLower, "darwin"):
+		if dev := strings.TrimSpace(r.Header.Get("X-Emby-Device-Name")); dev != "" {
+			return dev
+		}
+		return "iOS Player"
+	case strings.Contains(uaLower, "okhttp"):
+		if dev := strings.TrimSpace(r.Header.Get("X-Emby-Device-Name")); dev != "" {
+			return dev
+		}
+		return "Android Player"
+	case strings.Contains(uaLower, "mozilla") || strings.Contains(uaLower, "chrome") || strings.Contains(uaLower, "safari") || strings.Contains(uaLower, "edge"):
+		return "Web Browser"
+	default:
+		if len(ua) > 24 {
+			return ua[:24] + "..."
+		}
+		return ua
+	}
+}
+
+func extractAuthClient(auth string) string {
+	for _, part := range strings.Split(auth, ",") {
+		part = strings.TrimSpace(part)
+		if idx := strings.Index(part, "Client="); idx >= 0 {
+			val := strings.Trim(strings.TrimSpace(part[idx+7:]), `"`)
+			if val != "" {
+				return val
+			}
+		}
+	}
+	return ""
 }

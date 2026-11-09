@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, RefreshCw, Trash2, X, Download, Filter, Search, Play, Pause } from 'lucide-react';
+import { Terminal, RefreshCw, Trash2, X, Download, Filter, Search, Play, Pause, ArrowDownUp } from 'lucide-react';
 import { fetchLogs, clearLogs, notifyToast } from '../api/client';
 import { LogEntry } from '../types';
 
@@ -14,6 +14,7 @@ export const LogDrawer: React.FC<LogDrawerProps> = ({ isOpen, onClose }) => {
   const [source, setSource] = useState<string>('');
   const [search, setSearch] = useState<string>('');
   const [limit, setLimit] = useState<number>(200);
+  const [order, setOrder] = useState<'asc' | 'desc'>('asc');
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(false);
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
@@ -23,7 +24,7 @@ export const LogDrawer: React.FC<LogDrawerProps> = ({ isOpen, onClose }) => {
   const loadLogs = async () => {
     try {
       setLoading(true);
-      const res = await fetchLogs(limit, level || undefined, source || undefined, search || undefined);
+      const res = await fetchLogs(limit, level || undefined, source || undefined, search || undefined, order);
       setLogs(res.logs || []);
     } catch (err: any) {
       console.error('Fetch logs error:', err);
@@ -35,7 +36,7 @@ export const LogDrawer: React.FC<LogDrawerProps> = ({ isOpen, onClose }) => {
   useEffect(() => {
     if (!isOpen) return;
     loadLogs();
-  }, [isOpen, level, source, limit]);
+  }, [isOpen, level, source, limit, order]);
 
   useEffect(() => {
     if (!isOpen || !autoRefresh) return;
@@ -43,7 +44,7 @@ export const LogDrawer: React.FC<LogDrawerProps> = ({ isOpen, onClose }) => {
       loadLogs();
     }, 2500);
     return () => clearInterval(interval);
-  }, [isOpen, autoRefresh, level, source, limit, search]);
+  }, [isOpen, autoRefresh, level, source, limit, search, order]);
 
   useEffect(() => {
     if (autoScroll && containerRef.current) {
@@ -209,16 +210,27 @@ export const LogDrawer: React.FC<LogDrawerProps> = ({ isOpen, onClose }) => {
             </select>
           </div>
 
-          {/* Auto Scroll Toggle */}
-          <label className="flex items-center gap-1.5 text-zinc-400 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(e) => setAutoScroll(e.target.checked)}
-              className="rounded bg-zinc-900 border-zinc-700 text-emerald-500 focus:ring-0"
-            />
-            滚屏锁定
-          </label>
+            {/* Order Toggle */}
+            <button
+              type="button"
+              onClick={() => setOrder(order === 'asc' ? 'desc' : 'asc')}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-white transition cursor-pointer select-none"
+              title={order === 'asc' ? '当前：时间正序（最新在底部，终端流），点击切换' : '当前：逆序（最新在顶部），点击切换'}
+            >
+              <ArrowDownUp className={`w-3.5 h-3.5 ${order === 'asc' ? 'text-emerald-400' : 'text-sky-400'}`} />
+              <span className="font-mono">{order === 'asc' ? '最新在底 ↓' : '最新在顶 ↑'}</span>
+            </button>
+
+            {/* Auto Scroll Toggle */}
+            <label className="flex items-center gap-1.5 text-zinc-400 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoScroll}
+                onChange={(e) => setAutoScroll(e.target.checked)}
+                className="rounded bg-zinc-900 border-zinc-700 text-emerald-500 focus:ring-0"
+              />
+              滚屏锁定
+            </label>
         </div>
 
         {/* Log Stream Content */}
@@ -324,8 +336,11 @@ export const LogDrawer: React.FC<LogDrawerProps> = ({ isOpen, onClose }) => {
                       </span>
                     )}
                     {item.client && (
-                      <span className="text-zinc-500 text-[10px] truncate max-w-[140px]" title={item.client}>
-                        {item.client}
+                      <span
+                        className="px-1.5 py-0.5 rounded bg-zinc-800 text-emerald-300 border border-emerald-500/20 text-[10px] font-mono font-medium truncate max-w-[150px]"
+                        title={item.client}
+                      >
+                        📱 {item.client}
                       </span>
                     )}
                     {item.trace_id && (

@@ -3,7 +3,7 @@ import {
   FolderSync, Database, HardDrive, RefreshCw, Plus, 
   Trash2, Play, ChevronRight, Folder, FileVideo, 
   Search, ArrowLeft, ArrowRight, CheckCircle2, BookmarkPlus,
-  ExternalLink, AlertCircle, ListChecks, X, Clock 
+  ExternalLink, AlertCircle, ListChecks, X, Clock, GitBranch, Terminal 
 } from 'lucide-react';
 import { SystemOverview, MonitorRoot, AListFileItem, AdminJob, AdminLibrary } from '../../types';
 import { 
@@ -281,6 +281,47 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
 
   return (
     <div className="space-y-6">
+      {/* Top Action Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-1 border-b border-zinc-800/60">
+        <div>
+          <h2 className="text-base font-bold text-zinc-100 flex items-center gap-2">
+            小雅与 AList 同步中心
+          </h2>
+          <p className="text-xs text-zinc-400 mt-0.5">
+            小雅权威清单挂载、网盘实时目录与定时增量入库综合管理
+          </p>
+        </div>
+        <div className="flex items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowJobsDrawer(true)}
+            className="relative flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-200 text-xs font-medium transition cursor-pointer border border-zinc-800 shadow-sm hover:border-zinc-700"
+            title="查看最近的同步与入库任务记录"
+          >
+            <ListChecks className="w-4 h-4 text-emerald-400" />
+            <span>任务记录</span>
+            {hasRunningJob ? (
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500"></span>
+              </span>
+            ) : activeJobs.length > 0 ? (
+              <span className="px-1.5 py-0.2 rounded-full bg-zinc-800 text-[10px] text-emerald-400 font-mono border border-emerald-500/20">
+                {activeJobs.length}
+              </span>
+            ) : null}
+          </button>
+          <button
+            type="button"
+            onClick={onOpenLogs}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-200 text-xs font-medium transition cursor-pointer border border-zinc-800 shadow-sm hover:border-zinc-700"
+          >
+            <Terminal className="w-4 h-4 text-sky-400" />
+            <span>全链路日志</span>
+          </button>
+        </div>
+      </div>
+
       {/* System Overview Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 flex items-center gap-3">
@@ -327,8 +368,11 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
           </div>
         </div>
 
-        <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 flex items-center justify-between overflow-hidden">
-          <div className="min-w-0 pr-2">
+        <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-purple-950 border border-purple-500/20 flex items-center justify-center text-purple-400">
+            <GitBranch className="w-5 h-5" />
+          </div>
+          <div className="min-w-0 flex-1">
             <div className="text-xs text-zinc-400">系统版本与代码提交</div>
             <div className="text-xs text-emerald-400 font-bold font-mono mt-0.5 flex items-center gap-1.5 flex-wrap">
               <a
@@ -355,34 +399,6 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
             <div className="text-[10px] text-zinc-500 font-mono mt-0.5 truncate">
               构建: {overview?.build_time && overview.build_time !== 'unknown' ? overview.build_time : BUILD_TIME}
             </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setShowJobsDrawer(true)}
-              className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer border border-zinc-700/60"
-              title="查看最近的同步与入库任务记录"
-            >
-              <ListChecks className="w-3.5 h-3.5 text-emerald-400" />
-              <span>任务记录</span>
-              {hasRunningJob ? (
-                <span className="flex h-2 w-2 relative">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500"></span>
-                </span>
-              ) : activeJobs.length > 0 ? (
-                <span className="px-1.5 py-0.2 rounded-full bg-zinc-700 text-[10px] text-zinc-300 font-mono">
-                  {activeJobs.length}
-                </span>
-              ) : null}
-            </button>
-            <button
-              type="button"
-              onClick={onOpenLogs}
-              className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer shrink-0"
-            >
-              打开日志
-            </button>
           </div>
         </div>
       </div>
