@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -72,11 +73,30 @@ func (a *App) indexMetadataGeneration(lib, generation string, jobs ...string) er
 		if len(batch) == 0 {
 			return nil
 		}
+		// Sort batch by kind so Series is parsed and matches TMDB first, enabling Seasons and Episodes to inherit its tmdbID!
+		sort.SliceStable(batch, func(i, j int) bool {
+			rank := func(k string) int {
+				switch k {
+				case "Series":
+					return 1
+				case "Season":
+					return 2
+				case "Movie":
+					return 3
+				default:
+					return 4
+				}
+			}
+			return rank(batch[i].Kind) < rank(batch[j].Kind)
+		})
 		// Parse files before taking the SQLite writer lock.
 		metas := make([]sidecar, len(batch))
 		for j, x := range batch {
 			a.waitScan(job)
 			metas[j] = a.resolveItemSidecar(x, false)
+			if x.Kind == "Series" && metas[j].TMDB != "" {
+				_, _ = a.db.Exec("INSERT INTO tmdb_item_matches(item,tmdb_id,media_type,updated) VALUES(?,?,?,?) ON CONFLICT(item) DO UPDATE SET tmdb_id=excluded.tmdb_id,media_type=excluded.media_type,updated=excluded.updated", x.ID, metas[j].TMDB, "tv", time.Now().Unix())
+			}
 		}
 		tx, e := a.db.Begin()
 		if e != nil {
@@ -168,6 +188,9 @@ func (a *App) indexMetadataGeneration(lib, generation string, jobs ...string) er
 		}
 		if e = tx.Commit(); e != nil {
 			return e
+		}
+		for j, x := range batch {
+			a.maybePersistArtifactsToDisk(x, metas[j])
 		}
 		after = batch[len(batch)-1].ID
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -158,5 +159,161 @@ func TestScrapeStateTrackingAndProcessPending(t *testing.T) {
 	}
 	if processed != 1 {
 		t.Fatalf("expected 1 processed item, got %d", processed)
+	}
+}
+
+func TestBatchScanSeriesCascadeAndArtifactsPersistence(t *testing.T) {
+	tmpDir := t.TempDir()
+	RegisterMediaRoot(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "cascade_test.db")
+	sqlDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer sqlDB.Close()
+
+	app := &App{db: &Database{sqlDB}}
+	_, err = sqlDB.Exec(`
+		CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
+		CREATE TABLE IF NOT EXISTS items (
+			id text primary key,
+			lib text not null,
+			parent text not null,
+			name text not null,
+			kind text not null,
+			path text not null unique,
+			url text not null,
+			overview text not null default '',
+			poster text not null default '',
+			year bigint not null default 0,
+			season bigint not null default 0,
+			episode bigint not null default 0,
+			mtime bigint not null default 0,
+			size bigint not null default 0,
+			seen text not null default '',
+			rating real not null default 0
+		);
+		CREATE TABLE IF NOT EXISTS item_metadata(item TEXT PRIMARY KEY, data TEXT NOT NULL);
+		CREATE TABLE IF NOT EXISTS item_people(item TEXT, person TEXT, name TEXT, role TEXT, type TEXT, thumb TEXT, PRIMARY KEY(item, person, type));
+		CREATE TABLE IF NOT EXISTS media_display_names(item TEXT PRIMARY KEY, name TEXT);
+	`)
+	if err != nil {
+		t.Fatalf("create tables: %v", err)
+	}
+	if err := app.tmdbSchema(); err != nil {
+		t.Fatalf("tmdbSchema: %v", err)
+	}
+
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/3/search/tv":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{
+					{"id": 7777, "name": "追更热播剧", "first_air_date": "2026-06-01"},
+				},
+			})
+		case "/3/tv/7777":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":             7777,
+				"name":           "追更热播剧",
+				"overview":       "这是整剧简介",
+				"first_air_date": "2026-06-01",
+				"poster_path":    "/poster.jpg",
+			})
+		case "/3/tv/7777/season/1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":            101,
+				"season_number": 1,
+				"name":          "第 1 季",
+				"poster_path":   "/season_poster.jpg",
+				"episodes": []map[string]any{
+					{
+						"id":             201,
+						"episode_number": 1,
+						"name":           "第一集 开端",
+						"overview":       "开端详细剧情简介",
+						"still_path":     "/ep01_still.jpg",
+					},
+				},
+			})
+		case "/t/p/w500/poster.jpg", "/t/p/w500/season_poster.jpg", "/t/p/w500/ep01_still.jpg":
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write([]byte("fake-jpeg-binary-data"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	settingsJSON, _ := json.Marshal(map[string]any{
+		"enabled":                    true,
+		"api_key":                    "fake-key",
+		"base_url":                   srv.URL + "/3",
+		"image_url":                  srv.URL + "/t/p",
+		"save_artifacts_to_media_dir": true,
+	})
+	_, _ = sqlDB.Exec("INSERT INTO settings(k,v) VALUES('tmdb_settings', ?)", string(settingsJSON))
+
+	// 创建目录与文件
+	seriesDir := filepath.Join(tmpDir, "追更热播剧 (2026)")
+	seasonDir := filepath.Join(seriesDir, "Season 1")
+	_ = os.MkdirAll(seasonDir, 0755)
+	epPath := filepath.Join(seasonDir, "01.strm")
+	_ = os.WriteFile(epPath, []byte("http://media.test/01.mp4"), 0644)
+
+	seriesID := "id-series"
+	seasonID := "id-season"
+	epID := "id-ep"
+
+	// 模拟 scanner 插入的数据，seen 标记为 'gen-test'
+	_, _ = sqlDB.Exec(`INSERT INTO items(id,lib,parent,name,kind,path,url,year,season,episode,seen) VALUES
+		(?, 'lib1', 'lib1', '追更热播剧 (2026)', 'Series', ?, '', 2026, 0, 0, 'gen-test'),
+		(?, 'lib1', ?, 'Season 1', 'Season', ?, '', 2026, 1, 1, 'gen-test'),
+		(?, 'lib1', ?, '01.mp4', 'Episode', ?, 'http://media.test/01.mp4', 2026, 1, 1, 'gen-test')`,
+		seriesID, seriesDir,
+		seasonID, seriesID, seasonDir,
+		epID, seasonID, epPath,
+	)
+
+	// 运行索引
+	if err := app.indexMetadataGeneration("lib1", "gen-test"); err != nil {
+		t.Fatalf("indexMetadataGeneration failed: %v", err)
+	}
+
+	// 验证 Episode 元数据已成功级联填入（标题、剧照、剧情）
+	var epName, epOverview, epPoster string
+	err = sqlDB.QueryRow("SELECT name, overview, poster FROM items WHERE id=?", epID).Scan(&epName, &epOverview, &epPoster)
+	if err != nil {
+		t.Fatalf("query episode item: %v", err)
+	}
+	if epName != "第一集 开端" {
+		t.Errorf("epName = %q, want '第一集 开端'", epName)
+	}
+	if epOverview != "开端详细剧情简介" {
+		t.Errorf("epOverview = %q, want '开端详细剧情简介'", epOverview)
+	}
+	if epPoster != srv.URL+"/t/p/w500/ep01_still.jpg" {
+		t.Errorf("epPoster = %q, want %q", epPoster, srv.URL+"/t/p/w500/ep01_still.jpg")
+	}
+
+	// 稍作等待以确保 goroutine 中的 maybePersistArtifactsToDisk 完成
+	time.Sleep(300 * time.Millisecond)
+
+	// 验证整剧海报和 NFO 落盘
+	if _, err := os.Stat(filepath.Join(seriesDir, "poster.jpg")); err != nil {
+		t.Errorf("series poster.jpg not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(seriesDir, "tvshow.nfo")); err != nil {
+		t.Errorf("series tvshow.nfo not created: %v", err)
+	}
+
+	// 验证分集剧照和分集 NFO 落盘
+	if _, err := os.Stat(filepath.Join(seasonDir, "01-thumb.jpg")); err != nil {
+		t.Errorf("episode 01-thumb.jpg not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(seasonDir, "01.nfo")); err != nil {
+		t.Errorf("episode 01.nfo not created: %v", err)
 	}
 }

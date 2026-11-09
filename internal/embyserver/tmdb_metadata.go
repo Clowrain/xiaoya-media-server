@@ -231,6 +231,13 @@ func (a *App) findItemTMDBID(x Item) string {
 			if pMeta := a.metadata(parent); pMeta.TMDB != "" {
 				return pMeta.TMDB
 			}
+			if parent.Kind == "Series" {
+				pSidecar := a.resolveItemSidecar(parent, false)
+				if pSidecar.TMDB != "" {
+					_, _ = a.db.Exec("INSERT INTO tmdb_item_matches(item,tmdb_id,media_type,updated) VALUES(?,?,?,?) ON CONFLICT(item) DO UPDATE SET tmdb_id=excluded.tmdb_id,media_type=excluded.media_type,updated=excluded.updated", parent.ID, pSidecar.TMDB, "tv", time.Now().Unix())
+					return pSidecar.TMDB
+				}
+			}
 		}
 	}
 	return ""
@@ -691,7 +698,7 @@ func (a *App) refreshSingleItemMetadata(itemID string, force bool) error {
 	return nil
 }
 
-func downloadAndSaveImage(ctx context.Context, targetPath, rawURL string) error {
+func (a *App) downloadAndSaveImage(ctx context.Context, targetPath, rawURL string) error {
 	if strings.TrimSpace(rawURL) == "" || strings.TrimSpace(targetPath) == "" {
 		return nil
 	}
@@ -705,13 +712,22 @@ func downloadAndSaveImage(ctx context.Context, targetPath, rawURL string) error 
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	hc := http.DefaultClient
+	if a != nil {
+		if cli := a.TMDBClient(); cli != nil && cli.HTTPClient() != nil {
+			hc = cli.HTTPClient()
+		}
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
+		RecordGlobalLog("WARN", "tmdb", fmt.Sprintf("下载海报图片失败: %s", filepath.Base(targetPath)), err.Error(), "", "")
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("image status %d", resp.StatusCode)
+		err := fmt.Errorf("image status %d", resp.StatusCode)
+		RecordGlobalLog("WARN", "tmdb", fmt.Sprintf("下载海报图片HTTP错误: %s (状态码 %d)", filepath.Base(targetPath), resp.StatusCode), err.Error(), "", "")
+		return err
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
 	if err != nil || len(data) == 0 {
@@ -748,10 +764,10 @@ func (a *App) maybePersistArtifactsToDisk(cur Item, n sidecar) {
 				}
 			}
 			if n.PosterURL != "" {
-				_ = downloadAndSaveImage(ctx, filepath.Join(seriesDir, "poster.jpg"), n.PosterURL)
+				_ = a.downloadAndSaveImage(ctx, filepath.Join(seriesDir, "poster.jpg"), n.PosterURL)
 			}
 			if n.BackdropURL != "" {
-				_ = downloadAndSaveImage(ctx, filepath.Join(seriesDir, "fanart.jpg"), n.BackdropURL)
+				_ = a.downloadAndSaveImage(ctx, filepath.Join(seriesDir, "fanart.jpg"), n.BackdropURL)
 			}
 		case "Season":
 			seasonDir := cur.Path
@@ -763,7 +779,7 @@ func (a *App) maybePersistArtifactsToDisk(cur Item, n sidecar) {
 				_ = os.WriteFile(filepath.Join(seasonDir, "season.nfo"), append([]byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), payload...), 0644)
 			}
 			if n.PosterURL != "" {
-				_ = downloadAndSaveImage(ctx, filepath.Join(seasonDir, "poster.jpg"), n.PosterURL)
+				_ = a.downloadAndSaveImage(ctx, filepath.Join(seasonDir, "poster.jpg"), n.PosterURL)
 			}
 		case "Episode":
 			base := strings.TrimSuffix(cur.Path, filepath.Ext(cur.Path))
@@ -786,7 +802,7 @@ func (a *App) maybePersistArtifactsToDisk(cur Item, n sidecar) {
 				thumbURL = n.PosterURL
 			}
 			if thumbURL != "" {
-				_ = downloadAndSaveImage(ctx, base+"-thumb.jpg", thumbURL)
+				_ = a.downloadAndSaveImage(ctx, base+"-thumb.jpg", thumbURL)
 			}
 		case "Movie":
 			base := strings.TrimSuffix(cur.Path, filepath.Ext(cur.Path))
@@ -807,10 +823,10 @@ func (a *App) maybePersistArtifactsToDisk(cur Item, n sidecar) {
 				}
 			}
 			if n.PosterURL != "" {
-				_ = downloadAndSaveImage(ctx, filepath.Join(movieDir, "poster.jpg"), n.PosterURL)
+				_ = a.downloadAndSaveImage(ctx, filepath.Join(movieDir, "poster.jpg"), n.PosterURL)
 			}
 			if n.BackdropURL != "" {
-				_ = downloadAndSaveImage(ctx, filepath.Join(movieDir, "fanart.jpg"), n.BackdropURL)
+				_ = a.downloadAndSaveImage(ctx, filepath.Join(movieDir, "fanart.jpg"), n.BackdropURL)
 			}
 		}
 	}()
