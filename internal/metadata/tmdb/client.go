@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -99,6 +100,15 @@ func NewClient(opts Options) *Client {
 	if hc == nil {
 		tr := &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 15 * time.Second,
+			IdleConnTimeout:       60 * time.Second,
+			MaxIdleConns:          50,
+			MaxIdleConnsPerHost:   10,
 		}
 		proxyStr := strings.TrimSpace(opts.ProxyURL)
 		if proxyStr == "" {
@@ -190,25 +200,53 @@ func (c *Client) getJSON(ctx context.Context, apiPath string, params url.Values,
 	if enc := params.Encode(); enc != "" {
 		reqURL += "?" + enc
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return err
+	var lastErr error
+	maxRetries := 2
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt*250) * time.Millisecond):
+			}
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", "XiaoyaMediaServer/1.0 (Emby-Compatible)")
+		if useBearer {
+			tok := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(c.apiKey, "Bearer "), "bearer "))
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+
+		res, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if res.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
+			res.Body.Close()
+			return fmt.Errorf("TMDB HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(bodyBytes)))
+		}
+
+		decodeErr := json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(out)
+		res.Body.Close()
+		return decodeErr
 	}
-	req.Header.Set("Accept", "application/json")
-	if useBearer {
-		tok := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(c.apiKey, "Bearer "), "bearer "))
-		req.Header.Set("Authorization", "Bearer "+tok)
+
+	if lastErr != nil {
+		errStr := lastErr.Error()
+		if strings.Contains(errStr, "EOF") || strings.Contains(errStr, "connection reset") || strings.Contains(errStr, "operation timed out") || strings.Contains(errStr, "no such host") {
+			return fmt.Errorf("TMDB 请求失败 (%s): 无法直连 TMDB 官方服务器，请在管理后台 [TMDB 刮削与识别] 中配置网络代理 ProxyURL (如 Clash/局域网代理) 或修改 BaseURL 为可用反代镜像", errStr)
+		}
+		return lastErr
 	}
-	res, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
-		return fmt.Errorf("TMDB HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(bodyBytes)))
-	}
-	return json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(out)
+	return fmt.Errorf("TMDB 请求重试失败")
 }
 
 // TestConnection verifies API key validity against /configuration.

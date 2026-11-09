@@ -291,9 +291,20 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-              网络代理 ProxyURL (解决国内连通超时)
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-zinc-400">
+                网络代理 ProxyURL (解决国内直连 EOF/阻断)
+              </label>
+              <div className="flex gap-1.5 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setConfig({ ...config, ProxyURL: 'http://127.0.0.1:7890' })}
+                  className="text-emerald-400 hover:underline"
+                >
+                  填入 Clash(7890)
+                </button>
+              </div>
+            </div>
             <input
               type="text"
               value={config.ProxyURL}
@@ -301,12 +312,26 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
               placeholder="例如: http://192.168.1.10:7890 或 socks5://..."
               className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-zinc-100 focus:outline-none focus:border-emerald-500"
             />
+            <p className="text-[11px] text-zinc-500 mt-1">
+              直连 TMDB 报 EOF/超时时，请填入 NAS 宿主机或局域网代理
+            </p>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-              TMDB API Base URL
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-zinc-400">
+                TMDB API Base URL
+              </label>
+              <div className="flex gap-1.5 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setConfig({ ...config, BaseURL: 'https://api.themoviedb.org/3' })}
+                  className="text-zinc-400 hover:text-zinc-200"
+                >
+                  重置官方
+                </button>
+              </div>
+            </div>
             <input
               type="text"
               value={config.BaseURL}
@@ -314,6 +339,9 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
               placeholder="https://api.themoviedb.org/3"
               className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-zinc-100 focus:outline-none focus:border-emerald-500"
             />
+            <p className="text-[11px] text-zinc-500 mt-1">
+              默认官方接口；如自建或有加速反代（如 Cloudflare 反代）可直接填入
+            </p>
           </div>
 
           <div>
