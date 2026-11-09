@@ -66,6 +66,18 @@ CREATE TABLE IF NOT EXISTS tmdb_item_matches(
 	media_type TEXT NOT NULL,
 	updated BIGINT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tmdb_scrape_tasks(
+	item_id TEXT PRIMARY KEY,
+	kind TEXT NOT NULL,
+	title TEXT NOT NULL,
+	tmdb_id TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL,
+	retry_count INT NOT NULL DEFAULT 0,
+	last_error TEXT NOT NULL DEFAULT '',
+	next_retry_at BIGINT NOT NULL DEFAULT 0,
+	updated_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tmdb_scrape_tasks_state ON tmdb_scrape_tasks(state, next_retry_at);
 `)
 	return err
 }
@@ -224,17 +236,89 @@ func (a *App) findItemTMDBID(x Item) string {
 	return ""
 }
 
+type ScrapeState string
+
+const (
+	ScrapeStatePendingTMDB ScrapeState = "PENDING_TMDB"
+	ScrapeStateUpdating    ScrapeState = "UPDATING"
+	ScrapeStateRetryQueued ScrapeState = "RETRY_QUEUED"
+	ScrapeStateCompleted   ScrapeState = "COMPLETED"
+)
+
+func (a *App) recordScrapeTask(itemID, kind, title, tmdbID string, state ScrapeState, lastErr error) {
+	if a == nil || a.db == nil || strings.TrimSpace(itemID) == "" {
+		return
+	}
+	now := time.Now().Unix()
+	var nextRetry int64
+	errMsg := ""
+	if lastErr != nil {
+		errMsg = lastErr.Error()
+	}
+
+	var currentCount int
+	_ = a.db.QueryRow("SELECT retry_count FROM tmdb_scrape_tasks WHERE item_id=?", itemID).Scan(&currentCount)
+
+	switch state {
+	case ScrapeStateRetryQueued:
+		currentCount++
+		backoffSeconds := int64(60)
+		switch {
+		case currentCount == 2:
+			backoffSeconds = 300
+		case currentCount == 3:
+			backoffSeconds = 900
+		case currentCount >= 4:
+			backoffSeconds = 3600
+		}
+		nextRetry = now + backoffSeconds
+	case ScrapeStatePendingTMDB:
+		currentCount++
+		backoffSeconds := int64(6 * 3600)
+		if currentCount > 2 {
+			backoffSeconds = int64(24 * 3600)
+		}
+		nextRetry = now + backoffSeconds
+	case ScrapeStateUpdating:
+		nextRetry = now + 6*3600
+	case ScrapeStateCompleted:
+		nextRetry = 0
+	}
+
+	_, _ = a.db.Exec(`
+INSERT INTO tmdb_scrape_tasks(item_id, kind, title, tmdb_id, state, retry_count, last_error, next_retry_at, updated_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(item_id) DO UPDATE SET
+	kind=excluded.kind,
+	title=excluded.title,
+	tmdb_id=CASE WHEN excluded.tmdb_id != '' THEN excluded.tmdb_id ELSE tmdb_scrape_tasks.tmdb_id END,
+	state=excluded.state,
+	retry_count=excluded.retry_count,
+	last_error=excluded.last_error,
+	next_retry_at=excluded.next_retry_at,
+	updated_at=excluded.updated_at
+`, itemID, kind, title, tmdbID, string(state), currentCount, errMsg, nextRetry, now)
+}
+
 func (a *App) cachedTMDBMeta(cacheKey string) (*tmdb.MediaMetadata, bool) {
 	if a.db == nil {
 		return nil, false
 	}
 	var raw string
-	if a.db.QueryRow("SELECT data FROM tmdb_metadata_cache WHERE cache_key=?", cacheKey).Scan(&raw) != nil || raw == "" {
+	var updated int64
+	var kind string
+	if a.db.QueryRow("SELECT data, updated, kind FROM tmdb_metadata_cache WHERE cache_key=?", cacheKey).Scan(&raw, &updated, &kind) != nil || raw == "" {
 		return nil, false
 	}
 	var m tmdb.MediaMetadata
 	if json.Unmarshal([]byte(raw), &m) != nil {
 		return nil, false
+	}
+	// For ongoing/updating series or season, check TTL (12 hours)
+	if m.InProduction || m.Status == "Returning Series" || (kind == "Season" && len(m.Overview) == 0) {
+		if time.Now().Unix()-updated > 12*3600 {
+			return nil, false
+		}
 	}
 	return &m, true
 }
@@ -274,7 +358,7 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 		return n
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	switch x.Kind {
@@ -285,9 +369,18 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 			if year == 0 {
 				year = x.Year
 			}
-			if results, err := cli.SearchMovie(ctx, cleanTitle, year); err == nil && len(results) > 0 {
-				tmdbID = strconv.Itoa(results[0].ID)
+			results, err := cli.SearchMovie(ctx, cleanTitle, year)
+			if err != nil {
+				if tmdb.IsRateLimitedOrTimeout(err) {
+					a.recordScrapeTask(x.ID, "Movie", x.Name, "", ScrapeStateRetryQueued, err)
+				}
+				return n
 			}
+			if len(results) == 0 {
+				a.recordScrapeTask(x.ID, "Movie", x.Name, "", ScrapeStatePendingTMDB, nil)
+				return n
+			}
+			tmdbID = strconv.Itoa(results[0].ID)
 		}
 		if tmdbID == "" {
 			return n
@@ -298,8 +391,16 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 				return tmdbMetaToSidecar(cached)
 			}
 		}
-		if meta, err := cli.GetMovie(ctx, tmdbID); err == nil && meta != nil {
+		meta, err := cli.GetMovie(ctx, tmdbID)
+		if err != nil {
+			if tmdb.IsRateLimitedOrTimeout(err) {
+				a.recordScrapeTask(x.ID, "Movie", x.Name, tmdbID, ScrapeStateRetryQueued, err)
+			}
+			return n
+		}
+		if meta != nil {
 			a.storeTMDBMeta(key, tmdbID, "Movie", meta)
+			a.recordScrapeTask(x.ID, "Movie", x.Name, tmdbID, ScrapeStateCompleted, nil)
 			return tmdbMetaToSidecar(meta)
 		}
 
@@ -310,9 +411,18 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 			if year == 0 {
 				year = x.Year
 			}
-			if results, err := cli.SearchTV(ctx, cleanTitle, year); err == nil && len(results) > 0 {
-				tmdbID = strconv.Itoa(results[0].ID)
+			results, err := cli.SearchTV(ctx, cleanTitle, year)
+			if err != nil {
+				if tmdb.IsRateLimitedOrTimeout(err) {
+					a.recordScrapeTask(x.ID, "Series", x.Name, "", ScrapeStateRetryQueued, err)
+				}
+				return n
 			}
+			if len(results) == 0 {
+				a.recordScrapeTask(x.ID, "Series", x.Name, "", ScrapeStatePendingTMDB, nil)
+				return n
+			}
+			tmdbID = strconv.Itoa(results[0].ID)
 		}
 		if tmdbID == "" {
 			return n
@@ -324,8 +434,19 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 			}
 		}
 		meta, err := cli.GetTV(ctx, tmdbID)
-		if err == nil && meta != nil {
+		if err != nil {
+			if tmdb.IsRateLimitedOrTimeout(err) {
+				a.recordScrapeTask(x.ID, "Series", x.Name, tmdbID, ScrapeStateRetryQueued, err)
+			}
+			return n
+		}
+		if meta != nil {
 			a.storeTMDBMeta(key, tmdbID, "Series", meta)
+			if meta.InProduction || meta.Status == "Returning Series" {
+				a.recordScrapeTask(x.ID, "Series", x.Name, tmdbID, ScrapeStateUpdating, nil)
+			} else {
+				a.recordScrapeTask(x.ID, "Series", x.Name, tmdbID, ScrapeStateCompleted, nil)
+			}
 			return tmdbMetaToSidecar(meta)
 		}
 
@@ -374,6 +495,9 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 		}
 		sMeta, eps, err := cli.GetTVSeason(ctx, tmdbID, seasonNum)
 		if err != nil {
+			if tmdb.IsRateLimitedOrTimeout(err) {
+				a.recordScrapeTask(x.ID, x.Kind, x.Name, tmdbID, ScrapeStateRetryQueued, err)
+			}
 			return n
 		}
 		if sMeta != nil {
@@ -383,6 +507,7 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 			a.storeTMDBMeta(seasonKey+":e:"+strconv.Itoa(epIdx), tmdbID, "Episode", epMeta)
 		}
 		if x.Kind == "Season" && sMeta != nil {
+			a.recordScrapeTask(x.ID, "Season", x.Name, tmdbID, ScrapeStateCompleted, nil)
 			return tmdbMetaToSidecar(sMeta)
 		}
 		if x.Kind == "Episode" {
@@ -391,11 +516,70 @@ func (a *App) resolveItemSidecar(x Item, forceRefresh bool) sidecar {
 				if sc.ThumbURL == "" && sc.PosterURL == "" && sMeta != nil && sMeta.PosterURL != "" {
 					sc.ThumbURL = sMeta.PosterURL
 				}
+				a.recordScrapeTask(x.ID, "Episode", x.Name, tmdbID, ScrapeStateCompleted, nil)
 				return sc
 			}
+			// Episode not yet listed in TMDB season (e.g. newly broadcasted) -> mark updating
+			a.recordScrapeTask(x.ID, "Episode", x.Name, tmdbID, ScrapeStateUpdating, nil)
 		}
 	}
 	return n
+}
+
+// ProcessPendingScrapes executes retries for failed/timed-out scrapes and reconciles ongoing or unlisted TMDB items.
+func (a *App) ProcessPendingScrapes(ctx context.Context, limit int) (int, error) {
+	if a == nil || a.db == nil {
+		return 0, nil
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	now := time.Now().Unix()
+	rows, err := a.db.Query(`
+SELECT item_id, kind, state, title, tmdb_id FROM tmdb_scrape_tasks
+WHERE state IN ('RETRY_QUEUED', 'PENDING_TMDB', 'UPDATING')
+  AND next_retry_at <= ?
+ORDER BY next_retry_at ASC
+LIMIT ?
+`, now, limit)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	type taskItem struct {
+		ItemID string
+		Kind   string
+		State  string
+		Title  string
+		TMDBID string
+	}
+	var tasks []taskItem
+	for rows.Next() {
+		var it taskItem
+		if err := rows.Scan(&it.ItemID, &it.Kind, &it.State, &it.Title, &it.TMDBID); err == nil {
+			tasks = append(tasks, it)
+		}
+	}
+	rows.Close()
+
+	processed := 0
+	for _, task := range tasks {
+		if ctx.Err() != nil {
+			break
+		}
+		var itemExists int
+		if a.db.QueryRow("SELECT 1 FROM items WHERE id=?", task.ItemID).Scan(&itemExists) != nil {
+			_, _ = a.db.Exec("DELETE FROM tmdb_scrape_tasks WHERE item_id=?", task.ItemID)
+			continue
+		}
+
+		if err := a.refreshSingleItemMetadata(task.ItemID, true); err != nil {
+			a.recordScrapeTask(task.ItemID, task.Kind, task.Title, task.TMDBID, ScrapeStateRetryQueued, err)
+		}
+		processed++
+	}
+	return processed, nil
 }
 
 func (a *App) refreshSingleItemMetadata(itemID string, force bool) error {

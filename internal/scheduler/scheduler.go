@@ -113,6 +113,32 @@ func New(store *discovery.SQLStore, pipeline *integration.Pipeline, monitorInter
 		Enabled:  true,
 		Fn:       s.runHotDirectoryReconcile,
 	})
+	s.register(TaskSpec{
+		Key:      "tmdb_scrape_retry",
+		Name:     "TMDB 刮削失败与超时自动重试",
+		Interval: 5 * time.Minute,
+		Enabled:  true,
+		Fn: func(ctx context.Context) error {
+			if s.pipeline == nil {
+				return nil
+			}
+			_, err := s.pipeline.ProcessPendingScrapes(ctx, 20)
+			return err
+		},
+	})
+	s.register(TaskSpec{
+		Key:      "tmdb_ongoing_reconcile",
+		Name:     "连载剧集与未收录作品追更对账",
+		Interval: 2 * time.Hour,
+		Enabled:  true,
+		Fn: func(ctx context.Context) error {
+			if s.pipeline == nil {
+				return nil
+			}
+			_, err := s.pipeline.ProcessPendingScrapes(ctx, 50)
+			return err
+		},
+	})
 	return s
 }
 

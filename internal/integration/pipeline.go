@@ -343,6 +343,15 @@ func (p *Pipeline) RunMetadataMatchJobs(ctx context.Context, limit int) error {
 	return nil
 }
 
+// ProcessPendingScrapes delegates to the underlying Emby app to retry transient scrape failures
+// and refresh ongoing or newly-listed TMDB series.
+func (p *Pipeline) ProcessPendingScrapes(ctx context.Context, limit int) (int, error) {
+	if p == nil || p.app == nil {
+		return 0, nil
+	}
+	return p.app.ProcessPendingScrapes(ctx, limit)
+}
+
 // ConfirmMetadataMatch applies an administrator-selected TMDB ID and uses the
 // same media/version identity update as automatic matching.
 func (p *Pipeline) ConfirmMetadataMatch(ctx context.Context, resourceID, externalID string) error {

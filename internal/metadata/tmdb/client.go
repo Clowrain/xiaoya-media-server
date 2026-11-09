@@ -81,6 +81,8 @@ type MediaMetadata struct {
 	ThumbURL      string         `json:"thumb_url"`
 	Season        int            `json:"season,omitempty"`
 	Episode       int            `json:"episode,omitempty"`
+	Status        string         `json:"status,omitempty"`
+	InProduction  bool           `json:"in_production,omitempty"`
 }
 
 func NewClient(opts Options) *Client {
@@ -126,7 +128,7 @@ func NewClient(opts Options) *Client {
 	}
 	interval := opts.MinInterval
 	if interval <= 0 {
-		interval = 50 * time.Millisecond
+		interval = 250 * time.Millisecond
 	}
 	return &Client{
 		apiKey:      strings.TrimSpace(opts.APIKey),
@@ -186,6 +188,38 @@ func (c *Client) throttle(ctx context.Context) error {
 	}
 }
 
+func parseRetryAfter(val string) time.Duration {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 0
+	}
+	if sec, err := strconv.Atoi(val); err == nil && sec > 0 {
+		return time.Duration(sec) * time.Second
+	}
+	if t, err := http.ParseTime(val); err == nil {
+		diff := time.Until(t)
+		if diff > 0 {
+			return diff
+		}
+	}
+	return 0
+}
+
+// IsRateLimitedOrTimeout checks if an error indicates rate limiting, timeout, or transient network failure.
+func IsRateLimitedOrTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "context deadline exceeded") ||
+		strings.Contains(s, "429") ||
+		strings.Contains(s, "timeout") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "temporarily unavailable") ||
+		strings.Contains(s, "rate limit") ||
+		strings.Contains(s, "eof")
+}
+
 func (c *Client) getJSON(ctx context.Context, apiPath string, params url.Values, out any) error {
 	if !c.Configured() {
 		return fmt.Errorf("TMDB API key not configured")
@@ -208,13 +242,14 @@ func (c *Client) getJSON(ctx context.Context, apiPath string, params url.Values,
 		reqURL += "?" + enc
 	}
 	var lastErr error
-	maxRetries := 2
+	maxRetries := 3
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
+			backoff := time.Duration(attempt*500) * time.Millisecond
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(time.Duration(attempt*250) * time.Millisecond):
+			case <-time.After(backoff):
 			}
 		}
 
@@ -238,7 +273,24 @@ func (c *Client) getJSON(ctx context.Context, apiPath string, params url.Values,
 		if res.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
 			res.Body.Close()
-			return fmt.Errorf("TMDB HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(bodyBytes)))
+			msg := strings.TrimSpace(string(bodyBytes))
+			if res.StatusCode == http.StatusTooManyRequests ||
+				res.StatusCode == http.StatusBadGateway ||
+				res.StatusCode == http.StatusServiceUnavailable ||
+				res.StatusCode == http.StatusGatewayTimeout {
+				retryAfter := parseRetryAfter(res.Header.Get("Retry-After"))
+				if retryAfter <= 0 {
+					retryAfter = time.Duration((attempt+1)*500) * time.Millisecond
+				}
+				lastErr = fmt.Errorf("TMDB HTTP %d: %s", res.StatusCode, msg)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(retryAfter):
+				}
+				continue
+			}
+			return fmt.Errorf("TMDB HTTP %d: %s", res.StatusCode, msg)
 		}
 
 		decodeErr := json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(out)
@@ -248,6 +300,12 @@ func (c *Client) getJSON(ctx context.Context, apiPath string, params url.Values,
 
 	if lastErr != nil {
 		errStr := lastErr.Error()
+		if strings.Contains(errStr, "context deadline exceeded") {
+			return fmt.Errorf("TMDB 请求超时 (context deadline exceeded): TMDB 响应过慢或请求过于频繁，任务已加入自动重试队列")
+		}
+		if strings.Contains(errStr, "429") {
+			return fmt.Errorf("TMDB 请求限流 (HTTP 429): TMDB 请求过于频繁，已自动排队稍后重试")
+		}
 		if strings.Contains(errStr, "EOF") || strings.Contains(errStr, "connection reset") || strings.Contains(errStr, "operation timed out") || strings.Contains(errStr, "no such host") {
 			return fmt.Errorf("TMDB 请求失败 (%s): 无法直连 TMDB 官方服务器，请在管理后台 [TMDB 刮削与识别] 中配置网络代理 ProxyURL (如 Clash/局域网代理) 或修改 BaseURL 为可用反代镜像", errStr)
 		}
@@ -463,6 +521,8 @@ func (c *Client) GetTV(ctx context.Context, tmdbID string) (*MediaMetadata, erro
 		VoteAverage      float64   `json:"vote_average"`
 		PosterPath       string    `json:"poster_path"`
 		BackdropPath     string    `json:"backdrop_path"`
+		Status           string    `json:"status"`
+		InProduction     bool      `json:"in_production"`
 		Genres           []struct{ Name string `json:"name"` } `json:"genres"`
 		Networks         []struct{ Name string `json:"name"` } `json:"networks"`
 		ProductionCos    []struct{ Name string `json:"name"` } `json:"production_companies"`
@@ -504,6 +564,8 @@ func (c *Client) GetTV(ctx context.Context, tmdbID string) (*MediaMetadata, erro
 		RuntimeMin:    runtime,
 		PosterURL:     c.ImageURL("w500", raw.PosterPath),
 		BackdropURL:   c.ImageURL("w1280", raw.BackdropPath),
+		Status:        raw.Status,
+		InProduction:  raw.InProduction,
 	}
 	for _, g := range raw.Genres {
 		if g.Name != "" {

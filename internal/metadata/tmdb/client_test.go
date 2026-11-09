@@ -115,3 +115,45 @@ func TestClientGetTVAndSeason(t *testing.T) {
 		t.Fatalf("unexpected season/episode metadata: %+v %+v", season, eps[1])
 	}
 }
+
+func TestClientRetryOn429(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts <= 2 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"status_code":25,"status_message":"Your request count (#) is over the allowed limit of (40)."}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":           999,
+			"title":        "测试成功电影",
+			"overview":     "测试成功简介",
+			"release_date": "2026-01-01",
+		})
+	}))
+	defer srv.Close()
+
+	cli := NewClient(Options{
+		APIKey:      "test-key",
+		BaseURL:     srv.URL,
+		MinInterval: time.Millisecond,
+	})
+	movie, err := cli.GetMovie(context.Background(), "999")
+	if err != nil {
+		t.Fatalf("expected 429 retry to succeed, got error: %v", err)
+	}
+	if movie.Title != "测试成功电影" {
+		t.Fatalf("unexpected title: %s", movie.Title)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestIsRateLimitedOrTimeout(t *testing.T) {
+	if !IsRateLimitedOrTimeout(context.DeadlineExceeded) {
+		t.Error("expected context.DeadlineExceeded to be detected")
+	}
+}
