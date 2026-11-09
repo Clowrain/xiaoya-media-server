@@ -162,7 +162,7 @@ export async function fetchNextUpItems(userId: string): Promise<MediaItem[]> {
 
 export async function fetchLatestItems(userId: string, parentId?: string): Promise<MediaItem[]> {
   try {
-    const url = `/emby/Users/${userId}/Items/Latest?Limit=16&Fields=Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources${parentId ? `&ParentId=${encodeURIComponent(parentId)}` : ''}`;
+    const url = `/emby/Users/${userId}/Items/Latest?Limit=16&Fields=Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources,ChildCount,RecursiveItemCount,EpisodeCount${parentId ? `&ParentId=${encodeURIComponent(parentId)}` : ''}`;
     const data = await request(url);
     if (Array.isArray(data)) return data;
     return data.Items || [];

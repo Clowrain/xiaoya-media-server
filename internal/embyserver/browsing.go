@@ -347,6 +347,16 @@ func (a *App) decorateImages(x Item, m M) {
 		var n int
 		a.db.QueryRow("SELECT count(*) FROM items WHERE parent=?", x.ID).Scan(&n)
 		m["ChildCount"] = n
+		if x.Kind == "Series" {
+			var episodes int
+			a.db.QueryRow(`WITH RECURSIVE tree(id) AS (
+				SELECT id FROM items WHERE parent=?
+				UNION
+				SELECT items.id FROM items JOIN tree ON items.parent=tree.id
+			) SELECT count(*) FROM items WHERE id IN (SELECT id FROM tree) AND kind='Episode'`, x.ID).Scan(&episodes)
+			m["RecursiveItemCount"] = episodes
+			m["EpisodeCount"] = episodes
+		}
 	}
 	if x.Kind == "Season" {
 		m["IndexNumber"] = x.Season

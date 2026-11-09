@@ -155,7 +155,7 @@ export const MediaWall: React.FC<MediaWallProps> = ({
     const is4K = item.Name.toLowerCase().includes('4k') || item.Name.toLowerCase().includes('2160p') || (item.Path && item.Path.toLowerCase().includes('4k'));
     
     if (item.Type === 'Series') {
-      const epCount = item.ChildCount || item.IndexNumber || 0;
+      const epCount = item.RecursiveItemCount || item.EpisodeCount || item.ChildCount || 0;
       return (
         <div className="absolute top-2 right-2 flex items-center gap-1 z-10">
           {is4K && (
@@ -164,8 +164,8 @@ export const MediaWall: React.FC<MediaWallProps> = ({
             </span>
           )}
           {epCount > 0 && (
-            <span className="w-6 h-6 rounded-full bg-emerald-500 text-white font-bold text-[11px] flex items-center justify-center shadow-lg border border-black/40">
-              {epCount}
+            <span className="h-6 px-1.5 rounded-full bg-emerald-500 text-white font-bold text-[11px] flex items-center justify-center shadow-lg border border-black/40 min-w-6">
+              {epCount}集
             </span>
           )}
         </div>
@@ -342,7 +342,7 @@ export const MediaWall: React.FC<MediaWallProps> = ({
               onClick={() => setSelectedViewId(v.Id)}
             >
               <h2 className="text-lg font-bold text-white tracking-tight group-hover:text-emerald-400 transition">
-                最新{v.Name}
+                {v.Name}
               </h2>
               <ChevronRight className="w-5 h-5 text-zinc-500 group-hover:text-emerald-400 transition transform group-hover:translate-x-0.5" />
             </div>

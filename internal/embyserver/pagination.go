@@ -288,6 +288,19 @@ func (a *App) listDTO(x Item, r *http.Request, u User) M {
 	if x.Kind == "Movie" || x.Kind == "Series" {
 		delete(m, "IndexNumber")
 		delete(m, "ParentIndexNumber")
+		if x.Kind == "Series" {
+			var n int
+			a.db.QueryRow("SELECT count(*) FROM items WHERE parent=?", x.ID).Scan(&n)
+			m["ChildCount"] = n
+			var episodes int
+			a.db.QueryRow(`WITH RECURSIVE tree(id) AS (
+				SELECT id FROM items WHERE parent=?
+				UNION
+				SELECT items.id FROM items JOIN tree ON items.parent=tree.id
+			) SELECT count(*) FROM items WHERE id IN (SELECT id FROM tree) AND kind='Episode'`, x.ID).Scan(&episodes)
+			m["RecursiveItemCount"] = episodes
+			m["EpisodeCount"] = episodes
+		}
 	}
 	if x.Year <= 0 {
 		delete(m, "ProductionYear")

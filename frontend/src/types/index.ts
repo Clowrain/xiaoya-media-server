@@ -43,6 +43,7 @@ export interface MediaItem {
   IsFolder?: boolean;
   ChildCount?: number;
   RecursiveItemCount?: number;
+  EpisodeCount?: number;
   UserData?: {
     PlaybackPositionTicks?: number;
     Played?: boolean;
