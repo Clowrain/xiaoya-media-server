@@ -234,6 +234,18 @@ func isRemoteURL(s string) bool {
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
+// cleanDisplayXiaoyaURL normalizes media source URL for clean display in Emby clients (SenPlayer, VidHub, Infuse).
+// It strips transient query parameters like ?sign=... so the full canonical xiaoya path is displayed.
+func cleanDisplayXiaoyaURL(raw string) string {
+	if !isRemoteURL(raw) {
+		return raw
+	}
+	if idx := strings.IndexByte(raw, '?'); idx >= 0 {
+		return raw[:idx]
+	}
+	return raw
+}
+
 func (a *App) viewerSource(x Item, r *http.Request, u User) M {
 	m := a.source(x, token(r))
 	meta := M{}
@@ -260,7 +272,7 @@ func (a *App) viewerSource(x Item, r *http.Request, u User) M {
 			host = forwarded
 		}
 		if isRemoteURL(x.URL) {
-			m["Path"] = x.URL
+			m["Path"] = cleanDisplayXiaoyaURL(x.URL)
 		} else {
 			m["Path"] = scheme + "://" + host + p
 		}
@@ -274,7 +286,7 @@ func (a *App) viewerDTO(x Item, r *http.Request, u User) M {
 	m := a.dto(x)
 	if !u.API {
 		if isRemoteURL(x.URL) {
-			m["Path"] = x.URL
+			m["Path"] = cleanDisplayXiaoyaURL(x.URL)
 		} else {
 			delete(m, "Path")
 		}

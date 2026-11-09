@@ -95,3 +95,42 @@ func TestSTRMMediaInfoPreservesRawContentAndKeepsPlaybackGateway(t *testing.T) {
 		t.Fatalf("出流地址不匹配: got %v", wStream.Header().Get("Location"))
 	}
 }
+
+func TestSTRMMediaInfoCleansTransientSignForClientDisplay(t *testing.T) {
+	a := &App{}
+
+	signedSTRM := "http://xiaoya.host:5678/d/每日更新/电视剧/国产剧/走马上任/01.mp4?sign=SIGN_STR"
+	wantClean := "http://xiaoya.host:5678/d/每日更新/电视剧/国产剧/走马上任/01.mp4"
+
+	item := Item{
+		ID:      "zmsr-ep1",
+		Lib:     "lib1",
+		Name:    "走马上任 E01",
+		Kind:    "Episode",
+		Path:    "/data/xiaoya/每日更新/电视剧/国产剧/走马上任/01.strm",
+		URL:     signedSTRM,
+		Season:  1,
+		Episode: 1,
+	}
+
+	req := httptest.NewRequest("GET", "http://server:7799/Items/"+item.ID+"?api_key=test-token", nil)
+	u := User{ID: "viewer"}
+
+	dto := a.viewerDTO(item, req, u)
+	if dto["Path"] != wantClean {
+		t.Fatalf("viewerDTO Path 应净化掉 sign: got %v, want %v", dto["Path"], wantClean)
+	}
+
+	sources, ok := dto["MediaSources"].([]M)
+	if !ok || len(sources) == 0 {
+		t.Fatalf("未找到 MediaSources")
+	}
+	if sources[0]["Path"] != wantClean {
+		t.Fatalf("MediaSources[0].Path 应净化掉 sign: got %v, want %v", sources[0]["Path"], wantClean)
+	}
+
+	vSources := a.versionSources(item, req, u, false)
+	if len(vSources) == 0 || vSources[0]["Path"] != wantClean {
+		t.Fatalf("versionSources[0].Path 应净化掉 sign: got %v, want %v", vSources[0]["Path"], wantClean)
+	}
+}
