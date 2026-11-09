@@ -1386,7 +1386,11 @@ func (a *App) source(x Item, t string) M {
 	if ext == "" || len(ext) > 5 {
 		ext = "mkv"
 	}
-	return M{"Id": x.ID, "Name": x.Name, "Path": cleanURL, "Protocol": "Http", "Type": "Default", "Container": ext, "IsRemote": true, "SupportsDirectPlay": true, "SupportsDirectStream": true, "SupportsTranscoding": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": []any{}, "DirectStreamUrl": "/emby/Videos/" + x.ID + "/stream." + ext + "?Static=true&api_key=" + url.QueryEscape(t), "AddApiKeyToDirectStreamUrl": false}
+	name := x.Name
+	if isRemoteURL(x.URL) {
+		name = cleanURL
+	}
+	return M{"Id": x.ID, "Name": name, "Path": cleanURL, "Protocol": "Http", "Type": "Default", "Container": ext, "IsRemote": true, "SupportsDirectPlay": true, "SupportsDirectStream": true, "SupportsTranscoding": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": []any{}, "DirectStreamUrl": "/emby/Videos/" + x.ID + "/stream." + ext + "?Static=true&api_key=" + url.QueryEscape(t), "AddApiKeyToDirectStreamUrl": false}
 }
 func (a *App) single(w http.ResponseWriter, r *http.Request, u User, i string) {
 	if i == "root" || i == a.serverID {

@@ -272,7 +272,9 @@ func (a *App) viewerSource(x Item, r *http.Request, u User) M {
 			host = forwarded
 		}
 		if isRemoteURL(x.URL) {
-			m["Path"] = cleanDisplayXiaoyaURL(x.URL)
+			clean := cleanDisplayXiaoyaURL(x.URL)
+			m["Path"] = clean
+			m["Name"] = clean
 		} else {
 			m["Path"] = scheme + "://" + host + p
 		}

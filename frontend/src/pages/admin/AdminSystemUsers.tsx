@@ -249,6 +249,25 @@ export const AdminSystemUsers: React.FC = () => {
               />
             </label>
 
+            <div>
+              <label className="block text-[11px] font-semibold text-zinc-400 mb-1">
+                服务器展示名称 (Server Name)
+              </label>
+              <input
+                type="text"
+                value={enhancements.ServerName ?? ''}
+                placeholder="xiaoya-media"
+                maxLength={128}
+                onChange={(e) =>
+                  setEnhancements({ ...enhancements, ServerName: e.target.value })
+                }
+                className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-zinc-200 text-xs focus:outline-none focus:border-emerald-500"
+              />
+              <span className="text-[10px] text-zinc-500 mt-1 block">
+                客户端（如 SenPlayer、VidHub、Infuse、Emby）连接与媒体信息底部展示的服务端名称，默认 xiaoya-media
+              </span>
+            </div>
+
             <div className="pt-2 flex justify-end">
               <button
                 type="submit"

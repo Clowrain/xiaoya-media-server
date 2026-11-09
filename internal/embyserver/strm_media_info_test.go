@@ -128,9 +128,19 @@ func TestSTRMMediaInfoCleansTransientSignForClientDisplay(t *testing.T) {
 	if sources[0]["Path"] != wantClean {
 		t.Fatalf("MediaSources[0].Path 应净化掉 sign: got %v, want %v", sources[0]["Path"], wantClean)
 	}
+	if sources[0]["Name"] != wantClean {
+		t.Fatalf("MediaSources[0].Name 应显示为净化后的完整小雅长路径: got %v, want %v", sources[0]["Name"], wantClean)
+	}
 
 	vSources := a.versionSources(item, req, u, false)
 	if len(vSources) == 0 || vSources[0]["Path"] != wantClean {
 		t.Fatalf("versionSources[0].Path 应净化掉 sign: got %v, want %v", vSources[0]["Path"], wantClean)
+	}
+	if vSources[0]["Name"] != wantClean {
+		t.Fatalf("versionSources[0].Name 应显示为净化后的完整小雅长路径: got %v, want %v", vSources[0]["Name"], wantClean)
+	}
+
+	if defName := a.displayName(); defName != "xiaoya-media" {
+		t.Fatalf("默认服务器名称应为 xiaoya-media, got %s", defName)
 	}
 }

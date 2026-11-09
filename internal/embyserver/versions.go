@@ -66,7 +66,13 @@ func (a *App) versionSources(x Item, r *http.Request, u User, display bool) []M 
 	}
 	for _, v := range versions {
 		m := a.viewerSource(v, r, u)
-		m["Name"] = filepath.Base(v.Path)
+		if isRemoteURL(v.URL) {
+			clean := cleanDisplayXiaoyaURL(v.URL)
+			m["Name"] = clean
+			m["Path"] = clean
+		} else {
+			m["Name"] = filepath.Base(v.Path)
+		}
 		m["ItemId"] = v.ID
 		m["LibraryId"] = v.Lib
 		out = append(out, m)

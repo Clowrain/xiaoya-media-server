@@ -1,7 +1,9 @@
 package embyserver
 
 import (
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -32,11 +34,16 @@ func (a *App) jobLimit(update bool) int {
 }
 func (a *App) displayName() string {
 	var v string
-	a.db.QueryRow("SELECT v FROM settings WHERE k='server_name'").Scan(&v)
-	if v == "" {
-		return "go-emby"
+	if a.db != nil {
+		a.db.QueryRow("SELECT v FROM settings WHERE k='server_name'").Scan(&v)
 	}
-	return v
+	if v != "" {
+		return v
+	}
+	if env := strings.TrimSpace(os.Getenv("SERVER_NAME")); env != "" {
+		return env
+	}
+	return "xiaoya-media"
 }
 func (a *App) maskedKey(key string) string {
 	var v string

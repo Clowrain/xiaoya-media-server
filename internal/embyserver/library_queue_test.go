@@ -10,7 +10,7 @@ import (
 
 func TestLibraryQueueLimits(t *testing.T) {
 	a := testApp(t)
-	if a.jobLimit(false) != 2 || a.jobLimit(true) != 2 || a.displayName() != "go-emby" {
+	if a.jobLimit(false) != 2 || a.jobLimit(true) != 2 || a.displayName() != "xiaoya-media" {
 		t.Fatal("incorrect defaults")
 	}
 	r1 := a.acquireLibraryJob("a", false)
