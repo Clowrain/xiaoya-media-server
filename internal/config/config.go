@@ -77,6 +77,7 @@ type TMDBConfig struct {
 	Language string `yaml:"language"`
 	BaseURL  string `yaml:"base_url"`
 	ImageURL string `yaml:"image_url"`
+	ProxyURL string `yaml:"proxy_url"`
 }
 
 type PlaybackConfig struct {
@@ -231,6 +232,12 @@ func (c *Config) applyEnv() {
 	}
 	if v := strings.TrimSpace(os.Getenv("TMDB_LANGUAGE")); v != "" {
 		c.Metadata.TMDB.Language = v
+	}
+	if v := strings.TrimSpace(os.Getenv("TMDB_PROXY")); v != "" {
+		c.Metadata.TMDB.ProxyURL = v
+	}
+	if v := strings.TrimSpace(os.Getenv("TMDB_BASE_URL")); v != "" {
+		c.Metadata.TMDB.BaseURL = v
 	}
 }
 

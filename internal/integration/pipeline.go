@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -195,20 +196,42 @@ func (p *Pipeline) ImportSQLitePath(ctx context.Context, rootPath, libraryID, ou
 	return p.ImportManifestPath(ctx, rootPath, libraryID, outputDir, track)
 }
 
+func (p *Pipeline) tmdbClient() *tmdb.Client {
+	if p == nil {
+		return nil
+	}
+	if p.app != nil {
+		if cli := p.app.TMDBClient(); cli != nil {
+			return cli
+		}
+	}
+	if p.cfg == nil || !p.cfg.Metadata.TMDB.Enabled || strings.TrimSpace(p.cfg.Metadata.TMDB.APIKey) == "" {
+		return nil
+	}
+	proxyStr := strings.TrimSpace(p.cfg.Metadata.TMDB.ProxyURL)
+	if proxyStr == "" {
+		proxyStr = strings.TrimSpace(os.Getenv("TMDB_PROXY"))
+	}
+	return tmdb.NewClient(tmdb.Options{
+		APIKey:   p.cfg.Metadata.TMDB.APIKey,
+		Language: p.cfg.Metadata.TMDB.Language,
+		BaseURL:  p.cfg.Metadata.TMDB.BaseURL,
+		ImageURL: p.cfg.Metadata.TMDB.ImageURL,
+		ProxyURL: proxyStr,
+	})
+}
+
 // RunMetadataMatchJobs performs bounded TMDB matching for deterministic V2
 // identities. A candidate is auto-bound only when it is unambiguous; otherwise
 // the recognition row remains available for administrator confirmation.
 func (p *Pipeline) RunMetadataMatchJobs(ctx context.Context, limit int) error {
-	if p == nil || p.cfg == nil || !p.cfg.Metadata.TMDB.Enabled || strings.TrimSpace(p.cfg.Metadata.TMDB.APIKey) == "" {
+	cli := p.tmdbClient()
+	if cli == nil {
 		return nil
 	}
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	cli := tmdb.NewClient(tmdb.Options{
-		APIKey: p.cfg.Metadata.TMDB.APIKey, Language: p.cfg.Metadata.TMDB.Language,
-		BaseURL: p.cfg.Metadata.TMDB.BaseURL, ImageURL: p.cfg.Metadata.TMDB.ImageURL,
-	})
 	worker := "metadata-match"
 	cache := make(map[string]tmdb.MediaMetadata, limit)
 	type seasonBundle struct {
@@ -338,7 +361,10 @@ func (p *Pipeline) ConfirmMetadataMatch(ctx context.Context, resourceID, externa
 	if identity.State == "" || identity.MediaType == "" {
 		return errors.New("资源无法确定电影或节目类型")
 	}
-	cli := tmdb.NewClient(tmdb.Options{APIKey: p.cfg.Metadata.TMDB.APIKey, Language: p.cfg.Metadata.TMDB.Language, BaseURL: p.cfg.Metadata.TMDB.BaseURL, ImageURL: p.cfg.Metadata.TMDB.ImageURL})
+	cli := p.tmdbClient()
+	if cli == nil {
+		return errors.New("TMDB 服务未配置或未启用")
+	}
 	var meta *tmdb.MediaMetadata
 	if identity.MediaType == "MOVIE" {
 		meta, err = cli.GetMovie(ctx, externalID)

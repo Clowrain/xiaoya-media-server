@@ -127,7 +127,10 @@ func (a *App) currentTMDBSettings() tmdbStoredSettings {
 	return s
 }
 
-func (a *App) tmdbClient() *tmdb.Client {
+func (a *App) TMDBClient() *tmdb.Client {
+	if a == nil {
+		return nil
+	}
 	s := a.currentTMDBSettings()
 	if !s.Enabled || strings.TrimSpace(s.APIKey) == "" {
 		return nil
@@ -139,6 +142,10 @@ func (a *App) tmdbClient() *tmdb.Client {
 		ImageURL: s.ImageURL,
 		ProxyURL: s.ProxyURL,
 	})
+}
+
+func (a *App) tmdbClient() *tmdb.Client {
+	return a.TMDBClient()
 }
 
 func tmdbMetaToSidecar(m *tmdb.MediaMetadata) sidecar {

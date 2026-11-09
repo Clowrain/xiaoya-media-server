@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"xiaoya-media-server/internal/config"
 	"xiaoya-media-server/internal/metadata/tmdb"
 	"xiaoya-media-server/internal/resource/xiaoya"
 )
@@ -31,5 +32,29 @@ func TestManifestScannerAutoDetect(t *testing.T) {
 	detected := xiaoya.AutoDetectStrmText("", tmp+"/strm_internal.db")
 	if detected != txtPath {
 		t.Fatalf("expected auto-detected %s, got %s", txtPath, detected)
+	}
+}
+
+func TestPipelineTMDBClientInheritsConfigAndProxy(t *testing.T) {
+	p := &Pipeline{
+		cfg: &config.Config{
+			Metadata: config.MetadataConfig{
+				TMDB: config.TMDBConfig{
+					Enabled:  true,
+					APIKey:   "test-api-key",
+					Language: "zh-CN",
+					BaseURL:  "https://custom-tmdb.example.com/3",
+					ProxyURL: "http://127.0.0.1:7890",
+				},
+			},
+		},
+	}
+
+	cli := p.tmdbClient()
+	if cli == nil {
+		t.Fatal("expected non-nil tmdb client from pipeline")
+	}
+	if !cli.Configured() {
+		t.Fatal("expected tmdb client to be configured")
 	}
 }
