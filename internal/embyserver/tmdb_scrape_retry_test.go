@@ -317,3 +317,41 @@ func TestBatchScanSeriesCascadeAndArtifactsPersistence(t *testing.T) {
 		t.Errorf("episode 01.nfo not created: %v", err)
 	}
 }
+
+func TestCurrentTMDBSettingsEnvOverrides(t *testing.T) {
+	t.Setenv("TMDB_ENABLED", "true")
+	t.Setenv("TMDB_API_KEY", "env-key-999")
+	t.Setenv("TMDB_PROXY", "http://10.0.0.1:7890")
+	t.Setenv("TMDB_BASE_URL", "https://api.mirror.com/3")
+	t.Setenv("TMDB_IMAGE_URL", "https://image.mirror.com/t/p")
+	t.Setenv("TMDB_LANGUAGE", "zh-CN")
+	t.Setenv("TMDB_RATE_LIMIT_MS", "350")
+	t.Setenv("TMDB_SAVE_ARTIFACTS", "true")
+
+	app := &App{}
+	s := app.currentTMDBSettings()
+	if !s.Enabled {
+		t.Error("expected Enabled to be true")
+	}
+	if s.APIKey != "env-key-999" {
+		t.Errorf("APIKey = %q, want 'env-key-999'", s.APIKey)
+	}
+	if s.ProxyURL != "http://10.0.0.1:7890" {
+		t.Errorf("ProxyURL = %q, want 'http://10.0.0.1:7890'", s.ProxyURL)
+	}
+	if s.BaseURL != "https://api.mirror.com/3" {
+		t.Errorf("BaseURL = %q, want 'https://api.mirror.com/3'", s.BaseURL)
+	}
+	if s.ImageURL != "https://image.mirror.com/t/p" {
+		t.Errorf("ImageURL = %q, want 'https://image.mirror.com/t/p'", s.ImageURL)
+	}
+	if s.Language != "zh-CN" {
+		t.Errorf("Language = %q, want 'zh-CN'", s.Language)
+	}
+	if s.RateLimitMs != 350 {
+		t.Errorf("RateLimitMs = %d, want 350", s.RateLimitMs)
+	}
+	if !s.SaveArtifactsToMediaDir {
+		t.Error("expected SaveArtifactsToMediaDir to be true")
+	}
+}

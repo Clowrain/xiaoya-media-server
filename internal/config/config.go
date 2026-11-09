@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,12 +73,14 @@ type MetadataConfig struct {
 }
 
 type TMDBConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	APIKey   string `yaml:"api_key"`
-	Language string `yaml:"language"`
-	BaseURL  string `yaml:"base_url"`
-	ImageURL string `yaml:"image_url"`
-	ProxyURL string `yaml:"proxy_url"`
+	Enabled                 bool   `yaml:"enabled"`
+	APIKey                  string `yaml:"api_key"`
+	Language                string `yaml:"language"`
+	BaseURL                 string `yaml:"base_url"`
+	ImageURL                string `yaml:"image_url"`
+	ProxyURL                string `yaml:"proxy_url"`
+	RateLimitMs             int    `yaml:"rate_limit_ms"`
+	SaveArtifactsToMediaDir bool   `yaml:"save_artifacts_to_media_dir"`
 }
 
 type PlaybackConfig struct {
@@ -123,10 +126,12 @@ func Default() *Config {
 		Metadata: MetadataConfig{
 			NFOPolicy: "prefer",
 			TMDB: TMDBConfig{
-				Enabled:  true,
-				Language: "zh-CN",
-				BaseURL:  "https://api.themoviedb.org/3",
-				ImageURL: "https://image.tmdb.org/t/p",
+				Enabled:                 true,
+				Language:                "zh-CN",
+				BaseURL:                 "https://api.themoviedb.org/3",
+				ImageURL:                "https://image.tmdb.org/t/p",
+				RateLimitMs:             250,
+				SaveArtifactsToMediaDir: false,
 			},
 		},
 		Playback: PlaybackConfig{
@@ -227,6 +232,9 @@ func (c *Config) applyEnv() {
 	if v := strings.TrimSpace(os.Getenv("ALIST_TOKEN")); v != "" {
 		c.AList.Token = v
 	}
+	if v := strings.TrimSpace(os.Getenv("TMDB_ENABLED")); v != "" {
+		c.Metadata.TMDB.Enabled = strings.EqualFold(v, "true") || v == "1"
+	}
 	if v := strings.TrimSpace(os.Getenv("TMDB_API_KEY")); v != "" {
 		c.Metadata.TMDB.APIKey = v
 	}
@@ -235,9 +243,28 @@ func (c *Config) applyEnv() {
 	}
 	if v := strings.TrimSpace(os.Getenv("TMDB_PROXY")); v != "" {
 		c.Metadata.TMDB.ProxyURL = v
+	} else if v := strings.TrimSpace(os.Getenv("TMDB_PROXY_URL")); v != "" {
+		c.Metadata.TMDB.ProxyURL = v
 	}
 	if v := strings.TrimSpace(os.Getenv("TMDB_BASE_URL")); v != "" {
 		c.Metadata.TMDB.BaseURL = v
+	}
+	if v := strings.TrimSpace(os.Getenv("TMDB_IMAGE_URL")); v != "" {
+		c.Metadata.TMDB.ImageURL = v
+	}
+	if v := strings.TrimSpace(os.Getenv("TMDB_RATE_LIMIT_MS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Metadata.TMDB.RateLimitMs = n
+		}
+	} else if v := strings.TrimSpace(os.Getenv("TMDB_MIN_INTERVAL_MS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Metadata.TMDB.RateLimitMs = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("TMDB_SAVE_ARTIFACTS")); v != "" {
+		c.Metadata.TMDB.SaveArtifactsToMediaDir = strings.EqualFold(v, "true") || v == "1"
+	} else if v := strings.TrimSpace(os.Getenv("TMDB_SAVE_ARTIFACTS_TO_MEDIA_DIR")); v != "" {
+		c.Metadata.TMDB.SaveArtifactsToMediaDir = strings.EqualFold(v, "true") || v == "1"
 	}
 }
 

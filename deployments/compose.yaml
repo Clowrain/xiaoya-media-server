@@ -38,9 +38,15 @@ services:
       XIAOYA_USERNAME: ${XIAOYA_USERNAME:-}
       XIAOYA_PASSWORD: ${XIAOYA_PASSWORD:-}
       ALIST_TOKEN: ${ALIST_TOKEN:-}
-      # TMDB 刮削配置
+      # TMDB 刮削与识别服务配置
+      TMDB_ENABLED: ${TMDB_ENABLED:-true}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+      TMDB_PROXY: ${TMDB_PROXY:-${TMDB_PROXY_URL:-}}
+      TMDB_BASE_URL: ${TMDB_BASE_URL:-https://api.themoviedb.org/3}
+      TMDB_IMAGE_URL: ${TMDB_IMAGE_URL:-https://image.tmdb.org/t/p}
       TMDB_LANGUAGE: ${TMDB_LANGUAGE:-zh-CN}
+      TMDB_RATE_LIMIT_MS: ${TMDB_RATE_LIMIT_MS:-250}
+      TMDB_SAVE_ARTIFACTS: ${TMDB_SAVE_ARTIFACTS:-false}
     volumes:
       # 将小雅主目录挂载进容器只读 (:ro)，容器内可直接访问 /xiaoya-db/strm.txt
       - ${XIAOYA_DIR:-${XIAOYA_DB_DIR:?请设置小雅所在宿主机目录 XIAOYA_DIR}}:/xiaoya-db:ro

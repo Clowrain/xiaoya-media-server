@@ -212,12 +212,17 @@ func (p *Pipeline) tmdbClient() *tmdb.Client {
 	if proxyStr == "" {
 		proxyStr = strings.TrimSpace(os.Getenv("TMDB_PROXY"))
 	}
+	interval := time.Duration(p.cfg.Metadata.TMDB.RateLimitMs) * time.Millisecond
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
 	return tmdb.NewClient(tmdb.Options{
-		APIKey:   p.cfg.Metadata.TMDB.APIKey,
-		Language: p.cfg.Metadata.TMDB.Language,
-		BaseURL:  p.cfg.Metadata.TMDB.BaseURL,
-		ImageURL: p.cfg.Metadata.TMDB.ImageURL,
-		ProxyURL: proxyStr,
+		APIKey:      p.cfg.Metadata.TMDB.APIKey,
+		Language:    p.cfg.Metadata.TMDB.Language,
+		BaseURL:     p.cfg.Metadata.TMDB.BaseURL,
+		ImageURL:    p.cfg.Metadata.TMDB.ImageURL,
+		ProxyURL:    proxyStr,
+		MinInterval: interval,
 	})
 }
 

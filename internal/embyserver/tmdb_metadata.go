@@ -89,16 +89,22 @@ type tmdbStoredSettings struct {
 	BaseURL                 string `json:"base_url"`
 	ImageURL                string `json:"image_url"`
 	ProxyURL                string `json:"proxy_url,omitempty"`
+	RateLimitMs             int    `json:"rate_limit_ms,omitempty"`
 	SaveArtifactsToMediaDir bool   `json:"save_artifacts_to_media_dir"`
 }
 
 func (a *App) currentTMDBSettings() tmdbStoredSettings {
 	s := tmdbStoredSettings{
-		Enabled:  true,
-		Language: "zh-CN",
-		BaseURL:  "https://api.themoviedb.org/3",
-		ImageURL: "https://image.tmdb.org/t/p",
-		ProxyURL: strings.TrimSpace(os.Getenv("TMDB_PROXY")),
+		Enabled:                 true,
+		Language:                "zh-CN",
+		BaseURL:                 "https://api.themoviedb.org/3",
+		ImageURL:                "https://image.tmdb.org/t/p",
+		RateLimitMs:             250,
+		ProxyURL:                strings.TrimSpace(os.Getenv("TMDB_PROXY")),
+		SaveArtifactsToMediaDir: false,
+	}
+	if s.ProxyURL == "" {
+		s.ProxyURL = strings.TrimSpace(os.Getenv("TMDB_PROXY_URL"))
 	}
 	if a.cfg != nil {
 		s.Enabled = a.cfg.Metadata.TMDB.Enabled
@@ -112,10 +118,50 @@ func (a *App) currentTMDBSettings() tmdbStoredSettings {
 		if a.cfg.Metadata.TMDB.ImageURL != "" {
 			s.ImageURL = a.cfg.Metadata.TMDB.ImageURL
 		}
+		if a.cfg.Metadata.TMDB.ProxyURL != "" {
+			s.ProxyURL = a.cfg.Metadata.TMDB.ProxyURL
+		}
+		if a.cfg.Metadata.TMDB.RateLimitMs > 0 {
+			s.RateLimitMs = a.cfg.Metadata.TMDB.RateLimitMs
+		}
+		s.SaveArtifactsToMediaDir = a.cfg.Metadata.TMDB.SaveArtifactsToMediaDir
+	}
+	// Direct environment variable overrides for All-in-One deployment:
+	if envEnabled := strings.TrimSpace(os.Getenv("TMDB_ENABLED")); envEnabled != "" {
+		s.Enabled = strings.EqualFold(envEnabled, "true") || envEnabled == "1"
 	}
 	if envKey := strings.TrimSpace(os.Getenv("TMDB_API_KEY")); envKey != "" {
 		s.APIKey = envKey
 	}
+	if envBase := strings.TrimSpace(os.Getenv("TMDB_BASE_URL")); envBase != "" {
+		s.BaseURL = envBase
+	}
+	if envImg := strings.TrimSpace(os.Getenv("TMDB_IMAGE_URL")); envImg != "" {
+		s.ImageURL = envImg
+	}
+	if envLang := strings.TrimSpace(os.Getenv("TMDB_LANGUAGE")); envLang != "" {
+		s.Language = envLang
+	}
+	if envProxy := strings.TrimSpace(os.Getenv("TMDB_PROXY")); envProxy != "" {
+		s.ProxyURL = envProxy
+	} else if envProxy := strings.TrimSpace(os.Getenv("TMDB_PROXY_URL")); envProxy != "" {
+		s.ProxyURL = envProxy
+	}
+	if envRate := strings.TrimSpace(os.Getenv("TMDB_RATE_LIMIT_MS")); envRate != "" {
+		if n, err := strconv.Atoi(envRate); err == nil && n > 0 {
+			s.RateLimitMs = n
+		}
+	} else if envRate := strings.TrimSpace(os.Getenv("TMDB_MIN_INTERVAL_MS")); envRate != "" {
+		if n, err := strconv.Atoi(envRate); err == nil && n > 0 {
+			s.RateLimitMs = n
+		}
+	}
+	if envSave := strings.TrimSpace(os.Getenv("TMDB_SAVE_ARTIFACTS")); envSave != "" {
+		s.SaveArtifactsToMediaDir = strings.EqualFold(envSave, "true") || envSave == "1"
+	} else if envSave := strings.TrimSpace(os.Getenv("TMDB_SAVE_ARTIFACTS_TO_MEDIA_DIR")); envSave != "" {
+		s.SaveArtifactsToMediaDir = strings.EqualFold(envSave, "true") || envSave == "1"
+	}
+
 	if a.db != nil {
 		var raw string
 		if a.db.QueryRow("SELECT v FROM settings WHERE k='tmdb_settings'").Scan(&raw) == nil && raw != "" {
@@ -137,6 +183,9 @@ func (a *App) currentTMDBSettings() tmdbStoredSettings {
 				if stored.ProxyURL != "" {
 					s.ProxyURL = stored.ProxyURL
 				}
+				if stored.RateLimitMs > 0 {
+					s.RateLimitMs = stored.RateLimitMs
+				}
 				s.SaveArtifactsToMediaDir = stored.SaveArtifactsToMediaDir
 			}
 		}
@@ -152,12 +201,17 @@ func (a *App) TMDBClient() *tmdb.Client {
 	if !s.Enabled || strings.TrimSpace(s.APIKey) == "" {
 		return nil
 	}
+	interval := time.Duration(s.RateLimitMs) * time.Millisecond
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
 	return tmdb.NewClient(tmdb.Options{
-		APIKey:   s.APIKey,
-		Language: s.Language,
-		BaseURL:  s.BaseURL,
-		ImageURL: s.ImageURL,
-		ProxyURL: s.ProxyURL,
+		APIKey:      s.APIKey,
+		Language:    s.Language,
+		BaseURL:     s.BaseURL,
+		ImageURL:    s.ImageURL,
+		ProxyURL:    s.ProxyURL,
+		MinInterval: interval,
 	})
 }
 
@@ -864,6 +918,7 @@ func (a *App) adminTMDB(w http.ResponseWriter, r *http.Request, path string) {
 				"BaseURL":                 s.BaseURL,
 				"ImageURL":                s.ImageURL,
 				"ProxyURL":                s.ProxyURL,
+				"RateLimitMs":             s.RateLimitMs,
 				"NFOPolicy":               "prefer",
 				"SaveArtifactsToMediaDir": s.SaveArtifactsToMediaDir,
 			})
@@ -881,6 +936,7 @@ func (a *App) adminTMDB(w http.ResponseWriter, r *http.Request, path string) {
 			BaseURL                 *string `json:"BaseURL"`
 			ImageURL                *string `json:"ImageURL"`
 			ProxyURL                *string `json:"ProxyURL"`
+			RateLimitMs             *int    `json:"RateLimitMs"`
 			SaveArtifactsToMediaDir *bool   `json:"SaveArtifactsToMediaDir"`
 		}
 		if !body(w, r, &req) {
@@ -891,6 +947,9 @@ func (a *App) adminTMDB(w http.ResponseWriter, r *http.Request, path string) {
 		}
 		if req.SaveArtifactsToMediaDir != nil {
 			cur.SaveArtifactsToMediaDir = *req.SaveArtifactsToMediaDir
+		}
+		if req.RateLimitMs != nil && *req.RateLimitMs > 0 {
+			cur.RateLimitMs = *req.RateLimitMs
 		}
 		if req.APIKey != nil && strings.TrimSpace(*req.APIKey) != "" {
 			cur.APIKey = strings.TrimSpace(*req.APIKey)

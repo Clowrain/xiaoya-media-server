@@ -68,3 +68,44 @@ func TestResolveDatabaseDSNFromBootstrapFile(t *testing.T) {
 		t.Fatalf("dsn mismatch:\n got: %s\nwant: %s", dsn, want)
 	}
 }
+
+func TestTMDBEnvironmentVariables(t *testing.T) {
+	t.Setenv("TMDB_ENABLED", "true")
+	t.Setenv("TMDB_API_KEY", "env-api-key")
+	t.Setenv("TMDB_PROXY", "http://127.0.0.1:7890")
+	t.Setenv("TMDB_BASE_URL", "https://tmdb.proxy.org/3")
+	t.Setenv("TMDB_IMAGE_URL", "https://image.proxy.org/t/p")
+	t.Setenv("TMDB_LANGUAGE", "zh-CN")
+	t.Setenv("TMDB_RATE_LIMIT_MS", "300")
+	t.Setenv("TMDB_SAVE_ARTIFACTS", "true")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	tmdb := cfg.Metadata.TMDB
+	if !tmdb.Enabled {
+		t.Error("expected TMDB.Enabled to be true")
+	}
+	if tmdb.APIKey != "env-api-key" {
+		t.Errorf("APIKey = %q, want 'env-api-key'", tmdb.APIKey)
+	}
+	if tmdb.ProxyURL != "http://127.0.0.1:7890" {
+		t.Errorf("ProxyURL = %q, want 'http://127.0.0.1:7890'", tmdb.ProxyURL)
+	}
+	if tmdb.BaseURL != "https://tmdb.proxy.org/3" {
+		t.Errorf("BaseURL = %q, want 'https://tmdb.proxy.org/3'", tmdb.BaseURL)
+	}
+	if tmdb.ImageURL != "https://image.proxy.org/t/p" {
+		t.Errorf("ImageURL = %q, want 'https://image.proxy.org/t/p'", tmdb.ImageURL)
+	}
+	if tmdb.Language != "zh-CN" {
+		t.Errorf("Language = %q, want 'zh-CN'", tmdb.Language)
+	}
+	if tmdb.RateLimitMs != 300 {
+		t.Errorf("RateLimitMs = %d, want 300", tmdb.RateLimitMs)
+	}
+	if !tmdb.SaveArtifactsToMediaDir {
+		t.Error("expected SaveArtifactsToMediaDir to be true")
+	}
+}
