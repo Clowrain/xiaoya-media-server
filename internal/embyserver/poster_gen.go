@@ -11,15 +11,15 @@ import (
 	"image/draw"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/mozillazg/go-pinyin"
 )
 
 // Preset themes: background gradients (top -> bottom), accent highlight colors
@@ -370,45 +370,7 @@ func drawLibraryCollageIcon(img *image.RGBA, cx, cy int, accent color.RGBA) {
 	}
 }
 
-// extractInitials returns the primary initial letter for background watermark and an acronym string
-func extractInitials(name string) (watermark string, acronym string) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "M", ""
-	}
-	opts := pinyin.NewArgs()
-	opts.Style = pinyin.FirstLetter
-	var sb strings.Builder
-	firstRune := ' '
-	for _, ch := range name {
-		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
-			sb.WriteRune(ch)
-			if firstRune == ' ' {
-				firstRune = ch
-			}
-		} else if ch >= 0x4e00 && ch <= 0x9fa5 {
-			py := pinyin.SinglePinyin(ch, opts)
-			if len(py) > 0 && len(py[0]) > 0 {
-				initial := rune(py[0][0])
-				sb.WriteRune(initial)
-				if firstRune == ' ' {
-					firstRune = initial
-				}
-			}
-		}
-	}
-	res := strings.ToUpper(sb.String())
-	if firstRune == ' ' {
-		firstRune = 'M'
-	}
-	wm := strings.ToUpper(string(firstRune))
-	if len(res) > 8 {
-		res = res[:8]
-	}
-	return wm, res
-}
-
-// generatePlaceholderPoster renders an elegant, content-aware poster for items
+// generatePlaceholderPoster renders an elegant, content-aware poster for items without converting to pinyin
 func generatePlaceholderPoster(id, name, kind string, year int) image.Image {
 	const w, h = 360, 540
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -430,14 +392,8 @@ func generatePlaceholderPoster(id, name, kind string, year int) image.Image {
 	badgeBg := color.RGBA{pal.accent.R / 4, pal.accent.G / 4, pal.accent.B / 4, 180}
 	drawBadge(img, badgeText, w/2, 45, 2, pal.accent, badgeBg)
 
-	// Background Stylized Initial Watermark
-	wm, acronym := extractInitials(name)
-	wmCol := color.RGBA{pal.accent.R, pal.accent.G, pal.accent.B, 22}
-	wmWidth := textWidth(wm, 11)
-	drawText(img, wm, w/2-wmWidth/2, h*28/100, 11, wmCol)
-
-	// Center Geometric Icon
-	centerY := h*42/100
+	// Center Geometric Icon (Classic Clapperboard, TV Monitor, or Film Reel)
+	centerY := h*44/100
 	switch strings.ToLower(kind) {
 	case "movie":
 		drawClapperboard(img, w/2, centerY, pal.accent)
@@ -449,17 +405,7 @@ func generatePlaceholderPoster(id, name, kind string, year int) image.Image {
 		drawClapperboard(img, w/2, centerY, pal.accent)
 	}
 
-	// Acronym Subtitle below icon
-	if acronym != "" {
-		displayAcro := acronym
-		if len(displayAcro) > 6 {
-			displayAcro = displayAcro[:6]
-		}
-		aw := textWidth(displayAcro, 2)
-		drawText(img, displayAcro, w/2-aw/2, h*56/100, 2, pal.accent)
-	}
-
-	// Bottom Year & Label
+	// Bottom Year & Label (No Pinyin conversion)
 	if year > 1800 {
 		yearStr := strconv.Itoa(year)
 		yw := textWidth(yearStr, 3)
@@ -537,8 +483,14 @@ var (
 
 // generateLibraryCollage attempts to stitch 4 movie posters into a 2x2 collage
 func (a *App) generateLibraryCollage(libID, libName, libKind string) image.Image {
-	// Query up to 10 distinct items under this library
-	rows, err := a.db.Query("SELECT id, path, kind, poster FROM items WHERE lib=? ORDER BY id DESC LIMIT 10", libID)
+	// 优先查询 Series 与 Movie 头部有海报的项目
+	query := `SELECT id, path, kind, poster FROM items 
+		WHERE lib=? 
+		ORDER BY CASE WHEN kind IN ('Series', 'Movie') THEN 0 ELSE 1 END,
+		         CASE WHEN poster <> '' THEN 0 ELSE 1 END,
+		         id DESC 
+		LIMIT 30`
+	rows, err := a.db.Query(query, libID)
 	if err != nil {
 		return generateLibraryFallbackPoster(libID, libName, libKind)
 	}
@@ -560,7 +512,20 @@ func (a *App) generateLibraryCollage(libID, libName, libKind string) image.Image
 			if a.db.QueryRow("SELECT data FROM covers WHERE id=?", it.ID).Scan(&b) == nil {
 				img, _, _ = image.Decode(bytes.NewReader(b))
 			}
-		} else if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+		} else if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+			req, e := http.NewRequest("GET", path, nil)
+			if e == nil {
+				cli := posterHTTP
+				if tmdbCli := a.TMDBClient(); tmdbCli != nil && tmdbCli.HTTPClient() != nil {
+					cli = tmdbCli.HTTPClient()
+				}
+				resp, e := cli.Do(req)
+				if e == nil && resp.StatusCode == 200 {
+					img, _, _ = image.Decode(io.LimitReader(resp.Body, 5<<20))
+					resp.Body.Close()
+				}
+			}
+		} else {
 			if f, err := os.Open(path); err == nil {
 				img, _, _ = image.Decode(f)
 				f.Close()

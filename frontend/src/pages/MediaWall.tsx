@@ -235,6 +235,15 @@ export const MediaWall: React.FC<MediaWallProps> = ({
               >
                 {/* Background Artwork or Stylized Gradient */}
                 <div className="absolute inset-0 bg-gradient-to-tr from-zinc-950 via-zinc-900 to-zinc-800/80 group-hover:brightness-110 transition" />
+                <img
+                  src={`/Items/${v.Id}/Images/Primary?fillWidth=400&quality=85${v.ImageTags?.Primary ? `&tag=${v.ImageTags.Primary}` : `&api_key=${encodeURIComponent(getStoredToken() || '')}`}`}
+                  alt={v.Name}
+                  className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition duration-500 opacity-60 group-hover:opacity-80"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent pointer-events-none" />
                 
                 {/* Decorative Pill Badge */}
                 <div className="absolute top-2.5 left-2.5">

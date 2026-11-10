@@ -271,6 +271,10 @@ export async function deleteItemCover(id: string): Promise<void> {
   }
 }
 
+export async function generateLibraryCover(id: string): Promise<void> {
+  await request(`/admin/cover?id=${encodeURIComponent(id)}&action=generate`, 'POST');
+}
+
 export async function fetchDirectories(basePath: string = '/media'): Promise<{ Path: string; Directories: any[] }> {
   return request(`/admin/directories?${new URLSearchParams({ Path: basePath })}`);
 }

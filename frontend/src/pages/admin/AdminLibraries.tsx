@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Folder, Plus, RefreshCw, Trash2, Edit2, FolderPlus, 
-  Clock, Play, ShieldAlert, Check, X, HardDrive, Image as ImageIcon, Upload 
+  Clock, Play, ShieldAlert, Check, X, HardDrive, Image as ImageIcon, Upload, Sparkles 
 } from 'lucide-react';
 import { AdminLibrary } from '../../types';
 import { 
   fetchAdminLibraries, createAdminLibrary, updateAdminLibrary, 
   deleteAdminLibrary, addLibraryFolder, removeLibraryFolder, 
   scanLibrary, scanAllLibraries, fetchScanSchedule, updateScanSchedule, 
-  uploadItemCover, deleteItemCover, notifyToast 
+  uploadItemCover, deleteItemCover, generateLibraryCover, notifyToast, getStoredToken 
 } from '../../api/client';
 import { DirectoryPickerModal } from '../../components/DirectoryPickerModal';
 
@@ -27,6 +27,12 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
   const [showScheduleModal, setShowScheduleModal] = useState<boolean>(false);
   const [showCoverModal, setShowCoverModal] = useState<AdminLibrary | null>(null);
   const [coverVersion, setCoverVersion] = useState<number>(Date.now());
+  const [generating, setGenerating] = useState<boolean>(false);
+
+  const getCoverUrl = (libId: string, height: number = 300) => {
+    const token = getStoredToken() || '';
+    return `/Items/${libId}/Images/Primary?fillHeight=${height}&api_key=${encodeURIComponent(token)}&v=${coverVersion}`;
+  };
 
   // Directory picker state
   const [pickerTarget, setPickerTarget] = useState<'add' | 'folder' | 'edit-folder' | null>(null);
@@ -366,7 +372,7 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
                         title="点击更换媒体库封面"
                       >
                         <img 
-                          src={`/Items/${lib.Id}/Images/Primary?fillHeight=160&v=${coverVersion}`}
+                          src={getCoverUrl(lib.Id, 160)}
                           alt={lib.Name}
                           className="w-full h-full object-cover transition duration-300 group-hover:scale-110"
                         />
@@ -903,7 +909,7 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
             <div className="flex flex-col items-center justify-center p-4 bg-zinc-950/60 rounded-xl border border-zinc-800/80 space-y-3">
               <div className="w-32 h-48 rounded-xl overflow-hidden bg-zinc-900 border border-zinc-700/60 shadow-xl">
                 <img 
-                  src={`/Items/${showCoverModal.Id}/Images/Primary?fillHeight=300&v=${coverVersion}`}
+                  src={getCoverUrl(showCoverModal.Id, 300)}
                   alt={showCoverModal.Name}
                   className="w-full h-full object-cover"
                 />
@@ -913,6 +919,29 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
 
             {/* 操作区域 */}
             <div className="space-y-3">
+              <button
+                type="button"
+                disabled={generating}
+                onClick={async () => {
+                  try {
+                    setGenerating(true);
+                    await generateLibraryCover(showCoverModal.Id);
+                    notifyToast('已从已有媒体数据重新合成四宫格封面', 'success');
+                    setCoverVersion(Date.now());
+                    loadLibraries(false);
+                  } catch (err: any) {
+                    notifyToast(err.message || '生成四宫格封面失败', 'error');
+                  } finally {
+                    setGenerating(false);
+                  }
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 disabled:opacity-50 text-white font-semibold text-xs transition cursor-pointer shadow-md shadow-indigo-600/25"
+                title="自动扫描库中已有电影/剧集海报，合成 2x2 四宫格封面"
+              >
+                <Sparkles className={`w-4 h-4 ${generating ? 'animate-spin' : ''}`} />
+                {generating ? '正在分析影片合成中...' : '⚡ 从已有数据重新生成四宫格封面'}
+              </button>
+
               <div className="flex items-center gap-2">
                 <label className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition cursor-pointer shadow-md shadow-emerald-600/20">
                   <Upload className="w-4 h-4" />
