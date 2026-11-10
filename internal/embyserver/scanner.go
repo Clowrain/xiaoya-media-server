@@ -118,12 +118,12 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 		a.db.QueryRow("SELECT count(*) FROM items WHERE lib=? AND kind IN ('Movie','Episode')", lib).Scan(&count)
 		a.db.Exec("UPDATE libraries SET status=?,error=?,count=?,duration=?,scanned=? WHERE id=?", status, message, count, time.Since(start).Seconds(), time.Now().Unix(), lib)
 	}()
-	previous, e := a.previousSnapshot(lib)
-	if e != nil {
-		scanErr = e
+	if _, err := a.db.Exec("DELETE FROM scan_file_stage WHERE lib=?", lib); err != nil {
+		scanErr = err
 		return
 	}
-	current := fileSnapshot{}
+	inventory := &scanInventory{app: a, lib: lib, generation: gen}
+	defer inventory.close()
 	roots := a.libraryPaths(lib, root)
 	for _, p := range roots {
 		if fi, e := os.Stat(p); e != nil || !fi.IsDir() {
@@ -174,7 +174,9 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 		if e != nil {
 			return e
 		}
-		current[path] = fileStamp{fi.Size(), fi.ModTime().UnixNano()}
+		if e := inventory.add(path, fileStamp{fi.Size(), fi.ModTime().UnixNano()}); e != nil {
+			return e
+		}
 		if isScannableMediaFile(path) {
 			total++
 		}
@@ -183,12 +185,8 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 	if scanErr != nil {
 		return
 	}
-	if len(scopes) > 0 {
-		for path, stamp := range previous {
-			if !withinScanScopes(path, scopes) {
-				current[path] = stamp
-			}
-		}
+	if scanErr = inventory.flush(); scanErr != nil {
+		return
 	}
 	a.changeActivity(job, func(v *activityEntry) { v.Total = total; v.State = "running" })
 	var tx *Transaction
@@ -247,7 +245,11 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 		return nil
 	}
 	lastSeries, lastSeason := "", ""
-	dirtyDirs := changedSidecars(previous, current)
+	dirtyDirs, e := inventory.changedSidecars(scopes)
+	if e != nil {
+		scanErr = e
+		return
+	}
 	// A directory-sized working set, no full-library item map.
 	scanErr = walk(func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -277,12 +279,18 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 			x.Name = cleanTitle
 		}
 		a.waitScan(job)
-		if (incremental || len(scopes) > 0) && previous[path] == current[path] && !dependencyChanged(path, dirtyDirs) {
-			var exists int
-			if e := a.db.QueryRow("SELECT 1 FROM items WHERE id=?", x.ID).Scan(&exists); e == nil {
-				return nil
-			} else if e != sql.ErrNoRows {
-				return e
+		if (incremental || len(scopes) > 0) && !dependencyChanged(path, dirtyDirs) {
+			unchanged, err := inventory.unchanged(path, fileStamp{fi.Size(), fi.ModTime().UnixNano()})
+			if err != nil {
+				return err
+			}
+			if unchanged {
+				var exists int
+				if e := a.db.QueryRow("SELECT 1 FROM items WHERE id=?", x.ID).Scan(&exists); e == nil {
+					return nil
+				} else if e != sql.ErrNoRows {
+					return e
+				}
 			}
 		}
 		if kind == "tvshows" {
@@ -414,8 +422,8 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 	}
 	a.waitScan(job)
 	a.changeActivity(job, func(v *activityEntry) { v.State = "cleaning"; v.Current = "提交文件快照并清理已删除条目" })
-	scanErr = a.commitSnapshot(lib, current, allowEmpty, scopes)
-	if scanErr == nil {
+	scanErr = inventory.commit(allowEmpty, scopes)
+	if scanErr == nil && len(scopes) == 0 {
 		scanErr = a.cleanupMedia()
 	}
 

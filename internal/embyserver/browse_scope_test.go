@@ -79,6 +79,9 @@ func TestNextRequiresSuccessfulPlaybackRedirect(t *testing.T) {
 	} {
 		t.Run(tc.method+http.StatusText(tc.status), func(t *testing.T) {
 			a := testApp(t)
+			c := a.probeSettings()
+			c.PreloadNext = true
+			putProbeSettings(t, a, c)
 			x := probeFixture(t, a)
 			if _, e := a.db.Exec("UPDATE items SET kind='Episode' WHERE id=?", x.ID); e != nil {
 				t.Fatal(e)

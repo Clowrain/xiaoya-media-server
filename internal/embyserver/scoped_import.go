@@ -107,7 +107,9 @@ func (a *App) ResolveImportTarget(id, dir string) (string, error) {
 	return "", fmt.Errorf("输出目录不在所选媒体库内")
 }
 
-func (a *App) TriggerScopedPathScans(paths []string) {
+func (a *App) ScanScopedPaths(paths []string)        { a.scanScopedPaths(paths, false) }
+func (a *App) TriggerScopedPathScans(paths []string) { a.scanScopedPaths(paths, true) }
+func (a *App) scanScopedPaths(paths []string, async bool) {
 	if a == nil || a.db == nil || len(paths) == 0 {
 		return
 	}
@@ -142,7 +144,11 @@ func (a *App) TriggerScopedPathScans(paths []string) {
 			}
 		}
 		if len(unique) > 0 {
-			go a.scanLibraryScoped(id, true, false, unique)
+			if async {
+				go a.scanLibraryScoped(id, true, false, unique)
+			} else {
+				a.scanLibraryScoped(id, true, false, unique)
+			}
 		}
 	}
 }

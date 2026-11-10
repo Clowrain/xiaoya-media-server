@@ -9,7 +9,7 @@
 ### 15.1 媒体服务基础能力（`go-emby` 完整演进）
 - [x] 管理员初始化、密码哈希、令牌鉴权、API Key 管理与播放设备并发限制：`internal/embyserver/main.go`
 - [x] 网页媒体库浏览、搜索和管理；Emby 兼容接口提供拼音首字母检索与多版本合并：`internal/embyserver/browsing.go`、`internal/embyserver/versions.go`、`internal/embyserver/initials.go`
-- [x] 302 直链播放、本地 `file://` Range 流式播放、播放进度回传、继续观看（`Resume`）与真实下一集（`/Shows/NextUp`）：`internal/embyserver/direct_strm.go`、`internal/embyserver/subtitles.go`、`internal/embyserver/nextup.go`
+- [x] 302 直链播放、本地 `file://` Range 流式播放、播放进度回传与继续观看（`Resume`）；`/Shows/NextUp` 按低功耗设计默认返回空集合以消除全库扫描开销：`internal/embyserver/direct_strm.go`、`internal/embyserver/subtitles.go`、`internal/embyserver/nextup.go`
 - [x] 外挂字幕自动发现（同目录及 `Subs/` 子目录 `.srt/.ass/.ssa/.vtt/.sub/.idx`）、`MediaStreams` 注入与 `.srt -> WebVTT` 动态转换：`internal/embyserver/subtitles.go`
 - [x] STRM 内含过期 `?sign=...` 签名时自动回退无签名 `/d/...` 并联动 AList `/api/fs/get` 刷新直链，且保留 SSRF 防护校验：`internal/embyserver/xiaoya.go`
 - [x] 首次音视频直接出流、循环检测、10 次请求上限、内部回环转 AList 解析，以及刷新失败不返回失效地址；阿里和 115 实机样本均取得 CDN 地址并通过两处 Range 读取：[修复方案与验证](XIAOYA-PLAYBACK-FIX.md)。
@@ -22,9 +22,9 @@
 - [x] TMDB 未启用、超时或报错绝不阻塞 STRM 生成、媒体入库与播放：`internal/embyserver/zheyueliang_e2e_test.go`
 - [x] 管理后台支持配置 TMDB Key、连通性测试及手动搜索绑定修正：`internal/embyserver/tmdb_metadata.go`、`web/index.html`
 
-### 15.3 指定目录监控（只读消费小雅 SQLite）
-- [x] 双重只读锁（`mode=ro` + `_pragma=query_only(1)`）读取 `strm_internal.db`，兼容 WAL 模式，绝不修改小雅表或索引：`internal/resource/xiaoya/reader.go`
-- [x] 可按需精确监控 `/每日更新/电视剧/国产剧（115）` 与 `/每日更新/电视剧/国产剧`，缺失或同名兄弟目录冲突显式报错，绝不退化为模糊匹配：`internal/resource/xiaoya/reader_test.go`
+### 15.3 指定目录监控与清单对账
+- [x] 以小雅 `strm.txt` 清单文件为权威清单进行流式匹配与指纹校验；兼容 `strm_internal.db` 双重只读锁（`mode=ro` + `_pragma=query_only(1)`）读取：`internal/resource/xiaoya/manifest.go`、`internal/resource/xiaoya/reader.go`
+- [x] 可按需精确监控 `/每日更新/电视剧/国产剧（115）` 与 `/每日更新/电视剧/国产剧`，路径前缀严格对齐，缺失或同名兄弟目录冲突显式报错，绝不退化为模糊匹配：`internal/resource/xiaoya/reader_test.go`、`internal/resource/xiaoya/manifest_test.go`
 - [x] 支持后台动态新增、启停、移除监控目录并立即触发全量/增量同步：`internal/adminapi/handler.go`、`web/index.html`
 
 ### 15.4 增量发现、快照对比与 `keep` 删除保护策略

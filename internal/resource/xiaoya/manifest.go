@@ -358,46 +358,7 @@ func (s *ManifestScanner) FindMatching(ctx context.Context, query string, limit 
 
 // StreamPrefix streams entries whose rel_path starts with prefix to the onEntry callback.
 func (s *ManifestScanner) StreamPrefix(ctx context.Context, prefix string, onEntry func(entry ManifestEntry) error) (int, error) {
-	if !s.Available() {
-		return 0, fmt.Errorf("strm.txt not found at %s", s.filePath)
-	}
-
-	f, err := os.Open(s.filePath)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-
-	cleanPrefix := strings.ToLower(strings.Trim(strings.TrimSpace(prefix), "/"))
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
-
-	count := 0
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		if ctx.Err() != nil {
-			return count, ctx.Err()
-		}
-
-		line := scanner.Text()
-		if cleanPrefix != "" && !strings.Contains(strings.ToLower(line), cleanPrefix) {
-			continue
-		}
-
-		entry, err := ParseManifestLine(lineNum, line)
-		if err != nil || entry == nil {
-			continue
-		}
-
-		if err := onEntry(*entry); err != nil {
-			return count, err
-		}
-		count++
-	}
-
-	return count, scanner.Err()
+	return s.StreamMultiPrefix(ctx, []string{prefix}, func(_ string, e ManifestEntry) error { return onEntry(e) })
 }
 
 // PrefixMatch binds an original prefix string with its clean lowercased version.
@@ -448,21 +409,22 @@ func (s *ManifestScanner) StreamMultiPrefix(ctx context.Context, prefixes []stri
 		}
 
 		line := scanner.Text()
-		lineLower := strings.ToLower(line)
-
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		entry, err := ParseManifestLine(lineNum, line)
+		if err != nil || entry == nil {
+			return count, fmt.Errorf("strm.txt 第 %d 行无效", lineNum)
+		}
+		path := strings.ToLower(strings.Trim(entry.RelPath, "/"))
 		var matched *PrefixMatch
 		for i := range targets {
-			if strings.Contains(lineLower, targets[i].Clean) {
+			if path == targets[i].Clean || strings.HasPrefix(path, targets[i].Clean+"/") {
 				matched = &targets[i]
 				break
 			}
 		}
 		if matched == nil {
-			continue
-		}
-
-		entry, err := ParseManifestLine(lineNum, line)
-		if err != nil || entry == nil {
 			continue
 		}
 
@@ -495,4 +457,39 @@ func AutoDetectStrmText(explicitPath string, sqlitePath string) string {
 		}
 	}
 	return explicitPath
+}
+
+// StreamMatching 保留交互导入的关键词匹配规则，不截断结果集。
+func (s *ManifestScanner) StreamMatching(ctx context.Context, query string, yield func(ManifestEntry) error) (int, error) {
+	f, err := os.Open(s.filePath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	query = strings.ToLower(strings.TrimSpace(query))
+	count, line := 0, 0
+	for scanner.Scan() {
+		line++
+		if err = ctx.Err(); err != nil {
+			return count, err
+		}
+		raw := scanner.Text()
+		if !strings.Contains(strings.ToLower(raw), query) {
+			continue
+		}
+		entry, e := ParseManifestLine(line, raw)
+		if e != nil {
+			return count, e
+		}
+		if entry == nil {
+			continue
+		}
+		if e = yield(*entry); e != nil {
+			return count, e
+		}
+		count++
+	}
+	return count, scanner.Err()
 }

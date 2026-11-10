@@ -4,6 +4,16 @@ func (a *App) postgresSchema() error {
 	_, e := a.db.Exec(`
  CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public;
  CREATE TABLE IF NOT EXISTS scan_snapshots(lib TEXT PRIMARY KEY REFERENCES libraries(id) ON DELETE CASCADE,data TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS scan_file_stamps(lib TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,path TEXT NOT NULL,size BIGINT NOT NULL,mtime BIGINT NOT NULL,PRIMARY KEY(lib,path));
+ CREATE INDEX IF NOT EXISTS scan_file_stamps_prefix ON scan_file_stamps(lib,path COLLATE "C");
+ CREATE INDEX IF NOT EXISTS items_path_prefix ON items(lib,path COLLATE "C");
+ CREATE UNLOGGED TABLE IF NOT EXISTS scan_file_stage(generation TEXT NOT NULL,lib TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,path TEXT NOT NULL,size BIGINT NOT NULL,mtime BIGINT NOT NULL,media BOOLEAN NOT NULL,sidecar BOOLEAN NOT NULL,PRIMARY KEY(generation,path));
+ INSERT INTO scan_file_stamps(lib,path,size,mtime)
+ SELECT s.lib,e.key,(e.value->>'Size')::bigint,(e.value->>'Mtime')::bigint
+ FROM scan_snapshots s CROSS JOIN LATERAL jsonb_each(s.data::jsonb) e
+ WHERE jsonb_exists(e.value,'Size') AND jsonb_exists(e.value,'Mtime') ON CONFLICT DO NOTHING;
+ UPDATE scan_snapshots SET data='{}' WHERE data<>'{}';
+
  CREATE TABLE IF NOT EXISTS item_genres(item TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,genre TEXT NOT NULL,PRIMARY KEY(item,genre));
  CREATE INDEX IF NOT EXISTS genres_genre_item ON item_genres(genre,item);
  CREATE OR REPLACE FUNCTION sync_item_genres() RETURNS trigger LANGUAGE plpgsql AS $$

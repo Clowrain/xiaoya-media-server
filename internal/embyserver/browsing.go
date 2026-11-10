@@ -73,6 +73,7 @@ func (a *App) indexMetadataGeneration(lib, generation string, jobs ...string) er
 		if len(batch) == 0 {
 			return nil
 		}
+		lastID := batch[len(batch)-1].ID
 		// Sort batch by kind so Series is parsed and matches TMDB first, enabling Seasons and Episodes to inherit its tmdbID!
 		sort.SliceStable(batch, func(i, j int) bool {
 			rank := func(k string) int {
@@ -192,7 +193,7 @@ func (a *App) indexMetadataGeneration(lib, generation string, jobs ...string) er
 		for j, x := range batch {
 			a.maybePersistArtifactsToDisk(x, metas[j])
 		}
-		after = batch[len(batch)-1].ID
+		after = lastID
 	}
 }
 func safeImage(p string) string {

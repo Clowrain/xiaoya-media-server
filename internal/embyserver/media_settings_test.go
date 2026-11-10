@@ -39,7 +39,7 @@ func putProbeSettings(t *testing.T, a *App, c ProbeSettings) int {
 func TestMediaSettingsDefaultsAndValidation(t *testing.T) {
 	a := testApp(t)
 	c := a.probeSettings()
-	if !c.Browse || c.Persistent || !c.PreloadNext || c.Concurrency != 1 {
+	if !c.Browse || c.Persistent || c.PreloadNext || c.Concurrency != 1 {
 		t.Fatal(c)
 	}
 	c.Concurrency = 0

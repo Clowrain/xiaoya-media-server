@@ -1,23 +1,23 @@
 # Xiaoya Media Server
 
-基于 [`go-emby`](https://github.com/sd87671067/go-emby) 演进的**小雅 SQLite 资源监控、标准 STRM/NFO 生成、TMDB 元数据刮削与 Emby 兼容媒体服务器**（V2 基础链路）。
+基于 [`go-emby`](https://github.com/sd87671067/go-emby) 演进的**小雅资源清单监控、标准 STRM/NFO 生成、TMDB 元数据刮削与 Emby 兼容媒体服务器**（专为低功耗 NAS 与客户端直链播放优化）。
 
 ---
 
 ## 核心特性
 
 1. **Emby 兼容播放与网页管理**
-   - 网页默认进入影视墙，管理员通过 `/web/manage/` 进入管理界面。使用 Infuse、VidHub、SenPlayer 等 Emby 兼容客户端播放，支持 302 直链重定向、外挂字幕发现与 `.srt -> WebVTT` 动态转换、播放进度续播与真实 `/Shows/NextUp` 下一集推荐。
-2. **小雅 SQLite 零侵入只读目录监控**
-   - 通过 `mode=ro` + `PRAGMA query_only=1` 只读消费小雅 `strm_internal.db`（WAL 安全），支持精确路径注册与按需监控，建立基线快照、`id > last_max_node_id` 增量发现、`data_version` 无变化跳过与全树差异对账。
+   - 网页默认进入影视墙，管理员通过 `/web/manage/` 进入管理界面。使用 Infuse、VidHub、SenPlayer 等 Emby 兼容客户端播放，支持 302 直链重定向、外挂字幕发现与 `.srt -> WebVTT` 动态转换、播放进度续播与低功耗轻量接口设计（`/Shows/NextUp` 默认返回空以消除跨库开销）。
+2. **小雅 `strm.txt` 权威清单与零侵入资源对账**
+   - 以 `strm.txt` 为权威导入与追更清单，采用流式分批读取与文件指纹校验，内存开销有界且仅在全树成功读取后执行集合差异对账；支持精确路径注册与按需监控，损坏清单与失败批次绝不误标缺失。
 3. **按 `strm.py` 和 `strm2.py` 规则生成 STRM 与附件**
-   - 覆盖两份脚本的媒体扩展名并集、字幕和图片等附件；SQLite 来源的平铺数字分集会生成 `Season 1/<剧名> - S01E01.strm` 和基础 NFO；文件采用原子写入并在重启后复用路径。
+   - 覆盖两份脚本的媒体扩展名并集、字幕和图片等附件；平铺数字分集会生成规范逻辑季路径 `Season 1/<剧名> - S01E01.strm` 和基础 NFO；文件采用原子写入并在重启后复用路径。
 4. **`prefer` NFO 优先策略 + TMDB v3 自动刮削**
    - 本地有效非空 NFO 优先采用（自动过滤空白页、HTML 错误页与 JSON 报错）；缺失 NFO 时识别 `{tmdb-*}` 或片名年份自动调用 TMDB v3 刮削中文剧集/季/集/电影海报与演职员，刮削异常绝不阻塞入库与播放。
 5. **`keep` 源端缺失保护策略**
-   - 仅完整无错扫描可标记资源 `MISSING`（扫描异常绝不推进游标或误标缺失），完整保留本地 STRM/NFO/字幕/图片与用户观看进度；源端恢复自动 `RESTORED`；管理员可预览并确认取消管理；本地文件、媒体条目和观看记录继续保留。
-6. **AList 目录浏览、关键词搜索与 SQLite 校验入库**
-   - 后台仅使用 AList 浏览与搜索；管理员选择路径后由服务回到 SQLite 读取并入库。后台追更统一由 SQLite 监控目录驱动。
+   - 仅完整无错扫描可标记资源 `MISSING`（扫描异常绝不推进检查点或误标缺失），完整保留本地 STRM/NFO/字幕/图片与用户观看进度；源端恢复自动 `RESTORED`；管理员可预览并确认取消管理；本地文件、媒体条目和观看记录继续保留。
+6. **AList 目录浏览、关键词搜索与权威清单校验入库**
+   - 后台提供 AList 浏览与搜索；管理员选择路径后由服务回到权威清单流式匹配并入库。后台追更统一由监控目录与清单指纹驱动，空闲时无冗余数据库写入。
 
 ---
 
@@ -91,7 +91,8 @@ go test ./...
 
 ## 文档索引
 
-- [小雅 SQLite → 标准刮削 → Emby 展示重构方案（实施中，含低配置 NAS 性能设计）](docs/XIAOYA-MEDIA-PIPELINE-V2.md)
+- [低功耗 NAS：性能与 Emby 功能审查报告](docs/NAS-PERFORMANCE-FUNCTION-AUDIT.md)
+- [小雅 SQLite → 标准刮削 → Emby 展示重构方案（含低配置 NAS 性能设计）](docs/XIAOYA-MEDIA-PIPELINE-V2.md)
 - [完整技术方案 V1.0](docs/TECHNICAL-SPEC.md)
 - [Python STRM 兼容规则审计](docs/STRM-RULES-AUDIT.md)
 - [`go-emby` 基线源码审计报告](docs/GO-EMBY-SOURCE-AUDIT.md)

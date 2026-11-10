@@ -74,7 +74,7 @@ func (a *App) PublishDirectMedia(pub DirectMediaPublication) error {
 			expectedKind = "tvshows"
 		}
 		var fallbackID string
-		_ = a.db.QueryRow("SELECT id FROM libraries WHERE type=? LIMIT 1", expectedKind).Scan(&fallbackID)
+		_ = a.db.QueryRow("SELECT id FROM libraries WHERE kind=? ORDER BY id LIMIT 1", expectedKind).Scan(&fallbackID)
 		if fallbackID == "" {
 			_ = a.db.QueryRow("SELECT id FROM libraries ORDER BY id ASC LIMIT 1").Scan(&fallbackID)
 		}
@@ -180,8 +180,11 @@ ON CONFLICT(path) DO UPDATE SET
 
 		// 2. Season
 		seasonNum := pub.SeasonNumber
-		if seasonNum <= 0 {
-			seasonNum = 1
+		if seasonNum < 0 {
+			seasonNum = 0
+		}
+		if seasonDir == seriesDir {
+			seasonDir = filepath.Join(seriesDir, fmt.Sprintf("Season %d", seasonNum))
 		}
 		seasonID := digest(seasonDir)[:32]
 		seasonName := fmt.Sprintf("Season %d", seasonNum)
@@ -192,7 +195,7 @@ ON CONFLICT(path) DO UPDATE SET
   poster=CASE WHEN excluded.poster<>'' THEN excluded.poster ELSE items.poster END,
   season=excluded.season,mtime=excluded.mtime,seen=excluded.seen`
 
-		if _, err = tx.Exec(seasonStmt, seasonID, libID, seriesID, seasonName, "Season", seasonDir, "", "", pub.PosterPath, pub.Year, seasonNum, 1, now, 0); err != nil {
+		if _, err = tx.Exec(seasonStmt, seasonID, libID, seriesID, seasonName, "Season", seasonDir, "", "", pub.PosterPath, pub.Year, seasonNum, seasonNum, now, 0); err != nil {
 			return fmt.Errorf("upsert direct season: %w", err)
 		}
 

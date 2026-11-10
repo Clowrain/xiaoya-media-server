@@ -209,3 +209,76 @@ func TestConfiguredRootDoesNotOverrideStoredMonitorSettings(t *testing.T) {
 		t.Fatalf("scheduler ignored individual interval: %+v %v", due, err)
 	}
 }
+
+func TestManifestCheckpointRetriesAndIdleChecks(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, e := sql.Open("sqlite", filepath.Join(dir, "biz.db"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer db.Close()
+	store := discovery.NewSQLStore(db, "sqlite")
+	if e = store.EnsureSchema(ctx); e != nil {
+		t.Fatal(e)
+	}
+	manifest := filepath.Join(dir, "strm.txt")
+	if e = os.WriteFile(manifest, []byte("show/A.strm#https://example.com/a\nother/B.strm#https://example.com/b\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	cfg := config.Default()
+	cfg.Xiaoya.StrmTextPath = manifest
+	cfg.STRM.OutputRoot = filepath.Join(dir, "out")
+	cfg.Monitor.Enabled = false
+	p, e := integration.NewPipeline(ctx, cfg, nil, store)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer p.Close()
+	roots, e := p.Discovery().RegisterMonitorRoots(ctx, []string{"/show"}, time.Minute)
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := New(store, p, time.Minute, true)
+	// 首次启动要处理当前清单；失败不能记作已处理指纹。
+	if _, e = db.Exec("CREATE TRIGGER reject_resource BEFORE INSERT ON media_resources BEGIN SELECT RAISE(ABORT,'injected failure'); END"); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.runIncrementalMonitorScan(ctx); e == nil {
+		t.Fatal("同步失败被吞掉")
+	}
+	if len(s.manifestFP) != 0 {
+		t.Fatal("失败推进了指纹")
+	}
+	db.Exec("DROP TRIGGER reject_resource")
+	store.UpdateMonitorRootStatus(ctx, roots[0].ID, 0, "", discovery.BatchFailed, "", time.Now().Unix()-120)
+	if e = s.runIncrementalMonitorScan(ctx); e != nil {
+		t.Fatal(e)
+	}
+	if len(s.manifestFP) != 1 {
+		t.Fatal("成功后未保存指纹")
+	}
+	var before, after int
+	db.QueryRow("SELECT count(*) FROM sync_batches").Scan(&before)
+	store.UpdateMonitorRootStatus(ctx, roots[0].ID, 0, "", discovery.BatchSuccess, "", time.Now().Unix()-120)
+	if e = s.runIncrementalMonitorScan(ctx); e != nil {
+		t.Fatal(e)
+	}
+	db.QueryRow("SELECT count(*) FROM sync_batches").Scan(&after)
+	if before != after {
+		t.Fatal("无变化仍创建同步批次")
+	}
+	due, e := s.dueMonitorRoots(ctx)
+	if e != nil || len(due) != 0 {
+		t.Fatalf("无变化检查未推进下次时间: %v %v", due, e)
+	}
+	if _, e = p.Discovery().RegisterMonitorRoots(ctx, []string{"/other"}, time.Minute); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.runIncrementalMonitorScan(ctx); e != nil {
+		t.Fatal(e)
+	}
+	if len(s.manifestFP) != 2 {
+		t.Fatal("同一清单新增根没有同步")
+	}
+}

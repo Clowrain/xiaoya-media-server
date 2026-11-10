@@ -26,12 +26,11 @@ type Scheduler struct {
 	store    *discovery.SQLStore
 	pipeline *integration.Pipeline
 
-	mu             sync.Mutex
-	specs          map[string]*TaskSpec
-	order          []string
-	running        map[string]bool
-	lastManifestFP xiaoya.ManifestFingerprint
-	fpInit         bool
+	mu         sync.Mutex
+	specs      map[string]*TaskSpec
+	order      []string
+	running    map[string]bool
+	manifestFP map[string]xiaoya.ManifestFingerprint
 }
 
 func New(store *discovery.SQLStore, pipeline *integration.Pipeline, monitorInterval time.Duration, monitorEnabled bool) *Scheduler {
@@ -178,7 +177,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 		taskKey := sp.Key
 		interval := sp.Interval
 		if taskKey == "monitor_root_scan" {
-			interval = time.Second
+			interval = 10 * time.Second
 		}
 		go func() {
 			ticker := time.NewTicker(interval)
@@ -278,60 +277,46 @@ func (s *Scheduler) runIncrementalMonitorScan(ctx context.Context) error {
 		return nil
 	}
 
-	// 1. If strm.txt manifest is available, trigger scan ONLY when file fingerprint changed or cold boot
-	if manifest := s.pipeline.Manifest(); manifest != nil && manifest.Available() {
-		curFP, err := manifest.Fingerprint()
-		if err == nil {
-			s.mu.Lock()
-			if !s.fpInit {
-				// Cold-boot baseline: record fingerprint and keep silent until next actual update
-				s.lastManifestFP = curFP
-				s.fpInit = true
-				s.mu.Unlock()
-				return nil
-			}
-			changed := curFP.ModTime != s.lastManifestFP.ModTime || curFP.Size != s.lastManifestFP.Size
-			if !changed {
-				s.mu.Unlock()
-				return nil
-			}
-			s.lastManifestFP = curFP
-			s.mu.Unlock()
-
-			// Manifest updated! Perform single-pass multi-prefix dispatch across all enabled roots
-			allRoots, rErr := s.store.ListMonitorRoots(ctx)
-			if rErr != nil {
-				return rErr
-			}
-			var enabledRoots []discovery.MonitorRoot
-			for _, r := range allRoots {
-				if r.Enabled {
-					enabledRoots = append(enabledRoots, r)
-				}
-			}
-			if len(enabledRoots) > 0 {
-				_, sErr := s.pipeline.SyncRootsFromManifest(ctx, enabledRoots)
-				return sErr
-			}
-			return nil
-		}
-	}
-
-	// Fallback when manifest is not available
 	roots, err := s.dueMonitorRoots(ctx)
 	if err != nil {
 		return err
 	}
-	var result []error
+	manifest := s.pipeline.Manifest()
+	if manifest == nil {
+		return errors.New("strm.txt 清单未配置")
+	}
+	fp, err := manifest.Fingerprint()
+	if err != nil {
+		return err
+	}
+	var changed []discovery.MonitorRoot
 	for _, r := range roots {
-		b, err := s.pipeline.RunIncrementalSyncRoot(ctx, r.ID)
-		if err != nil {
-			result = append(result, err)
-		} else if b.FailedCount > 0 {
-			result = append(result, fmt.Errorf("%s: %d 个资源处理失败", r.RootPath, b.FailedCount))
+		s.mu.Lock()
+		old, known := s.manifestFP[r.ID]
+		s.mu.Unlock()
+		if known && old == fp && r.LastStatus == discovery.BatchSuccess {
+			if err = s.store.UpdateMonitorRootStatus(ctx, r.ID, 0, "", r.LastStatus, "", time.Now().Unix()); err != nil {
+				return err
+			}
+		} else {
+			changed = append(changed, r)
 		}
 	}
-	return errors.Join(result...)
+	if len(changed) == 0 {
+		return nil
+	}
+	batches, err := s.pipeline.SyncRootsFromManifest(ctx, changed)
+	s.mu.Lock()
+	if s.manifestFP == nil {
+		s.manifestFP = map[string]xiaoya.ManifestFingerprint{}
+	}
+	for root, b := range batches {
+		if b.Status == discovery.BatchSuccess {
+			s.manifestFP[root] = fp
+		}
+	}
+	s.mu.Unlock()
+	return err
 }
 
 func (s *Scheduler) runFullDiffScan(ctx context.Context) error {

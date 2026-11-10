@@ -147,7 +147,7 @@ func (p *Pipeline) publishMatchedArtifacts(ctx context.Context, res discovery.Me
 			return err
 		}
 		if p.app != nil {
-			_ = p.app.PublishDirectMedia(embyserver.DirectMediaPublication{
+			return p.app.PublishDirectMedia(embyserver.DirectMediaPublication{
 				MediaType:     "MOVIE",
 				LocalSTRM:     path,
 				StreamURL:     res.SourceContent,
@@ -228,7 +228,7 @@ func (p *Pipeline) publishMatchedArtifacts(ctx context.Context, res discovery.Me
 			epPlot = episode.Overview
 			epThumb = base + "-thumb.jpg"
 		}
-		_ = p.app.PublishDirectMedia(embyserver.DirectMediaPublication{
+		return p.app.PublishDirectMedia(embyserver.DirectMediaPublication{
 			MediaType:     "EPISODE",
 			LocalSTRM:     path,
 			StreamURL:     res.SourceContent,

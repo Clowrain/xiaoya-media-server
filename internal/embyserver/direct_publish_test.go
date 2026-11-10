@@ -2,6 +2,7 @@ package embyserver
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -15,7 +16,7 @@ func setupTestAppWithDB(t *testing.T) (*App, *sql.DB) {
 		t.Fatalf("open sqlite3: %v", err)
 	}
 	schema := `
-	CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT, path TEXT, type TEXT);
+	CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT, path TEXT, kind TEXT);
 	CREATE TABLE items (id TEXT PRIMARY KEY, lib TEXT, parent TEXT, name TEXT, kind TEXT, path TEXT UNIQUE, url TEXT, overview TEXT, poster TEXT, year INT, season INT, episode INT, mtime BIGINT, size BIGINT, seen INT, rating DOUBLE PRECISION DEFAULT 0);
 	CREATE TABLE item_metadata (item TEXT PRIMARY KEY, data TEXT);
 	`
@@ -121,5 +122,53 @@ func TestPublishDirectMediaEpisodeHierarchy(t *testing.T) {
 	seasonID := digest(seasonDir)[:32]
 	if epName != "第 01 集" || epKind != "Episode" || epParent != seasonID || epSeason != 1 || epEpisode != 1 {
 		t.Errorf("unexpected episode: name=%s kind=%s parent=%s s=%d e=%d", epName, epKind, epParent, epSeason, epEpisode)
+	}
+}
+
+func TestDirectFlatEpisodeKeepsSeries(t *testing.T) {
+	a, db := setupTestAppWithDB(t)
+	defer db.Close()
+	db.Exec("INSERT INTO libraries VALUES('tv','TV','/media/tv','tvshows')")
+	for _, season := range []int{0, 1, 2} {
+		p := DirectMediaPublication{MediaType: "EPISODE", LocalSTRM: fmt.Sprintf("/media/tv/Show/S%dE1.strm", season), SeasonNumber: season, EpisodeNumber: 1}
+		if e := a.PublishDirectMedia(p); e != nil {
+			t.Fatal(e)
+		}
+	}
+	var kind, parent, id string
+	if e := db.QueryRow("SELECT id,kind,parent FROM items WHERE path='/media/tv/Show'").Scan(&id, &kind, &parent); e != nil {
+		t.Fatal(e)
+	}
+	if kind != "Series" || parent == id {
+		t.Fatalf("invalid series %s %s %s", id, kind, parent)
+	}
+	var count int
+	db.QueryRow("SELECT count(*) FROM items WHERE kind='Season' AND parent=?", id).Scan(&count)
+	if count != 3 {
+		t.Fatalf("seasons=%d", count)
+	}
+}
+
+func TestDirectFlatPostgresAndLibraryKind(t *testing.T) {
+	a := testApp(t)
+	if _, e := a.db.Exec("INSERT INTO libraries(id,name,path,kind) VALUES('a','Movies','/media/movies','movies'),('z','TV','/media/tv','tvshows')"); e != nil {
+		t.Fatal(e)
+	}
+	for _, season := range []int{0, 1} {
+		if e := a.PublishDirectMedia(DirectMediaPublication{MediaType: "EPISODE", LocalSTRM: fmt.Sprintf("/outside/Show/S%dE1.strm", season), SeasonNumber: season, EpisodeNumber: 1}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	var kind, lib string
+	if e := a.db.QueryRow("SELECT kind,lib FROM items WHERE path='/outside/Show'").Scan(&kind, &lib); e != nil {
+		t.Fatal(e)
+	}
+	if kind != "Series" || lib != "z" {
+		t.Fatalf("kind=%s lib=%s", kind, lib)
+	}
+	var n int
+	a.db.QueryRow("SELECT count(*) FROM items WHERE kind='Season' AND parent=id").Scan(&n)
+	if n != 0 {
+		t.Fatal("季层级自引用")
 	}
 }

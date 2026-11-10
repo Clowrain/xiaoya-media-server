@@ -10,9 +10,10 @@ import (
 
 func TestLibraryQueueLimits(t *testing.T) {
 	a := testApp(t)
-	if a.jobLimit(false) != 2 || a.jobLimit(true) != 2 || a.displayName() != "xiaoya-media" {
+	if a.jobLimit(false) != 1 || a.jobLimit(true) != 1 || a.displayName() != "xiaoya-media" {
 		t.Fatal("incorrect defaults")
 	}
+	a.db.Exec("INSERT INTO settings(k,v) VALUES('scan_concurrency','2'),('update_concurrency','2')")
 	r1 := a.acquireLibraryJob("a", false)
 	r2 := a.acquireLibraryJob("b", false)
 	u1 := a.acquireLibraryJob("c", true)

@@ -660,7 +660,7 @@ func (s *Service) commitManual(ctx context.Context, b *SyncBatch, m ManualSnapsh
 			key = "sqlite:" + strconv.FormatInt(n.SourceNodeID, 10)
 			sourceNodeID, sourceParentID = n.SourceNodeID, n.SourceParentID
 		}
-		r := MediaResource{ID: StableID(key), SourceKey: key, OriginType: origin, SourceNodeID: sourceNodeID, SourceParentID: sourceParentID, SourcePath: n.Path, RelPath: n.RelPath, Name: n.Name, IsDir: n.IsDir, SourceContent: n.Content}
+		r := MediaResource{ID: StableID(key), SourceKey: key, OriginType: origin, RootID: b.RootID, SourceNodeID: sourceNodeID, SourceParentID: sourceParentID, SourcePath: n.Path, RelPath: n.RelPath, Name: n.Name, IsDir: n.IsDir, SourceContent: n.Content}
 		if suppressed(exclusions, r) {
 			if n.Path == m.RootPath && m.Track != nil {
 				return nil, nil, ErrResourceUnmanaged
@@ -800,4 +800,3 @@ func (s *Service) ScanHotDirectory(ctx context.Context, hotID string) (int, erro
 
 	return changesCount, nil
 }
-

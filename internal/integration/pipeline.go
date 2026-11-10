@@ -30,6 +30,7 @@ type Pipeline struct {
 	discovery *discovery.Service
 	strmEng   *strm.Engine
 
+	syncMu   sync.Mutex
 	readerMu sync.Mutex
 	reader   *xiaoya.Reader
 	manifest *xiaoya.ManifestScanner
@@ -141,54 +142,10 @@ func (p *Pipeline) ImportManifestPath(ctx context.Context, rootPath, libraryID, 
 	}
 	cleanName := filepath.Base(strings.TrimRight(normPath, "/"))
 
-	// 1. Try matching by exact prefix first, then fallback to keyword match
-	var entries []xiaoya.ManifestEntry
-	_, _ = p.manifest.StreamPrefix(ctx, normPath, func(entry xiaoya.ManifestEntry) error {
-		entries = append(entries, entry)
-		return nil
-	})
-	if len(entries) == 0 {
-		// Fallback to searching by clean name (e.g. "走马上任")
-		entries, _ = p.manifest.FindMatching(ctx, cleanName, 2000)
-	}
+	p.syncMu.Lock()
+	defer p.syncMu.Unlock()
+	return p.importManifestStream(ctx, normPath, cleanName, libraryID, outputDir, track)
 
-	if len(entries) == 0 {
-		return discovery.SyncBatch{}, fmt.Errorf("在 strm.txt 清单中未找到与 '%s' 匹配的条目", rootPath)
-	}
-
-	var nodes []discovery.ManualNode
-	nodes = append(nodes, discovery.ManualNode{
-		Path:    normPath,
-		RelPath: strings.TrimPrefix(normPath, "/"),
-		Name:    cleanName,
-		IsDir:   true,
-	})
-	for _, e := range entries {
-		nodes = append(nodes, discovery.ManualNode{
-			Path:    "/" + e.RelPath,
-			RelPath: e.RelPath,
-			Name:    filepath.Base(e.RelPath),
-			IsDir:   false,
-			Content: e.PlayURL,
-		})
-	}
-
-	mode := discovery.ManageManualSeriesDir
-	if len(nodes) == 2 && !nodes[1].IsDir {
-		mode = discovery.ManageManualFile
-	}
-	batch, _, err := p.discovery.ApplyManualSnapshot(ctx, discovery.ManualSnapshot{
-		RootPath: normPath, Mode: mode, LibraryID: libraryID,
-		OutputDir: outputDir, Track: track, OriginType: discovery.OriginXiaoyaSQLite, Nodes: nodes,
-	})
-	if err != nil {
-		return batch, err
-	}
-	if track != nil && *track && p.discovery != nil {
-		_, _ = p.discovery.RegisterMonitorRoots(ctx, []string{normPath}, 10*time.Minute)
-	}
-	p.FlushScopedLibraryScans()
-	return batch, nil
 }
 
 // ImportSQLitePath provides backwards compatibility by delegating directly to ImportManifestPath.
@@ -457,74 +414,27 @@ func (p *Pipeline) Manifest() *xiaoya.ManifestScanner {
 // SyncRootsFromManifest scans strm.txt in a single pass across all provided roots,
 // importing discovered media items and updating root sync timestamps.
 func (p *Pipeline) SyncRootsFromManifest(ctx context.Context, roots []discovery.MonitorRoot) (map[string]discovery.SyncBatch, error) {
-	result := make(map[string]discovery.SyncBatch)
-	if len(roots) == 0 {
-		return result, nil
-	}
-	if p.manifest == nil || !p.manifest.Available() {
-		return nil, errors.New("strm.txt 清单文件不可用")
-	}
-
-	rootMap := make(map[string]discovery.MonitorRoot)
-	var prefixes []string
-	for _, r := range roots {
-		norm, _, _ := xiaoya.NormalizeMonitorPath(r.RootPath)
-		prefixes = append(prefixes, norm)
-		rootMap[norm] = r
-	}
-
-	matchedEntries := make(map[string][]xiaoya.ManifestEntry)
-	_, err := p.manifest.StreamMultiPrefix(ctx, prefixes, func(matchedPrefix string, entry xiaoya.ManifestEntry) error {
-		matchedEntries[matchedPrefix] = append(matchedEntries[matchedPrefix], entry)
-		return nil
-	})
+	p.syncMu.Lock()
+	defer p.syncMu.Unlock()
+	result, err := p.syncManifestRoots(ctx, roots)
 	if err != nil {
-		return result, err
+		for _, r := range roots {
+			if b, ok := result[r.ID]; ok && b.ID != "" {
+				continue
+			}
+			b, e := p.store.CreateBatch(ctx, r.ID, r.RootPath, "full", false)
+			if e != nil {
+				err = errors.Join(err, e)
+				continue
+			}
+			b.Status = discovery.BatchFailed
+			b.ErrorMessage = err.Error()
+			b.FinishedAt = time.Now().Unix()
+			err = errors.Join(err, p.store.FinishBatch(ctx, b), p.store.UpdateMonitorRootStatus(ctx, r.ID, 0, b.ID, b.Status, b.ErrorMessage, b.FinishedAt))
+			result[r.ID] = b
+		}
 	}
-
-	for prefix, r := range rootMap {
-		entries := matchedEntries[prefix]
-		if len(entries) == 0 {
-			now := time.Now().Unix()
-			_ = p.store.UpdateMonitorRootStatus(ctx, r.ID, now, "", discovery.BatchSuccess, "", 0)
-			continue
-		}
-
-		cleanBase := filepath.Base(strings.TrimRight(prefix, "/"))
-		var nodes []discovery.ManualNode
-		nodes = append(nodes, discovery.ManualNode{
-			Path:    prefix,
-			RelPath: strings.TrimPrefix(prefix, "/"),
-			Name:    cleanBase,
-			IsDir:   true,
-		})
-		for _, e := range entries {
-			nodes = append(nodes, discovery.ManualNode{
-				Path:    "/" + e.RelPath,
-				RelPath: e.RelPath,
-				Name:    filepath.Base(e.RelPath),
-				IsDir:   false,
-				Content: e.PlayURL,
-			})
-		}
-
-		snapshot := discovery.ManualSnapshot{
-			RootPath:   prefix,
-			OriginType: discovery.OriginXiaoyaSQLite,
-			Mode:       discovery.ManageManualSeriesDir,
-			Nodes:      nodes,
-		}
-		batch, _, err := p.discovery.ApplyManualSnapshot(ctx, snapshot)
-		if err != nil {
-			log.Printf("[manifest-sync] apply snapshot for root %s failed: %v", prefix, err)
-			continue
-		}
-		now := time.Now().Unix()
-		_ = p.store.UpdateMonitorRootStatus(ctx, r.ID, 0, batch.ID, batch.Status, "", now)
-		result[r.ID] = p.finishSync(batch)
-	}
-
-	return result, nil
+	return result, err
 }
 
 func (p *Pipeline) RunFullSyncRoot(ctx context.Context, rootID string) (discovery.SyncBatch, error) {
@@ -554,24 +464,14 @@ func (p *Pipeline) RunFullSyncRoot(ctx context.Context, rootID string) (discover
 		return discovery.SyncBatch{}, err
 	}
 	batches, sErr := p.SyncRootsFromManifest(ctx, []discovery.MonitorRoot{root})
-	if sErr != nil {
-		var batch discovery.SyncBatch
-		if p.store != nil {
-			batch, _ = p.store.CreateBatch(ctx, rootID, root.RootPath, "full", false)
-			batch.Status = discovery.BatchFailed
-			batch.ErrorMessage = sErr.Error()
-			batch.FinishedAt = time.Now().Unix()
-			_ = p.store.FinishBatch(ctx, batch)
-			_ = p.store.UpdateMonitorRootStatus(ctx, rootID, 0, batch.ID, discovery.BatchFailed, sErr.Error(), batch.FinishedAt)
-		} else {
-			batch = discovery.SyncBatch{RootID: rootID, Status: discovery.BatchFailed, ErrorMessage: sErr.Error()}
-		}
-		return batch, sErr
-	}
 	if b, ok := batches[rootID]; ok {
-		return b, nil
+		return b, sErr
 	}
-	return discovery.SyncBatch{RootID: rootID, Status: discovery.BatchSuccess}, nil
+	if sErr != nil {
+		return discovery.SyncBatch{RootID: rootID, Status: discovery.BatchFailed}, sErr
+	}
+
+	return discovery.SyncBatch{RootID: rootID, Status: discovery.BatchFailed}, errors.New("监控根未生成同步结果")
 }
 
 func (p *Pipeline) RunIncrementalSyncRoot(ctx context.Context, rootID string) (discovery.SyncBatch, error) {

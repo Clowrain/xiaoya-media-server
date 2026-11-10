@@ -41,10 +41,13 @@ func mediaInfoRoot() string {
 	if p := os.Getenv("MEDIA_INFO_ROOT"); p != "" {
 		return p
 	}
+	if p := os.Getenv("DATA_DIR"); p != "" {
+		return p
+	}
 	return "/app/data"
 }
 func (a *App) probeSettings() ProbeSettings {
-	c := ProbeSettings{Browse: true, PreloadNext: true, Directory: filepath.Join(mediaInfoRoot(), "media-info"), Concurrency: 1}
+	c := ProbeSettings{Browse: true, PreloadNext: false, Directory: filepath.Join(mediaInfoRoot(), "media-info"), Concurrency: 1}
 	var raw string
 	if a.db != nil && a.db.QueryRow("SELECT v FROM settings WHERE k='media_info'").Scan(&raw) == nil {
 		json.Unmarshal([]byte(raw), &c)

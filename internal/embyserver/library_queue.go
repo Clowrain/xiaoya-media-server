@@ -28,7 +28,7 @@ func (a *App) jobLimit(update bool) int {
 	a.db.QueryRow("SELECT v FROM settings WHERE k=?", key).Scan(&v)
 	n, e := strconv.Atoi(v)
 	if e != nil || n < 1 || n > 64 {
-		return 2
+		return 1
 	}
 	return n
 }

@@ -160,3 +160,12 @@ func TestStreamMultiPrefixAndFingerprint(t *testing.T) {
 		t.Errorf("expected 1 for 115/IMAX, got %d", matchedCount["/115/IMAX"])
 	}
 }
+
+func TestManifestPrefixDoesNotMatchURLOrSibling(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "strm.txt")
+	os.WriteFile(path, []byte("movies/A.strm#https://example.com/a\nmovies-old/B.strm#https://example.com/b\nother/C.strm#https://example.com/movies/c\n"), 0600)
+	n, e := NewManifestScanner(path).StreamPrefix(context.Background(), "/movies", func(ManifestEntry) error { return nil })
+	if e != nil || n != 1 {
+		t.Fatalf("count=%d error=%v", n, e)
+	}
+}
