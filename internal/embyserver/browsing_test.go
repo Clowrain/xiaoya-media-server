@@ -336,8 +336,9 @@ func TestGeneratedPosterAndLibraryCollage(t *testing.T) {
 	}
 
 	// 3. 验证 304 缓存返回
-	r := httptest.NewRequest("GET", "/Items/item-plain/Images/Primary", nil)
+	r := httptest.NewRequest("GET", "/Items/item-plain/Images/Primary?tag="+tag, nil)
 	r.Header.Set("If-None-Match", etag)
+	r.Header.Set("X-Emby-Token", "browse-test")
 	w304 := httptest.NewRecorder()
 	a.serve(w304, r)
 	if w304.Code != 304 {
