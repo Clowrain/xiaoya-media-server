@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -220,5 +221,78 @@ func TestMovieOmitsEpisodeNumbers(t *testing.T) {
 	}
 	if _, exists := a.dto(e)["IndexNumber"]; !exists {
 		t.Fatal("episode lost its number")
+	}
+}
+
+func TestEpisodeAndSeasonDefaultOrder(t *testing.T) {
+	a, uid, dir := catalogFixture(t)
+	// 在 Season 1 下新增三集，名称故意设计成拼音字典序与集数相反：
+	// 集数 1: "马德兵被下毒" (拼音 M)
+	// 集数 2: "安然无恙"   (拼音 A，如果按名称排序会排在第一位)
+	// 集数 3: "真相大白"   (拼音 Z)
+	episodes := []struct {
+		id      string
+		name    string
+		season  int
+		episode int
+	}{
+		{"ep1", "马德兵被下毒", 1, 1},
+		{"ep2", "安然无恙", 1, 2},
+		{"ep3", "真相大白", 1, 3},
+	}
+	for _, ep := range episodes {
+		p := filepath.Join(dir, ep.id+".strm")
+		if _, err := a.db.Exec("INSERT INTO items(id,lib,parent,name,kind,path,url,season,episode,seen) VALUES(?,'l','s1',?,?,?,?, ?,?,'g')",
+			ep.id, ep.name, "Episode", p, "http://example.invalid/"+ep.id+".mkv", ep.season, ep.episode); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 1. 测试未传 SortBy 时请求剧集列表 (SenPlayer 默认行为)
+	w := browseGet(a, "/emby/Users/"+uid+"/Items?ParentId=s1", true)
+	resp := decodeM(t, w)
+	items := resp["Items"].([]any)
+	if len(items) != 4 { // fixture 初始有 e1 (episode 1)，加3集共4集
+		t.Fatalf("expected 4 episodes under s1, got %d", len(items))
+	}
+
+	// 提取名称序列（排除已有的 e1）
+	epNames := []string{}
+	for _, it := range items {
+		m := it.(map[string]any)
+		name := m["Name"].(string)
+		if name != "e1" {
+			epNames = append(epNames, name)
+		}
+	}
+	expectedOrder := []string{"马德兵被下毒", "安然无恙", "真相大白"}
+	if strings.Join(epNames, ",") != strings.Join(expectedOrder, ",") {
+		t.Fatalf("剧集应按 1, 2, 3 集数顺序排列，实际得到: %v", epNames)
+	}
+
+	// 验证 SortName 格式
+	for _, it := range items {
+		m := it.(map[string]any)
+		if m["Name"] == "马德兵被下毒" {
+			if sortName := m["SortName"].(string); sortName != "0001 - 0001 - 马德兵被下毒" {
+				t.Fatalf("SortName 格式不符合预期: got %s", sortName)
+			}
+		}
+	}
+
+	// 2. 测试传 SortBy=SortName 时也必须保持自然集数顺序
+	w2 := browseGet(a, "/emby/Users/"+uid+"/Items?ParentId=s1&SortBy=SortName", true)
+	resp2 := decodeM(t, w2)
+	items2 := resp2["Items"].([]any)
+	epNames2 := []string{}
+	for _, it := range items2 {
+		m := it.(map[string]any)
+		name := m["Name"].(string)
+		if name != "e1" {
+			epNames2 = append(epNames2, name)
+		}
+	}
+	if strings.Join(epNames2, ",") != strings.Join(expectedOrder, ",") {
+		t.Fatalf("SortBy=SortName 时剧集也应按 1, 2, 3 集数顺序排列，实际得到: %v", epNames2)
 	}
 }

@@ -1121,13 +1121,58 @@ func (a *App) browseFilters(r *http.Request, u User, where string, args []any, l
 	}
 	return where, args
 }
+func itemSortName(x Item) string {
+	switch x.Kind {
+	case "Episode":
+		if x.Episode > 0 {
+			if x.Season > 0 {
+				return fmt.Sprintf("%04d - %04d - %s", x.Season, x.Episode, x.Name)
+			}
+			return fmt.Sprintf("%04d - %s", x.Episode, x.Name)
+		}
+	case "Season":
+		if x.Season > 0 {
+			return fmt.Sprintf("%04d - %s", x.Season, x.Name)
+		}
+	}
+	return x.Name
+}
+
 func browseOrder(r *http.Request) string {
-	out := []string{}
+	return browseOrderWithContext(r, nil)
+}
+
+func browseOrderWithContext(r *http.Request, parentItem *Item) string {
+	sortByRaw := strings.TrimSpace(q(r, "SortBy"))
+	sortByLower := strings.ToLower(sortByRaw)
+	includeTypes := strings.ToLower(q(r, "IncludeItemTypes"))
+
+	isEpisode := strings.Contains(includeTypes, "episode")
+	if !isEpisode && parentItem != nil && parentItem.Kind == "Season" {
+		isEpisode = true
+	}
+	if !isEpisode && parentItem != nil && parentItem.Kind == "Series" && strings.EqualFold(q(r, "Recursive"), "true") && !strings.Contains(includeTypes, "season") {
+		isEpisode = true
+	}
+
+	isSeason := !isEpisode && (strings.Contains(includeTypes, "season") || (parentItem != nil && parentItem.Kind == "Series" && !strings.EqualFold(q(r, "Recursive"), "true") && includeTypes == ""))
+
 	dir := " ASC"
 	if strings.EqualFold(q(r, "SortOrder"), "Descending") {
 		dir = " DESC"
 	}
-	for _, key := range strings.Split(strings.ToLower(q(r, "SortBy")), ",") {
+
+	if sortByRaw == "" || sortByLower == "sortname" || sortByLower == "name" || sortByLower == "default" {
+		if isEpisode {
+			return strings.Join([]string{"season" + dir, "episode" + dir, "name" + dir, "id" + dir}, ",")
+		}
+		if isSeason {
+			return strings.Join([]string{"season" + dir, "name" + dir, "id" + dir}, ",")
+		}
+	}
+
+	out := []string{}
+	for _, key := range strings.Split(sortByLower, ",") {
 		if col := map[string]string{"sortname": "name", "name": "name", "seriessortname": "name", "productionyear": "year", "datecreated": "mtime", "datelastmediaadded": "mtime", "premieredate": "year", "indexnumber": "episode", "parentindexnumber": "season", "communityrating": "rating", "random": "id"}[key]; col != "" {
 			out = append(out, col+dir)
 		}

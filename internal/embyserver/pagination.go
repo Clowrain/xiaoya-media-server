@@ -255,7 +255,7 @@ func (a *App) listDTO(x Item, r *http.Request, u User) M {
 		return m
 	}
 	folder := x.Kind == "Series" || x.Kind == "Season"
-	m := M{"Id": x.ID, "ServerId": a.serverID, "ParentId": x.Parent, "Name": x.Name, "SortName": x.Name, "Overview": x.Overview, "Type": x.Kind, "IsFolder": folder, "LocationType": "FileSystem", "ProductionYear": x.Year, "IndexNumber": x.Episode, "ParentIndexNumber": x.Season, "ImageTags": M{}, "BackdropImageTags": []string{}, "PrimaryImageAspectRatio": 2.0 / 3, "DateCreated": time.Unix(0, x.Mtime).UTC().Format(time.RFC3339), "UserData": userItemDataMap(x.ID, 0, false, false)}
+	m := M{"Id": x.ID, "ServerId": a.serverID, "ParentId": x.Parent, "Name": x.Name, "SortName": itemSortName(x), "Overview": x.Overview, "Type": x.Kind, "IsFolder": folder, "LocationType": "FileSystem", "ProductionYear": x.Year, "IndexNumber": x.Episode, "ParentIndexNumber": x.Season, "ImageTags": M{}, "BackdropImageTags": []string{}, "PrimaryImageAspectRatio": 2.0 / 3, "DateCreated": time.Unix(0, x.Mtime).UTC().Format(time.RFC3339), "UserData": userItemDataMap(x.ID, 0, false, false)}
 	if !folder {
 		m["MediaType"] = "Video"
 	}

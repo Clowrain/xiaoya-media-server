@@ -1362,7 +1362,7 @@ func (a *App) dto(x Item) M {
 	if x.Poster != "" {
 		tags["Primary"] = digest(x.Poster + strconv.FormatInt(x.Mtime, 10))[:12]
 	}
-	m := M{"Id": x.ID, "ServerId": a.serverID, "ParentId": x.Parent, "Name": x.Name, "SortName": x.Name, "Type": x.Kind, "IsFolder": folder, "Path": x.Path, "Overview": x.Overview, "ProductionYear": x.Year, "IndexNumber": x.Episode, "ParentIndexNumber": x.Season, "ImageTags": tags, "BackdropImageTags": []string{}, "LocationType": "FileSystem", "UserData": userItemDataMap(x.ID, 0, false, false), "CanDownload": false}
+	m := M{"Id": x.ID, "ServerId": a.serverID, "ParentId": x.Parent, "Name": x.Name, "SortName": itemSortName(x), "Type": x.Kind, "IsFolder": folder, "Path": x.Path, "Overview": x.Overview, "ProductionYear": x.Year, "IndexNumber": x.Episode, "ParentIndexNumber": x.Season, "ImageTags": tags, "BackdropImageTags": []string{}, "LocationType": "FileSystem", "UserData": userItemDataMap(x.ID, 0, false, false), "CanDownload": false}
 	if !folder {
 		m["MediaType"] = "Video"
 		m["MediaSources"] = []M{a.source(x, "")}
@@ -1533,10 +1533,16 @@ func (a *App) items(w http.ResponseWriter, r *http.Request, u User, latest bool)
 	}
 	limit, _ := strconv.Atoi(q(r, "Limit"))
 	maxLimit := 200
-	if p, err := a.item(parent); parent != "" && err == nil && (p.Kind == "Series" || p.Kind == "Season") {
-		maxLimit = 10000
-		if limit < 1 {
-			limit = maxLimit
+	var parentItem *Item
+	if parent != "" {
+		if p, err := a.item(parent); err == nil {
+			parentItem = &p
+			if p.Kind == "Series" || p.Kind == "Season" {
+				maxLimit = 10000
+				if limit < 1 {
+					limit = maxLimit
+				}
+			}
 		}
 	}
 	if limit < 1 {
@@ -1545,7 +1551,7 @@ func (a *App) items(w http.ResponseWriter, r *http.Request, u User, latest bool)
 	if limit > maxLimit {
 		limit = maxLimit
 	}
-	order := browseOrder(r)
+	order := browseOrderWithContext(r, parentItem)
 	if latest {
 		order = "mtime DESC,id DESC"
 	}
