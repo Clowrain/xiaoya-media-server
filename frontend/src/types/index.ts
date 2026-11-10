@@ -13,6 +13,11 @@ export interface LibraryView {
   Name: string;
   CollectionType?: string;
   Type?: string;
+  ImageTags?: {
+    Primary?: string;
+    [key: string]: string | undefined;
+  };
+  BackdropImageTags?: string[];
 }
 
 export interface MediaItem {
