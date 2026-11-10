@@ -382,7 +382,7 @@ func (a *App) libraryImageTags(i string) M {
 	if p != "" {
 		return M{"Primary": a.imageTag(i, "Primary", p)}
 	}
-	return M{}
+	return M{"Primary": a.generatedTag(i, "Primary")}
 }
 
 func libraryTypes(r *http.Request) bool {

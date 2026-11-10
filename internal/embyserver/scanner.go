@@ -118,6 +118,7 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 		var count int
 		a.db.QueryRow("SELECT count(*) FROM items WHERE lib=? AND kind IN ('Movie','Episode')", lib).Scan(&count)
 		a.db.Exec("UPDATE libraries SET status=?,error=?,count=?,duration=?,scanned=? WHERE id=?", status, message, count, time.Since(start).Seconds(), time.Now().Unix(), lib)
+		a.invalidateLibraryCollage(lib)
 		// 释放扫描 15,000+ 部媒体产生的临时堆对象，及时向操作系统归还内存
 		debug.FreeOSMemory()
 	}()

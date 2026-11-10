@@ -12,7 +12,7 @@ import (
 // Keep public signed-image GET/HEAD handling separate from mutations.
 func (a *App) imageUploadRoute(w http.ResponseWriter, r *http.Request, u User, p string) bool {
 	id, kind, ok := imageRequest(p)
-	if !ok || r.Method != http.MethodPost {
+	if !ok || (r.Method != http.MethodPost && r.Method != http.MethodDelete) {
 		return false
 	}
 	if !u.Admin && !u.API {
@@ -21,12 +21,24 @@ func (a *App) imageUploadRoute(w http.ResponseWriter, r *http.Request, u User, p
 	}
 	parts := strings.Split(strings.Trim(p, "/"), "/")
 	if kind != "Primary" || len(parts) > 5 || (len(parts) == 5 && parts[4] != "0") || (q(r, "Index") != "" && q(r, "Index") != "0") {
-		fail(w, 400, "仅支持主封面（索引0）上传")
+		fail(w, 400, "仅支持主封面（索引0）操作")
 		return true
 	}
 	var exists int
 	if a.db.QueryRow("SELECT 1 FROM libraries WHERE id=? UNION ALL SELECT 1 FROM items WHERE id=? LIMIT 1", id, id).Scan(&exists) != nil {
 		fail(w, 404, "媒体不存在")
+		return true
+	}
+	if r.Method == http.MethodDelete {
+		a.write.Lock()
+		_, err := a.db.Exec("DELETE FROM covers WHERE id=?", id)
+		a.write.Unlock()
+		if err != nil {
+			fail(w, 500, "清除封面失败")
+			return true
+		}
+		a.invalidateLibraryCollage(id)
+		w.WriteHeader(http.StatusNoContent)
 		return true
 	}
 	const limit = 5 << 20
@@ -59,6 +71,7 @@ func (a *App) imageUploadRoute(w http.ResponseWriter, r *http.Request, u User, p
 		fail(w, 500, "保存失败")
 		return true
 	}
+	a.invalidateLibraryCollage(id)
 	w.WriteHeader(http.StatusNoContent)
 	return true
 }

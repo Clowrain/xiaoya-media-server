@@ -237,6 +237,40 @@ export async function scanAllLibraries(): Promise<void> {
   await request('/admin/scan-all', 'POST', {});
 }
 
+export async function uploadItemCover(id: string, file: File): Promise<void> {
+  const token = getStoredToken() || '';
+  const device = getDeviceId();
+  const res = await fetch(`/Items/${encodeURIComponent(id)}/Images/Primary`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': file.type || 'image/jpeg',
+      'X-Emby-Token': token,
+      'X-Emby-Authorization': `Emby Client="Xiaoya Web React", Device="Browser", DeviceId="${device}", Version="2.0"`,
+    },
+    body: file,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || '上传封面失败');
+  }
+}
+
+export async function deleteItemCover(id: string): Promise<void> {
+  const token = getStoredToken() || '';
+  const device = getDeviceId();
+  const res = await fetch(`/Items/${encodeURIComponent(id)}/Images/Primary`, {
+    method: 'DELETE',
+    headers: {
+      'X-Emby-Token': token,
+      'X-Emby-Authorization': `Emby Client="Xiaoya Web React", Device="Browser", DeviceId="${device}", Version="2.0"`,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || '清除自定义封面失败');
+  }
+}
+
 export async function fetchDirectories(basePath: string = '/media'): Promise<{ Path: string; Directories: any[] }> {
   return request(`/admin/directories?${new URLSearchParams({ Path: basePath })}`);
 }

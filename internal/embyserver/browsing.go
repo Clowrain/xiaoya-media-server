@@ -7,8 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"image"
-	"image/color"
 	"image/png"
 	"io"
 	"net/http"
@@ -254,10 +252,14 @@ func (a *App) imagePath(i, kind string) string {
 	}
 	x, e := a.item(i)
 	if e != nil {
-		if kind != "Primary" {
-			return ""
+		if p := a.libraryPhysicalImage(i, kind); p != "" {
+			return p
 		}
-		x, e = readItem(a.db.QueryRow("SELECT "+cols+" FROM items WHERE lib=? AND poster<>'' ORDER BY name,id LIMIT 1", i))
+		if kind == "Primary" {
+			x, e = readItem(a.db.QueryRow("SELECT "+cols+" FROM items WHERE lib=? AND poster<>'' ORDER BY name,id LIMIT 1", i))
+		} else if kind == "Backdrop" {
+			x, e = readItem(a.db.QueryRow("SELECT "+cols+" FROM items WHERE lib=? AND (url LIKE '%.jpg' OR poster<>'') ORDER BY name,id LIMIT 1", i))
+		}
 	}
 	if e != nil {
 		return ""
@@ -360,6 +362,9 @@ func (a *App) decorateImages(x Item, m M) {
 			}
 		}
 	}
+	if tags["Primary"] == nil {
+		tags["Primary"] = a.generatedTag(x.ID, "Primary")
+	}
 	m["ImageTags"] = tags
 	m["BackdropImageTags"] = back
 	m["PrimaryImageAspectRatio"] = 2.0 / 3
@@ -423,7 +428,14 @@ func (a *App) taggedImage(w http.ResponseWriter, r *http.Request, p string) bool
 		}
 	}
 	path := a.imagePath(i, k)
-	if path == "" || !hmac.Equal([]byte(tag), []byte(a.imageTag(i, k, path))) {
+	if path == "" {
+		if k == "Primary" && hmac.Equal([]byte(tag), []byte(a.generatedTag(i, k))) {
+			a.serveImage(w, r, i)
+			return true
+		}
+		return false
+	}
+	if !hmac.Equal([]byte(tag), []byte(a.imageTag(i, k, path))) {
 		return false
 	}
 	a.serveImage(w, r, i)
@@ -469,20 +481,48 @@ func (a *App) serveImage(w http.ResponseWriter, r *http.Request, i string) {
 			fail(w, 404, "图片不存在")
 			return
 		}
-		var n int
-		if a.db.QueryRow("SELECT 1 FROM items WHERE id=? UNION ALL SELECT 1 FROM libraries WHERE id=? LIMIT 1", i, i).Scan(&n) != nil {
-			fail(w, 404, "图片不存在")
-			return
-		}
-		img := image.NewRGBA(image.Rect(0, 0, 360, 540))
-		for y := 0; y < 540; y++ {
-			for x := 0; x < 360; x++ {
-				img.SetRGBA(x, y, color.RGBA{uint8(30 + y/12), uint8(50 + y/18), 80, 255})
+		var isLib bool
+		var libName, libKind string
+		if a.db.QueryRow("SELECT name, kind FROM libraries WHERE id=?", i).Scan(&libName, &libKind) == nil {
+			isLib = true
+		} else {
+			var n int
+			if a.db.QueryRow("SELECT 1 FROM items WHERE id=?", i).Scan(&n) != nil {
+				fail(w, 404, "图片不存在")
+				return
 			}
+		}
+		genTag := a.generatedTag(i, kind)
+		w.Header().Set("ETag", `"`+genTag+`"`)
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		if r.Header.Get("If-None-Match") == `"`+genTag+`"` {
+			w.WriteHeader(304)
+			return
 		}
 		w.Header().Set("Content-Type", "image/png")
 		if r.Method != "HEAD" {
-			png.Encode(w, img)
+			var rawBytes []byte
+			if isLib {
+				if cached, ok := a.getCachedCollage(i); ok {
+					rawBytes = cached
+				} else {
+					img := a.generateLibraryCollage(i, libName, libKind)
+					var buf bytes.Buffer
+					png.Encode(&buf, img)
+					rawBytes = buf.Bytes()
+					a.setCachedCollage(i, rawBytes)
+				}
+			} else {
+				it, _ := a.item(i)
+				img := generatePlaceholderPoster(i, it.Name, it.Kind, it.Year)
+				var buf bytes.Buffer
+				png.Encode(&buf, img)
+				rawBytes = buf.Bytes()
+			}
+			if serveThumbnail(w, r, bytes.NewReader(rawBytes)) {
+				return
+			}
+			w.Write(rawBytes)
 		}
 		return
 	}

@@ -296,3 +296,72 @@ func TestEpisodeAndSeasonDefaultOrder(t *testing.T) {
 		t.Fatalf("SortBy=SortName 时剧集也应按 1, 2, 3 集数顺序排列，实际得到: %v", epNames2)
 	}
 }
+
+func TestGeneratedPosterAndLibraryCollage(t *testing.T) {
+	fixtureRoot := t.TempDir()
+	t.Setenv("MEDIA_ROOTS", fixtureRoot)
+	a := testApp(t)
+	db := a.db
+
+	// 1. 测试媒体库根目录物理海报探测
+	libDir := filepath.Join(fixtureRoot, "my_movies")
+	os.MkdirAll(libDir, 0755)
+	libPoster := filepath.Join(libDir, "poster.jpg")
+	os.WriteFile(libPoster, []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F'}, 0644)
+
+	db.Exec("INSERT INTO libraries(id,name,path,kind) VALUES('lib1','电影',?,'movies')", libDir)
+	if p := a.imagePath("lib1", "Primary"); p != libPoster {
+		t.Fatalf("媒体库物理海报探测失败: got %q, want %q", p, libPoster)
+	}
+
+	// 2. 测试普通无海报影片的兜底生成
+	db.Exec("INSERT INTO items(id,lib,parent,name,kind,path,year) VALUES('item-plain','lib1','lib1','测试电影','Movie','/fake/movie.mp4',2024)")
+	w := browseGet(a, "/Items/item-plain/Images/Primary", true)
+	if w.Code != 200 || w.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("无海报影片生成兜底失败: code=%d, type=%s", w.Code, w.Header().Get("Content-Type"))
+	}
+	etag := w.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("缺少 ETag 响应头")
+	}
+
+	// 3. 验证 304 缓存返回
+	r := httptest.NewRequest("GET", "/Items/item-plain/Images/Primary", nil)
+	r.Header.Set("If-None-Match", etag)
+	w304 := httptest.NewRecorder()
+	a.serve(w304, r)
+	if w304.Code != 304 {
+		t.Fatalf("If-None-Match 应返回 304: got %d", w304.Code)
+	}
+
+	// 4. 测试无物理海报媒体库的 2x2 Collage 拼贴与主题海报
+	emptyLibDir := filepath.Join(fixtureRoot, "empty_tv")
+	os.MkdirAll(emptyLibDir, 0755)
+	db.Exec("INSERT INTO libraries(id,name,path,kind) VALUES('lib2','电视剧',?,'tvshows')", emptyLibDir)
+
+	wLib := browseGet(a, "/Items/lib2/Images/Primary", true)
+	if wLib.Code != 200 || wLib.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("媒体库专属海报返回失败: code=%d", wLib.Code)
+	}
+
+	// 5. 测试中文片名首字母艺术海报生成
+	db.Exec("INSERT INTO items(id,lib,parent,name,kind,path,year) VALUES('item-cn','lib1','lib1','流浪地球','Movie','/fake/liulang.mp4',2023)")
+	wCN := browseGet(a, "/Items/item-cn/Images/Primary", true)
+	if wCN.Code != 200 || wCN.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("中文片名海报生成失败: code=%d", wCN.Code)
+	}
+
+	// 6. 测试媒体库根目录 Backdrop 物理探测
+	libBackdrop := filepath.Join(libDir, "backdrop.jpg")
+	os.WriteFile(libBackdrop, []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F'}, 0644)
+	if p := a.imagePath("lib1", "Backdrop"); p != libBackdrop {
+		t.Fatalf("媒体库物理背景图探测失败: got %q, want %q", p, libBackdrop)
+	}
+
+	// 7. 测试 fillHeight 缩略图等比缩放
+	wThumb := browseGet(a, "/Items/item-cn/Images/Primary?fillHeight=120&quality=80", true)
+	if wThumb.Code != 200 {
+		t.Fatalf("fillHeight 缩略图请求失败: code=%d", wThumb.Code)
+	}
+}
+

@@ -67,4 +67,18 @@ func TestImageUploadCompatibility(t *testing.T) {
 	if w := request("/Items/l/Images/Primary", "browse-test", img.Bytes()); w.Code != 204 {
 		t.Fatal("administrator upload failed")
 	}
+
+	// 验证 DELETE 清除自定义封面
+	delReq := httptest.NewRequest("DELETE", "/Items/l/Images/Primary", nil)
+	delReq.Header.Set("X-Emby-Token", "browse-test")
+	wDel := httptest.NewRecorder()
+	a.serve(wDel, delReq)
+	if wDel.Code != 204 {
+		t.Fatalf("DELETE cover failed: code=%d", wDel.Code)
+	}
+	var coverCount int
+	a.db.QueryRow("SELECT count(*) FROM covers WHERE id='l'").Scan(&coverCount)
+	if coverCount != 0 {
+		t.Fatalf("cover not deleted: %d", coverCount)
+	}
 }

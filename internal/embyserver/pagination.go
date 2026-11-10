@@ -261,6 +261,10 @@ func (a *App) listDTO(x Item, r *http.Request, u User) M {
 	}
 	if x.Poster != "" {
 		m["ImageTags"] = M{"Primary": a.listImageTag(x)}
+	} else if p := a.imagePath(x.ID, "Primary"); p != "" {
+		m["ImageTags"] = M{"Primary": a.imageTag(x.ID, "Primary", p)}
+	} else {
+		m["ImageTags"] = M{"Primary": a.generatedTag(x.ID, "Primary")}
 	}
 	if x.Kind == "Episode" {
 		m["PrimaryImageAspectRatio"] = 16.0 / 9

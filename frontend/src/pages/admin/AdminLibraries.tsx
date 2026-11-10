@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Folder, Plus, RefreshCw, Trash2, Edit2, FolderPlus, 
-  Clock, Play, ShieldAlert, Check, X, HardDrive 
+  Clock, Play, ShieldAlert, Check, X, HardDrive, Image as ImageIcon, Upload 
 } from 'lucide-react';
 import { AdminLibrary } from '../../types';
 import { 
   fetchAdminLibraries, createAdminLibrary, updateAdminLibrary, 
   deleteAdminLibrary, addLibraryFolder, removeLibraryFolder, 
   scanLibrary, scanAllLibraries, fetchScanSchedule, updateScanSchedule, 
-  notifyToast 
+  uploadItemCover, deleteItemCover, notifyToast 
 } from '../../api/client';
 import { DirectoryPickerModal } from '../../components/DirectoryPickerModal';
 
@@ -25,6 +25,8 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
   const [showEditModal, setShowEditModal] = useState<AdminLibrary | null>(null);
   const [showFoldersModal, setShowFoldersModal] = useState<AdminLibrary | null>(null);
   const [showScheduleModal, setShowScheduleModal] = useState<boolean>(false);
+  const [showCoverModal, setShowCoverModal] = useState<AdminLibrary | null>(null);
+  const [coverVersion, setCoverVersion] = useState<number>(Date.now());
 
   // Directory picker state
   const [pickerTarget, setPickerTarget] = useState<'add' | 'folder' | 'edit-folder' | null>(null);
@@ -356,18 +358,23 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
               >
                 <div>
                   <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2.5">
-                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center border ${
-                        isScanning 
-                          ? 'bg-amber-950/80 border-amber-500/30 text-amber-400' 
-                          : 'bg-emerald-950/80 border-emerald-500/20 text-emerald-400'
-                      }`}>
-                        {isScanning ? (
-                          <RefreshCw className="w-5 h-5 animate-spin" />
-                        ) : (
-                          <Folder className="w-5 h-5" />
-                        )}
+                    <div className="flex items-start gap-3">
+                      {/* 媒体库封面缩略图预览 */}
+                      <div 
+                        onClick={() => setShowCoverModal(lib)}
+                        className="group relative w-12 h-16 rounded-xl overflow-hidden bg-zinc-950 border border-zinc-800 shrink-0 cursor-pointer shadow-sm hover:border-emerald-500/60 transition"
+                        title="点击更换媒体库封面"
+                      >
+                        <img 
+                          src={`/Items/${lib.Id}/Images/Primary?fillHeight=160&v=${coverVersion}`}
+                          alt={lib.Name}
+                          className="w-full h-full object-cover transition duration-300 group-hover:scale-110"
+                        />
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <ImageIcon className="w-4 h-4 text-emerald-400" />
+                        </div>
                       </div>
+
                       <div>
                         <div className="flex items-center gap-2">
                           <h3 className="font-bold text-sm text-zinc-100">{lib.Name}</h3>
@@ -391,6 +398,13 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
                     </div>
 
                     <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setShowCoverModal(lib)}
+                        className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-emerald-400 transition"
+                        title="设置封面海报"
+                      >
+                        <ImageIcon className="w-4 h-4" />
+                      </button>
                       <button
                         onClick={() => openEditModal(lib)}
                         className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition"
@@ -864,6 +878,96 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Manage Cover Modal */}
+      {showCoverModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="relative w-full max-w-md rounded-2xl bg-zinc-900 border border-zinc-800 p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+              <div className="flex items-center gap-2 text-zinc-100 font-bold text-base">
+                <ImageIcon className="w-5 h-5 text-emerald-400" />
+                媒体库封面 - {showCoverModal.Name}
+              </div>
+              <button 
+                onClick={() => setShowCoverModal(null)}
+                className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* 当前封面预览 */}
+            <div className="flex flex-col items-center justify-center p-4 bg-zinc-950/60 rounded-xl border border-zinc-800/80 space-y-3">
+              <div className="w-32 h-48 rounded-xl overflow-hidden bg-zinc-900 border border-zinc-700/60 shadow-xl">
+                <img 
+                  src={`/Items/${showCoverModal.Id}/Images/Primary?fillHeight=300&v=${coverVersion}`}
+                  alt={showCoverModal.Name}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+              <span className="text-xs text-zinc-400 font-medium">前台实时展示海报效果</span>
+            </div>
+
+            {/* 操作区域 */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <label className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition cursor-pointer shadow-md shadow-emerald-600/20">
+                  <Upload className="w-4 h-4" />
+                  上传自定义海报
+                  <input 
+                    type="file" 
+                    accept="image/jpeg,image/png,image/webp" 
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      if (file.size > 5 * 1024 * 1024) {
+                        notifyToast('封面大小不能超过 5MB', 'warning');
+                        return;
+                      }
+                      try {
+                        await uploadItemCover(showCoverModal.Id, file);
+                        notifyToast('媒体库封面上传成功', 'success');
+                        setCoverVersion(Date.now());
+                        loadLibraries(false);
+                      } catch (err: any) {
+                        notifyToast(err.message || '上传封面失败', 'error');
+                      }
+                    }}
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await deleteItemCover(showCoverModal.Id);
+                      notifyToast('已恢复默认海报（四宫格拼贴/物理探测）', 'success');
+                      setCoverVersion(Date.now());
+                      loadLibraries(false);
+                    } catch (err: any) {
+                      notifyToast(err.message || '恢复默认海报失败', 'error');
+                    }
+                  }}
+                  className="py-2.5 px-3.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-medium transition cursor-pointer"
+                  title="清除自定义封面，恢复为目录物理海报或 2x2 拼贴海报"
+                >
+                  恢复默认
+                </button>
+              </div>
+
+              {/* 优先级说明 */}
+              <div className="p-3 rounded-xl bg-zinc-800/40 border border-zinc-800 text-[11px] text-zinc-400 leading-relaxed space-y-1">
+                <div className="font-semibold text-zinc-300">海报获取优先级：</div>
+                <div>1. 物理目录：存储根目录下的 <code className="text-emerald-400">poster.jpg</code> 或 <code className="text-emerald-400">folder.jpg</code></div>
+                <div>2. 自定义上传：此处上传的专属海报</div>
+                <div>3. 自动生成：提取库内影片合成 <code className="text-sky-400">2×2 电影墙海报</code></div>
+                <div>4. 分类兜底：电影/剧集专属艺术主题海报</div>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -39,6 +39,12 @@ func serveThumbnail(w http.ResponseWriter, r *http.Request, src io.ReadSeeker) b
 	if height <= 0 {
 		height, _ = strconv.Atoi(q(r, "Height"))
 	}
+	if width <= 0 {
+		width, _ = strconv.Atoi(q(r, "fillWidth"))
+	}
+	if height <= 0 {
+		height, _ = strconv.Atoi(q(r, "fillHeight"))
+	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	for i, p := range parts {
 		if strings.EqualFold(p, "Images") && len(parts) > i+7 {
@@ -136,7 +142,13 @@ func serveThumbnail(w http.ResponseWriter, r *http.Request, src io.ReadSeeker) b
 		}
 		w.Header().Set("Content-Type", "image/png")
 	} else {
-		if e := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 85}); e != nil {
+		quality := 85
+		if reqQ, _ := strconv.Atoi(q(r, "quality")); reqQ >= 30 && reqQ <= 100 {
+			quality = reqQ
+		} else if reqQ, _ := strconv.Atoi(q(r, "Quality")); reqQ >= 30 && reqQ <= 100 {
+			quality = reqQ
+		}
+		if e := jpeg.Encode(&out, dst, &jpeg.Options{Quality: quality}); e != nil {
 			return false
 		}
 		w.Header().Set("Content-Type", "image/jpeg")
