@@ -298,10 +298,9 @@ func TestEpisodeAndSeasonDefaultOrder(t *testing.T) {
 }
 
 func TestGeneratedPosterAndLibraryCollage(t *testing.T) {
-	fixtureRoot := t.TempDir()
-	t.Setenv("MEDIA_ROOTS", fixtureRoot)
-	a := testApp(t)
+	a, _, baseDir := catalogFixture(t)
 	db := a.db
+	fixtureRoot := filepath.Dir(baseDir)
 
 	// 1. 测试媒体库根目录物理海报探测
 	libDir := filepath.Join(fixtureRoot, "my_movies")
@@ -323,6 +322,13 @@ func TestGeneratedPosterAndLibraryCollage(t *testing.T) {
 	etag := w.Header().Get("ETag")
 	if etag == "" {
 		t.Fatal("缺少 ETag 响应头")
+	}
+
+	// 验证带 tag 的免登录访问 (防篡改公开静态图片)
+	tag := a.generatedTag("item-plain", "Primary")
+	wTag := browseGet(a, "/Items/item-plain/Images/Primary?tag="+tag, false)
+	if wTag.Code != 200 {
+		t.Fatalf("带 tag 免登录访问失败: got %d", wTag.Code)
 	}
 
 	// 3. 验证 304 缓存返回
