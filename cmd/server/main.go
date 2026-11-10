@@ -6,7 +6,9 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
+	"time"
 
 	"xiaoya-media-server/internal/adminapi"
 	"xiaoya-media-server/internal/config"
@@ -37,6 +39,20 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// 周期性向操作系统归还空闲堆内存，保持系统常驻轻量
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				debug.FreeOSMemory()
+			}
+		}
+	}()
 
 	var pipe *integration.Pipeline
 	defer func() {

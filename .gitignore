@@ -2,7 +2,7 @@
 bin/
 dist/
 build/
-server
+/server
 *.exe
 *.exe~
 *.dll

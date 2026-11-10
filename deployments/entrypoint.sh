@@ -102,6 +102,14 @@ EOF
     echo "[Entrypoint] Internal PostgreSQL is ready at 127.0.0.1:5432."
 else
     echo "[Entrypoint] External PostgreSQL host configured: $PG_HOST:$POSTGRES_PORT"
+    echo "[Entrypoint] Waiting for external PostgreSQL to accept connections..."
+    for i in $(seq 1 60); do
+        if pg_isready -h "$PG_HOST" -p "$POSTGRES_PORT" -U "${POSTGRES_USER:-emby}" > /dev/null 2>&1; then
+            echo "[Entrypoint] External PostgreSQL is ready at $PG_HOST:$POSTGRES_PORT."
+            break
+        fi
+        sleep 1
+    done
 fi
 
 # 启动 Xiaoya Media Server 主程序

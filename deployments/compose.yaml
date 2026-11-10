@@ -1,6 +1,49 @@
 name: xiaoya-media-server
 
 services:
+  # ==============================================================================
+  # 独立 PostgreSQL 数据库服务 (精简 Alpine 镜像，参数调优与内存限制)
+  # ==============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: xiaoya-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-emby}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先在 .env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-emby}
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      # 数据持久化目录（无缝兼容原单容器内置数据库数据）
+      - ${POSTGRES_DATA_DIR:-${APP_DATA_DIR:-./data/appdata}/postgres}:/var/lib/postgresql/data
+    # 低内存调优：限制缓冲区与并发工作内存，防止无节制膨胀，常驻内存稳定在 50~100MB
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=64MB"
+      - "-c"
+      - "work_mem=4MB"
+      - "-c"
+      - "maintenance_work_mem=32MB"
+      - "-c"
+      - "max_connections=50"
+      - "-c"
+      - "effective_cache_size=128MB"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-emby} -d ${POSTGRES_DB:-emby}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - default
+
+  # ==============================================================================
+  # Xiaoya Media Server 业务主程序 (连接独立 postgres 容器)
+  # ==============================================================================
   xiaoya-media-server:
     image: ${IMAGE_NAME:-ghcr.io/clowrain/xiaoya-media-server:latest}
     # 如需在本地自行编译，可取消以下 build 配置注释：
@@ -9,17 +52,23 @@ services:
     #   dockerfile: deployments/Dockerfile
     container_name: xiaoya-media-server
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "${HTTP_PORT:-8096}:8096"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       LISTEN: 0.0.0.0:8096
-      # 数据库配置（默认使用容器内置轻量 PostgreSQL，数据自动持久化到 /data/postgres）
-      POSTGRES_HOST: ${POSTGRES_HOST:-127.0.0.1}
-      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      # 数据库连接：指向独立 postgres 容器服务名
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-emby}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先在 .env 中设置 POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-emby}
+      # Go 内存限制优化，主动抑制虚拟内存保留与 GC 膨胀
+      GOMEMLIMIT: 384MiB
+      GOGC: 80
       # 管理员账号与系统密钥
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请先在 .env 中设置至少 12 位的 ADMIN_PASSWORD}
       BOOTSTRAP_API_KEY: ${BOOTSTRAP_API_KEY:-}
@@ -52,13 +101,20 @@ services:
       - ${XIAOYA_DIR:-${XIAOYA_DB_DIR:?请设置小雅所在宿主机目录 XIAOYA_DIR}}:/xiaoya-db:ro
       # 本地 STRM 输出及附件落地目录（读写）
       - ${MEDIA_DIR:-./data/media}:/media
-      # 应用持久化数据目录（含内置 PostgreSQL 数据库、封面缓存、媒体探测缓存、备份等）
+      # 应用持久化数据目录（含封面缓存、媒体探测缓存、备份等）
       - ${APP_DATA_DIR:-./data/appdata}:/data
       # 可选：自定义 YAML 配置文件（镜像内已内置默认配置并由上述环境变量覆盖；如需外部挂载可取消注释）
       # - ${CONFIG_FILE_HOST:-./config.yaml}:/etc/xiaoya-media-server/config.yaml:ro
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     networks:
+      - default
       - proxy_net
 
 networks:
+  default:
+    name: xiaoya-net
   proxy_net:
     external: true

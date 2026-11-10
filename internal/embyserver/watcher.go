@@ -2,15 +2,76 @@ package embyserver
 
 import (
 	"context"
-	"github.com/fsnotify/fsnotify"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
+
+type watchSuppressor struct {
+	mu      sync.RWMutex
+	entries map[string]time.Time
+}
+
+func (s *watchSuppressor) suppress(path string, d time.Duration) {
+	if s == nil || path == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.entries == nil {
+		s.entries = make(map[string]time.Time)
+	}
+	s.entries[filepath.Clean(path)] = time.Now().Add(d)
+}
+
+func (s *watchSuppressor) isSuppressed(path string) bool {
+	if s == nil || path == "" {
+		return false
+	}
+	clean := filepath.Clean(path)
+	now := time.Now()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for target := clean; target != "" && target != "." && target != "/"; target = filepath.Dir(target) {
+		if exp, exists := s.entries[target]; exists {
+			if now.Before(exp) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *watchSuppressor) cleanup() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for p, exp := range s.entries {
+		if now.After(exp) {
+			delete(s.entries, p)
+		}
+	}
+}
+
+// SuppressWatchPath temporarily suppresses file-system watch events for path or its children.
+func (a *App) SuppressWatchPath(path string, d time.Duration) {
+	a.suppressor.suppress(path, d)
+}
+
+// IsWatchSuppressed returns true if path or any of its parent directories is currently suppressed.
+func (a *App) IsWatchSuppressed(path string) bool {
+	return a.suppressor.isSuppressed(path)
+}
 
 func (a *App) watchDelay() int {
 	var s string
@@ -100,6 +161,9 @@ func (a *App) watchMediaContext(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-refresh.C:
+			syncRoots()
+			a.suppressor.cleanup()
 		case ev, ok := <-w.Events:
 			if !ok {
 				return
@@ -107,6 +171,30 @@ func (a *App) watchMediaContext(ctx context.Context) {
 			if ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) == 0 {
 				continue
 			}
+			// 1. 忽略隐藏文件或临时文件 (如 .DS_Store, .tmp 等)
+			baseName := filepath.Base(ev.Name)
+			if strings.HasPrefix(baseName, ".") {
+				continue
+			}
+
+			// 2. 内部写入抑制检查 (Suppression)
+			if a.IsWatchSuppressed(ev.Name) {
+				continue
+			}
+
+			// 3. 区分目录与文件
+			isDir := false
+			if watched[ev.Name] {
+				isDir = true
+			} else if fi, err := os.Stat(ev.Name); err == nil && fi.IsDir() {
+				isDir = true
+			}
+
+			// 4. 忽略非流媒体/视频文件：海报图片(.jpg,.png)与元数据(.nfo,.xml)等不触发扫描
+			if !isDir && !isScannableMediaFile(ev.Name) {
+				continue
+			}
+
 			for root, lib := range roots {
 				if ev.Name == root || strings.HasPrefix(ev.Name, root+"/") {
 					pending[lib] = time.Now()
@@ -151,8 +239,6 @@ func (a *App) watchMediaContext(ctx context.Context) {
 			}
 		case lib := <-done:
 			delete(running, lib)
-		case <-refresh.C:
-			syncRoots()
 		case now := <-tick.C:
 			if !a.defaultOn("watch_enabled") {
 				clear(pending)

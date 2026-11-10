@@ -55,6 +55,7 @@ type App struct {
 	loginMu           sync.Mutex
 	attempts          map[string][]time.Time
 	serverID          string
+	suppressor        watchSuppressor
 }
 type User struct {
 	ID     string

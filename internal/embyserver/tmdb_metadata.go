@@ -787,6 +787,9 @@ func (a *App) downloadAndSaveImage(ctx context.Context, targetPath, rawURL strin
 	if err != nil || len(data) == 0 {
 		return err
 	}
+	if a != nil {
+		a.SuppressWatchPath(targetPath, 90*time.Second)
+	}
 	if wErr := os.WriteFile(targetPath, data, 0644); wErr != nil {
 		RecordGlobalLog("WARN", "tmdb", fmt.Sprintf("写入海报文件失败: %s", targetPath), wErr.Error(), "", "")
 		return wErr
@@ -801,6 +804,11 @@ func (a *App) maybePersistArtifactsToDisk(cur Item, n sidecar) {
 	if strings.TrimSpace(cur.Path) == "" {
 		return
 	}
+	dir := filepath.Dir(cur.Path)
+	if cur.Kind == "Series" || cur.Kind == "Season" {
+		dir = cur.Path
+	}
+	a.SuppressWatchPath(dir, 90*time.Second)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
