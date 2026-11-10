@@ -42,6 +42,7 @@ RUN apk add --no-cache \
       postgresql16-contrib \
       su-exec \
       wget \
+      font-wqy-zenhei \
     && mkdir -p /data /media/strm /xiaoya-db /etc/xiaoya-media-server /run/postgresql
 
 ENV TZ=Asia/Shanghai \

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"image"
 	"image/color"
@@ -20,7 +21,134 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/font/sfnt"
+	"golang.org/x/image/math/fixed"
 )
+
+//go:embed assets/font.ttf
+var defaultEmbeddedFont []byte
+
+var (
+	vectorFontOnce   sync.Once
+	vectorParsedFont *sfnt.Font
+)
+
+func getVectorFont() *sfnt.Font {
+	vectorFontOnce.Do(func() {
+		// 1. 尝试从环境变量或常用挂载/系统路径探测中文字体
+		candidates := []string{
+			os.Getenv("XMS_FONT_PATH"),
+			"/data/font.ttf",
+			"/data/font.ttc",
+			"/etc/xiaoya-media-server/font.ttf",
+			"/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc",
+			"/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+			"/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+			"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+			"/System/Library/Fonts/PingFang.ttc",
+			"/System/Library/Fonts/STHeiti Light.ttc",
+		}
+		for _, fp := range candidates {
+			if fp == "" {
+				continue
+			}
+			if b, err := os.ReadFile(fp); err == nil && len(b) > 0 {
+				if f, err := opentype.Parse(b); err == nil {
+					vectorParsedFont = f
+					return
+				}
+				if coll, err := opentype.ParseCollection(b); err == nil && coll.NumFonts() > 0 {
+					if f, err := coll.Font(0); err == nil {
+						vectorParsedFont = f
+						return
+					}
+				}
+			}
+		}
+		// 2. 加载内置嵌入的开源中文字体 (Smiley Sans / 得意黑)
+		if len(defaultEmbeddedFont) > 0 {
+			if f, err := opentype.Parse(defaultEmbeddedFont); err == nil {
+				vectorParsedFont = f
+			}
+		}
+	})
+	return vectorParsedFont
+}
+
+func drawVectorText(img *image.RGBA, text string, x, y int, fontSize float64, col color.RGBA) bool {
+	f := getVectorFont()
+	if f == nil {
+		return false
+	}
+	face, err := opentype.NewFace(f, &opentype.FaceOptions{
+		Size:    fontSize,
+		DPI:     72,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		return false
+	}
+	defer face.Close()
+
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.NewUniform(col),
+		Face: face,
+		Dot:  fixed.Point26_6{X: fixed.I(x), Y: fixed.I(y)},
+	}
+	d.DrawString(text)
+	return true
+}
+
+func measureVectorText(text string, fontSize float64) int {
+	f := getVectorFont()
+	if f == nil {
+		return 0
+	}
+	face, err := opentype.NewFace(f, &opentype.FaceOptions{
+		Size:    fontSize,
+		DPI:     72,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		return 0
+	}
+	defer face.Close()
+
+	d := &font.Drawer{
+		Face: face,
+	}
+	return d.MeasureString(text).Ceil()
+}
+
+func drawCenteredText(img *image.RGBA, text string, centerY int, fontSize float64, col color.RGBA) {
+	bounds := img.Bounds()
+	w := bounds.Dx()
+	wPx := measureVectorText(text, fontSize)
+	if wPx > 0 {
+		if wPx > w-32 && fontSize > 16 {
+			fontSize = fontSize * float64(w-32) / float64(wPx)
+			if fontSize < 14 {
+				fontSize = 14
+			}
+			wPx = measureVectorText(text, fontSize)
+		}
+		startX := (w - wPx) / 2
+		baselineY := centerY + int(fontSize*0.35)
+		drawVectorText(img, text, startX, baselineY, fontSize, col)
+		return
+	}
+
+	scale := int(fontSize / 8)
+	if scale < 1 {
+		scale = 1
+	}
+	tw := textWidth(text, scale)
+	drawText(img, text, w/2-tw/2, centerY-scale*3, scale, col)
+}
 
 // Preset themes: background gradients (top -> bottom), accent highlight colors
 type posterPalette struct {
@@ -370,7 +498,7 @@ func drawLibraryCollageIcon(img *image.RGBA, cx, cy int, accent color.RGBA) {
 	}
 }
 
-// generatePlaceholderPoster renders an elegant, content-aware poster for items without converting to pinyin
+// generatePlaceholderPoster renders an elegant, content-aware poster for items
 func generatePlaceholderPoster(id, name, kind string, year int) image.Image {
 	const w, h = 360, 540
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -393,7 +521,7 @@ func generatePlaceholderPoster(id, name, kind string, year int) image.Image {
 	drawBadge(img, badgeText, w/2, 45, 2, pal.accent, badgeBg)
 
 	// Center Geometric Icon (Classic Clapperboard, TV Monitor, or Film Reel)
-	centerY := h*44/100
+	centerY := h * 38 / 100
 	switch strings.ToLower(kind) {
 	case "movie":
 		drawClapperboard(img, w/2, centerY, pal.accent)
@@ -405,15 +533,18 @@ func generatePlaceholderPoster(id, name, kind string, year int) image.Image {
 		drawClapperboard(img, w/2, centerY, pal.accent)
 	}
 
-	// Bottom Year & Label (No Pinyin conversion)
+	// 中文原片名居中展示在图标下方
+	displayName := strings.TrimSpace(name)
+	if displayName != "" {
+		drawCenteredText(img, displayName, h*68/100, 26, pal.accent)
+	}
+
+	// 底部年份与标签
 	if year > 1800 {
 		yearStr := strconv.Itoa(year)
-		yw := textWidth(yearStr, 3)
-		drawText(img, yearStr, w/2-yw/2, h-80, 3, pal.subText)
+		drawCenteredText(img, yearStr, h-45, 18, pal.subText)
 	} else {
-		subLabel := "PREVIEW"
-		sw := textWidth(subLabel, 2)
-		drawText(img, subLabel, w/2-sw/2, h-80, 2, pal.subText)
+		drawCenteredText(img, "PREVIEW", h-45, 16, pal.subText)
 	}
 
 	return img
@@ -433,13 +564,17 @@ func generateLibraryFallbackPoster(id, name, kind string) image.Image {
 		badgeText = "TV SHOWS"
 	}
 	badgeBg := color.RGBA{pal.accent.R / 4, pal.accent.G / 4, pal.accent.B / 4, 200}
-	drawBadge(img, badgeText, w/2, 50, 2, pal.accent, badgeBg)
+	drawBadge(img, badgeText, w/2, 45, 2, pal.accent, badgeBg)
 
-	drawLibraryCollageIcon(img, w/2, h*42/100, pal.accent)
+	drawLibraryCollageIcon(img, w/2, h*38/100, pal.accent)
 
-	title := "LIBRARY"
-	tw := textWidth(title, 3)
-	drawText(img, title, w/2-tw/2, h-100, 3, pal.accent)
+	// 媒体库真实中文名居中展示（如“国产剧”、“欧美电影”、“动漫”）
+	displayLibName := strings.TrimSpace(name)
+	if displayLibName == "" {
+		displayLibName = "媒体库"
+	}
+	drawCenteredText(img, displayLibName, h*66/100, 28, pal.accent)
+	drawCenteredText(img, "COLLECTION", h-45, 16, pal.subText)
 
 	return img
 }
