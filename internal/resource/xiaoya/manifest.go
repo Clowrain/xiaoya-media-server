@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,6 +27,8 @@ type ManifestEntry struct {
 	LineNumber     int    `json:"line_number"`
 	RelPath        string `json:"rel_path"`
 	PlayURL        string `json:"play_url"`
+	CleanPlayURL   string `json:"clean_play_url,omitempty"`
+	AListPath      string `json:"alist_path,omitempty"`
 	Title          string `json:"title"`
 	Year           int    `json:"year,omitempty"`
 	TmdbID         string `json:"tmdb_id,omitempty"`
@@ -107,6 +110,50 @@ func (s *ManifestScanner) FilePath() string {
 	return s.filePath
 }
 
+// CleanPlayURLAndExtractAListPath takes a raw PlayURL and returns:
+// 1. cleanURL: stripped of query parameters (?sign=... etc.)
+// 2. aListPath: decoded path with /d/, /p/, or /dav/ stripped and leading "/" ensured
+func CleanPlayURLAndExtractAListPath(rawURL string) (cleanURL, aListPath string) {
+	raw := strings.TrimSpace(rawURL)
+	cleanURL = raw
+	if qIdx := strings.IndexByte(raw, '?'); qIdx >= 0 {
+		cleanURL = raw[:qIdx]
+	}
+
+	pathPart := cleanURL
+	if idx := strings.Index(cleanURL, "://"); idx >= 0 {
+		afterScheme := cleanURL[idx+3:]
+		if slashIdx := strings.IndexByte(afterScheme, '/'); slashIdx >= 0 {
+			pathPart = afterScheme[slashIdx:]
+		} else {
+			pathPart = "/"
+		}
+	}
+
+	foundPrefix := false
+	for _, prefix := range []string{"/d/", "/p/", "/dav/"} {
+		if strings.HasPrefix(pathPart, prefix) {
+			pathPart = "/" + strings.TrimPrefix(pathPart, prefix)
+			foundPrefix = true
+			break
+		}
+	}
+	if !foundPrefix {
+		return cleanURL, ""
+	}
+
+	if unescaped, err := url.PathUnescape(pathPart); err == nil {
+		aListPath = unescaped
+	} else if unescaped, err := url.QueryUnescape(pathPart); err == nil {
+		aListPath = unescaped
+	} else {
+		aListPath = pathPart
+	}
+
+	aListPath = "/" + strings.TrimPrefix(strings.TrimSpace(aListPath), "/")
+	return cleanURL, aListPath
+}
+
 // ParseManifestLine parses a single "RelPath#PlayURL" line into ManifestEntry.
 func ParseManifestLine(lineNum int, line string) (*ManifestEntry, error) {
 	line = strings.TrimSpace(line)
@@ -124,11 +171,15 @@ func ParseManifestLine(lineNum int, line string) (*ManifestEntry, error) {
 		return nil, nil
 	}
 
+	cleanURL, aListPath := CleanPlayURLAndExtractAListPath(playURL)
+
 	entry := &ManifestEntry{
-		LineNumber: lineNum,
-		RelPath:    relPath,
-		PlayURL:    playURL,
-		MediaType:  "Movie",
+		LineNumber:   lineNum,
+		RelPath:      relPath,
+		PlayURL:      playURL,
+		CleanPlayURL: cleanURL,
+		AListPath:    aListPath,
+		MediaType:    "Movie",
 	}
 
 	// 1. TMDB ID extraction
@@ -416,10 +467,12 @@ func (s *ManifestScanner) StreamMultiPrefix(ctx context.Context, prefixes []stri
 		if err != nil || entry == nil {
 			return count, fmt.Errorf("strm.txt 第 %d 行无效", lineNum)
 		}
-		path := strings.ToLower(strings.Trim(entry.RelPath, "/"))
+		rel := strings.ToLower(strings.Trim(entry.RelPath, "/"))
+		alist := strings.ToLower(strings.Trim(entry.AListPath, "/"))
 		var matched *PrefixMatch
 		for i := range targets {
-			if path == targets[i].Clean || strings.HasPrefix(path, targets[i].Clean+"/") {
+			tgt := targets[i].Clean
+			if alist == tgt || strings.HasPrefix(alist, tgt+"/") || rel == tgt || strings.HasPrefix(rel, tgt+"/") {
 				matched = &targets[i]
 				break
 			}

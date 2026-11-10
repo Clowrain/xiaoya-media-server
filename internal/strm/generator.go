@@ -312,12 +312,63 @@ func (e *Engine) writeOwnedSTRM(ctx context.Context, root string, res discovery.
 		}
 		ext := filepath.Ext(base)
 		stem := strings.TrimSuffix(filepath.Base(base), ext)
+		dir := filepath.Dir(base)
+
+		// 1. Check if base file already exists on disk and is an exact duplicate mirror.
+		if existingBytes, readErr := os.ReadFile(base); readErr == nil {
+			existingClean := strings.TrimSpace(StripTransientQuery(string(existingBytes)))
+			targetClean := strings.TrimSpace(StripTransientQuery(data))
+			if existingClean == targetClean && targetClean != "" {
+				// Exact duplicate mirror! First-claim wins, share existing path without redundant file.
+				claimed, claimErr := store.ClaimMaterializedPath(ctx, res.ID, base)
+				if claimErr == nil && claimed != "" {
+					p = claimed
+				} else {
+					p = base
+				}
+				return p, nil
+			}
+		}
+
+		// 2. Base either does not exist, or exists with different content (multi-version / multi-source).
 		for attempt := 0; p == "" && attempt < 32; attempt++ {
 			candidate := base
-			if attempt > 0 {
-				suffix := "_" + shortSHA1(fmt.Sprintf("%s:%d", res.ID, attempt))
-				candidate = filepath.Join(filepath.Dir(base), truncateUTF8BaseBytes(stem, 255-len(suffix)-len(ext))+suffix+ext)
+			baseExists := false
+			if _, statErr := os.Lstat(base); statErr == nil {
+				baseExists = true
 			}
+
+			if attempt > 0 || baseExists {
+				vTag := ExtractVersionOrSourceTag(res.SourcePath, res.RelPath, res.SourceContent, attempt)
+				var vSuffix string
+				if attempt == 0 {
+					vSuffix = fmt.Sprintf(" - [%s]", vTag)
+				} else {
+					vSuffix = fmt.Sprintf(" - [%s %d]", vTag, attempt+1)
+				}
+				maxStemBytes := 255 - len(vSuffix) - len(ext)
+				if maxStemBytes < 20 {
+					maxStemBytes = 20
+				}
+				candidate = filepath.Join(dir, truncateUTF8BaseBytes(stem, maxStemBytes)+vSuffix+ext)
+			}
+
+			if existingBytes, readErr := os.ReadFile(candidate); readErr == nil {
+				existingClean := strings.TrimSpace(StripTransientQuery(string(existingBytes)))
+				targetClean := strings.TrimSpace(StripTransientQuery(data))
+				if existingClean == targetClean && targetClean != "" {
+					// Duplicate of this specific version!
+					claimed, claimErr := store.ClaimMaterializedPath(ctx, res.ID, candidate)
+					if claimErr == nil && claimed != "" {
+						p = claimed
+					} else {
+						p = candidate
+					}
+					return p, nil
+				}
+				continue // File exists with different content, try next attempt
+			}
+
 			if _, err = os.Lstat(candidate); err == nil {
 				continue
 			}

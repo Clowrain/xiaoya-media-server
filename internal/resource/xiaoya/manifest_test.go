@@ -169,3 +169,52 @@ func TestManifestPrefixDoesNotMatchURLOrSibling(t *testing.T) {
 		t.Fatalf("count=%d error=%v", n, e)
 	}
 }
+
+func TestAListPathMatchAndCleanURL(t *testing.T) {
+	line := `115/动漫/其它/天线宝宝 (2022)/{tmdb-211069}/Season 1/天线宝宝.2022.S01E03.strm#http://xiaoya.host:5678/d/动漫/合集（115）/T/天线宝宝%20(2022)%20{tmdb-211069}/Season%201/天线宝宝%20-%20S01E03%20-%20第3集.mkv?sign=SIGN_STR`
+	entry, err := ParseManifestLine(1, line)
+	if err != nil {
+		t.Fatalf("ParseManifestLine failed: %v", err)
+	}
+
+	expectedAListPath := "/动漫/合集（115）/T/天线宝宝 (2022) {tmdb-211069}/Season 1/天线宝宝 - S01E03 - 第3集.mkv"
+	if entry.AListPath != expectedAListPath {
+		t.Errorf("AListPath mismatch:\nwant: %s\ngot:  %s", expectedAListPath, entry.AListPath)
+	}
+
+	expectedCleanURL := "http://xiaoya.host:5678/d/动漫/合集（115）/T/天线宝宝%20(2022)%20{tmdb-211069}/Season%201/天线宝宝%20-%20S01E03%20-%20第3集.mkv"
+	if entry.CleanPlayURL != expectedCleanURL {
+		t.Errorf("CleanPlayURL mismatch:\nwant: %s\ngot:  %s", expectedCleanURL, entry.CleanPlayURL)
+	}
+
+	tmp := t.TempDir()
+	txtPath := filepath.Join(tmp, "strm.txt")
+	if err := os.WriteFile(txtPath, []byte(line+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	scanner := NewManifestScanner(txtPath)
+
+	// 1. Should match "/动漫/合集（115）"
+	var matchedEntries []ManifestEntry
+	count, err := scanner.StreamPrefix(context.Background(), "/动漫/合集（115）", func(e ManifestEntry) error {
+		matchedEntries = append(matchedEntries, e)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamPrefix failed: %v", err)
+	}
+	if count != 1 || len(matchedEntries) != 1 {
+		t.Fatalf("expected count 1, got %d", count)
+	}
+
+	// 2. Should NOT match "/每日更新/电视剧/国产剧"
+	count2, err := scanner.StreamPrefix(context.Background(), "/每日更新/电视剧/国产剧", func(e ManifestEntry) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamPrefix failed: %v", err)
+	}
+	if count2 != 0 {
+		t.Fatalf("expected count 0 for unrelated monitor root, got %d", count2)
+	}
+}

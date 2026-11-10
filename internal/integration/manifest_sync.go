@@ -80,11 +80,27 @@ func (p *Pipeline) syncManifestRoots(ctx context.Context, roots []discovery.Moni
 				if e != nil {
 					return e
 				}
-				path := "/" + entry.RelPath
-				if path != prefix && !strings.HasPrefix(path, strings.TrimRight(prefix, "/")+"/") {
+				aListPath := entry.AListPath
+				relPath := "/" + strings.TrimPrefix(entry.RelPath, "/")
+				cleanPrefix := strings.TrimRight(prefix, "/") + "/"
+
+				matchedAList := aListPath == prefix || strings.HasPrefix(aListPath, cleanPrefix)
+				matchedRel := relPath == prefix || strings.HasPrefix(relPath, cleanPrefix)
+
+				if !matchedAList && !matchedRel {
 					continue
 				}
-				if e = yield(discovery.ManualNode{Path: path, RelPath: entry.RelPath, Name: filepath.Base(path), Content: entry.PlayURL}); e != nil {
+
+				effectivePath := aListPath
+				if !matchedAList && matchedRel {
+					effectivePath = relPath
+				}
+
+				cleanURL := entry.CleanPlayURL
+				if cleanURL == "" {
+					cleanURL = entry.PlayURL
+				}
+				if e = yield(discovery.ManualNode{Path: effectivePath, RelPath: entry.RelPath, Name: filepath.Base(effectivePath), Content: cleanURL}); e != nil {
 					return e
 				}
 			}
@@ -180,7 +196,11 @@ func (p *Pipeline) importManifestStream(ctx context.Context, root, name, library
 			if e != nil {
 				return e
 			}
-			if e = yield(discovery.ManualNode{Path: "/" + entry.RelPath, RelPath: entry.RelPath, Name: filepath.Base(entry.RelPath), Content: entry.PlayURL}); e != nil {
+			cleanURL := entry.CleanPlayURL
+			if cleanURL == "" {
+				cleanURL = entry.PlayURL
+			}
+			if e = yield(discovery.ManualNode{Path: "/" + entry.RelPath, RelPath: entry.RelPath, Name: filepath.Base(entry.RelPath), Content: cleanURL}); e != nil {
 				return e
 			}
 		}

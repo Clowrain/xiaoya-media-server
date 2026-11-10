@@ -82,6 +82,15 @@ func looksLikeURLQueryString(q string) bool {
 	return true
 }
 
+// StripTransientQuery strips transient query strings (such as ?sign=... or &sign=...) from a URL or file content.
+func StripTransientQuery(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if qIdx := strings.IndexByte(raw, '?'); qIdx >= 0 {
+		return raw[:qIdx]
+	}
+	return raw
+}
+
 func splitSchemeHostAndRest(rawURL string) (schemeHost, rest string, ok bool) {
 	idx := strings.Index(rawURL, "://")
 	if idx <= 0 {

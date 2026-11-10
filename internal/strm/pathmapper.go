@@ -333,3 +333,86 @@ func ApplyFallbackTranslation(outputRoot, targetPath string) string {
 	translatedRel := fallbackCharReplacer.Replace(rel)
 	return filepath.Join(cleanRoot, translatedRel)
 }
+
+var (
+	reQuality4K    = regexp.MustCompile(`(?i)(?:4k|2160p|uhd)`)
+	reQuality1080P = regexp.MustCompile(`(?i)(?:1080p|1080i|fhd)`)
+	reQuality720P  = regexp.MustCompile(`(?i)(?:720p|hd)`)
+	reDolbyVision  = regexp.MustCompile(`(?i)(?:dv|dovi|dolby[\s._-]*vision|杜比视界)`)
+	reHDR          = regexp.MustCompile(`(?i)(?:hdr10\+|hdr10|hdr)`)
+	reRemux        = regexp.MustCompile(`(?i)(?:remux|bluray|blu-ray|bdrip)`)
+	reEditionCut   = regexp.MustCompile(`(?i)(?:加长版|完整版|未删减版|未删减|导演剪辑版|特别版|纪念版)`)
+	reAudioDub     = regexp.MustCompile(`(?i)(?:国粤双语|国语配音|粤语配音|国配|粤配)`)
+
+	reSource115    = regexp.MustCompile(`(?i)(?:115(?:网盘)?|合集（115）|合集\(115\))`)
+	reSourceQuark  = regexp.MustCompile(`(?i)(?:夸克|quark)`)
+	reSourceAli    = regexp.MustCompile(`(?i)(?:阿里(?:云盘|网盘)?|alipan|aliyun)`)
+	reSourceBaidu  = regexp.MustCompile(`(?i)(?:百度(?:网盘)?|pan\.baidu)`)
+	reSourceTianyi = regexp.MustCompile(`(?i)(?:天翼(?:云盘)?|cloud\.189)`)
+	reSourceXunlei = regexp.MustCompile(`(?i)(?:迅雷(?:云盘)?|xunlei)`)
+)
+
+// ExtractVersionOrSourceTag extracts a multi-version tag from media paths.
+// Precedence:
+// 1. Explicit video qualities & edition features (e.g. "4K 杜比视界", "1080P", "加长版")
+// 2. Netdisk/Source origins (e.g. "115", "夸克", "阿里")
+// 3. Fallback attempt index (e.g. "版本 2", "版本 3")
+func ExtractVersionOrSourceTag(sourcePath, relPath, content string, attempt int) string {
+	combined := sourcePath + " " + relPath + " " + filepath.Base(sourcePath) + " " + filepath.Base(content)
+
+	// 1. Check explicit qualities
+	var tags []string
+	if reQuality4K.MatchString(combined) {
+		tags = append(tags, "4K")
+	} else if reQuality1080P.MatchString(combined) {
+		tags = append(tags, "1080P")
+	} else if reQuality720P.MatchString(combined) {
+		tags = append(tags, "720P")
+	}
+
+	if reDolbyVision.MatchString(combined) {
+		tags = append(tags, "杜比视界")
+	} else if reHDR.MatchString(combined) {
+		tags = append(tags, "HDR")
+	}
+
+	if reRemux.MatchString(combined) {
+		tags = append(tags, "REMUX")
+	}
+	if m := reEditionCut.FindString(combined); m != "" {
+		tags = append(tags, m)
+	}
+	if m := reAudioDub.FindString(combined); m != "" {
+		tags = append(tags, m)
+	}
+
+	if len(tags) > 0 {
+		return strings.Join(tags, " ")
+	}
+
+	// 2. Check netdisk origins (Option 1)
+	if reSource115.MatchString(combined) {
+		return "115"
+	}
+	if reSourceQuark.MatchString(combined) {
+		return "夸克"
+	}
+	if reSourceAli.MatchString(combined) {
+		return "阿里"
+	}
+	if reSourceBaidu.MatchString(combined) {
+		return "百度"
+	}
+	if reSourceTianyi.MatchString(combined) {
+		return "天翼"
+	}
+	if reSourceXunlei.MatchString(combined) {
+		return "迅雷"
+	}
+
+	// 3. Fallback
+	if attempt > 0 {
+		return fmt.Sprintf("版本 %d", attempt+1)
+	}
+	return "版本 1"
+}
