@@ -308,13 +308,17 @@ func TestGeneratedPosterAndLibraryCollage(t *testing.T) {
 	libPoster := filepath.Join(libDir, "poster.jpg")
 	os.WriteFile(libPoster, []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F'}, 0644)
 
-	db.Exec("INSERT INTO libraries(id,name,path,kind) VALUES('lib1','电影',?,'movies')", libDir)
+	if _, err := db.Exec("INSERT INTO libraries(id,name,path,kind) VALUES('lib1','电影',?,'movies')", libDir); err != nil {
+		t.Fatal(err)
+	}
 	if p := a.imagePath("lib1", "Primary"); p != libPoster {
 		t.Fatalf("媒体库物理海报探测失败: got %q, want %q", p, libPoster)
 	}
 
 	// 2. 测试普通无海报影片的兜底生成
-	db.Exec("INSERT INTO items(id,lib,parent,name,kind,path,year) VALUES('item-plain','lib1','lib1','测试电影','Movie','/fake/movie.mp4',2024)")
+	if _, err := db.Exec("INSERT INTO items(id,lib,parent,name,kind,path,year,seen) VALUES('item-plain','lib1','lib1','测试电影','Movie','/fake/movie.mp4',2024,'g')"); err != nil {
+		t.Fatal(err)
+	}
 	w := browseGet(a, "/Items/item-plain/Images/Primary", true)
 	if w.Code != 200 || w.Header().Get("Content-Type") != "image/png" {
 		t.Fatalf("无海报影片生成兜底失败: code=%d, type=%s", w.Code, w.Header().Get("Content-Type"))
@@ -343,7 +347,9 @@ func TestGeneratedPosterAndLibraryCollage(t *testing.T) {
 	// 4. 测试无物理海报媒体库的 2x2 Collage 拼贴与主题海报
 	emptyLibDir := filepath.Join(fixtureRoot, "empty_tv")
 	os.MkdirAll(emptyLibDir, 0755)
-	db.Exec("INSERT INTO libraries(id,name,path,kind) VALUES('lib2','电视剧',?,'tvshows')", emptyLibDir)
+	if _, err := db.Exec("INSERT INTO libraries(id,name,path,kind) VALUES('lib2','电视剧',?,'tvshows')", emptyLibDir); err != nil {
+		t.Fatal(err)
+	}
 
 	wLib := browseGet(a, "/Items/lib2/Images/Primary", true)
 	if wLib.Code != 200 || wLib.Header().Get("Content-Type") != "image/png" {
@@ -351,7 +357,9 @@ func TestGeneratedPosterAndLibraryCollage(t *testing.T) {
 	}
 
 	// 5. 测试中文片名首字母艺术海报生成
-	db.Exec("INSERT INTO items(id,lib,parent,name,kind,path,year) VALUES('item-cn','lib1','lib1','流浪地球','Movie','/fake/liulang.mp4',2023)")
+	if _, err := db.Exec("INSERT INTO items(id,lib,parent,name,kind,path,year,seen) VALUES('item-cn','lib1','lib1','流浪地球','Movie','/fake/liulang.mp4',2023,'g')"); err != nil {
+		t.Fatal(err)
+	}
 	wCN := browseGet(a, "/Items/item-cn/Images/Primary", true)
 	if wCN.Code != 200 || wCN.Header().Get("Content-Type") != "image/png" {
 		t.Fatalf("中文片名海报生成失败: code=%d", wCN.Code)
