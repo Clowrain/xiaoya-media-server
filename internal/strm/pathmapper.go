@@ -77,6 +77,10 @@ func sanitizeRelativeSegments(rawRel string) ([]string, error) {
 		if p == ".." {
 			return nil, fmt.Errorf("illegal parent traversal segment '..' in %q", rawRel)
 		}
+		if p == "刮削失败" && len(clean) == 0 {
+			// Strip leading "刮削失败" directory component
+			continue
+		}
 		clean = append(clean, p)
 	}
 	if len(clean) == 0 {

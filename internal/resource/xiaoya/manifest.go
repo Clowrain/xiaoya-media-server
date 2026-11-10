@@ -166,6 +166,11 @@ func ParseManifestLine(lineNum int, line string) (*ManifestEntry, error) {
 	}
 
 	relPath := strings.TrimPrefix(strings.TrimSpace(parts[0]), "/")
+	// Strip leading "刮削失败/" pseudo directory if present
+	for strings.HasPrefix(relPath, "刮削失败/") {
+		relPath = strings.TrimPrefix(relPath, "刮削失败/")
+		relPath = strings.TrimPrefix(relPath, "/")
+	}
 	playURL := strings.TrimSpace(parts[1])
 	if relPath == "" || playURL == "" {
 		return nil, nil

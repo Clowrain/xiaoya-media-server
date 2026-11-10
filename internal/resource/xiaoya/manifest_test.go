@@ -218,3 +218,24 @@ func TestAListPathMatchAndCleanURL(t *testing.T) {
 		t.Fatalf("expected count 0 for unrelated monitor root, got %d", count2)
 	}
 }
+
+func TestStripFailedScrapePrefix(t *testing.T) {
+	line := `刮削失败/每日更新/电视剧/TVB综艺/庆祝香港回归祖国25周年云歌会/庆祝香港回归祖国25周年云歌会.S01E25.strm#http://xiaoya.host:5678/d/每日更新/电视剧/TVB%20Viu/综艺/庆祝香港回归祖国25周年云歌会/“我们的紫荆花”庆祝香港回归祖国25周年云歌会.mp4?sign=SIGN_STR`
+	entry, err := ParseManifestLine(1, line)
+	if err != nil {
+		t.Fatalf("ParseManifestLine failed: %v", err)
+	}
+
+	wantRel := "每日更新/电视剧/TVB综艺/庆祝香港回归祖国25周年云歌会/庆祝香港回归祖国25周年云歌会.S01E25.strm"
+	if entry.RelPath != wantRel {
+		t.Errorf("RelPath was not stripped of 刮削失败:\nwant: %s\ngot:  %s", wantRel, entry.RelPath)
+	}
+
+	if entry.SeasonNum != 1 || entry.EpisodeNum != 25 {
+		t.Errorf("expected S01E25, got S%02dE%02d", entry.SeasonNum, entry.EpisodeNum)
+	}
+
+	if strings.Contains(entry.SeriesRootPath, "刮削失败") {
+		t.Errorf("SeriesRootPath should not contain 刮削失败: %s", entry.SeriesRootPath)
+	}
+}

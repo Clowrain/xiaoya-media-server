@@ -162,3 +162,19 @@ func TestMultiVersionAndMirrorDeduplication(t *testing.T) {
 		t.Errorf("expected netdisk origin [115] tag, got %s", strm4)
 	}
 }
+
+func TestPathMapperStripsFailedScrapePrefix(t *testing.T) {
+	root := t.TempDir()
+	source := "刮削失败/每日更新/电视剧/TVB综艺/庆祝香港回归祖国25周年云歌会/庆祝香港回归祖国25周年云歌会.S01E25.strm"
+	p, ok, err := MapStandardEpisodePath(root, source, source, true, 235, nil)
+	if err != nil || !ok {
+		t.Fatalf("MapStandardEpisodePath failed: ok=%v, err=%v", ok, err)
+	}
+	if strings.Contains(p, "刮削失败") {
+		t.Fatalf("mapped path should NOT contain 刮削失败: %s", p)
+	}
+	wantSuffix := filepath.Join("每日更新", "电视剧", "TVB综艺", "庆祝香港回归祖国25周年云歌会", "Season 1", "庆祝香港回归祖国25周年云歌会 - S01E25.strm")
+	if !strings.HasSuffix(p, wantSuffix) {
+		t.Errorf("unexpected path:\nwant suffix: %s\ngot:         %s", wantSuffix, p)
+	}
+}
