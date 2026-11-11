@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,87 @@ import (
 	"xiaoya-media-server/internal/resource/discovery"
 	"xiaoya-media-server/internal/resource/xiaoya"
 )
+
+const maxOpenManifestSpools = 16
+
+type manifestSpools struct {
+	dir   string
+	files map[int]*os.File
+	lru   *list.List
+	items map[int]*list.Element
+}
+
+func newManifestSpools(dir string) *manifestSpools {
+	return &manifestSpools{dir: dir, files: map[int]*os.File{}, lru: list.New(), items: map[int]*list.Element{}}
+}
+
+func (s *manifestSpools) file(root int) (*os.File, error) {
+	if f := s.files[root]; f != nil {
+		s.lru.MoveToFront(s.items[root])
+		return f, nil
+	}
+	if len(s.files) == maxOpenManifestSpools {
+		oldest := s.lru.Back()
+		index := oldest.Value.(int)
+		if err := s.files[index].Close(); err != nil {
+			return nil, err
+		}
+		delete(s.files, index)
+		delete(s.items, index)
+		s.lru.Remove(oldest)
+	}
+	path := filepath.Join(s.dir, fmt.Sprintf("root-%d.jsonl", root))
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return nil, err
+	}
+	s.files[root] = f
+	s.items[root] = s.lru.PushFront(root)
+	return f, nil
+}
+
+func (s *manifestSpools) write(root int, entry xiaoya.ManifestEntry) error {
+	f, err := s.file(root)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(f).Encode(entry)
+}
+
+func (s *manifestSpools) close() error {
+	var failures []error
+	for root, f := range s.files {
+		if err := f.Close(); err != nil {
+			failures = append(failures, fmt.Errorf("close root spool %d: %w", root, err))
+		}
+	}
+	s.files = map[int]*os.File{}
+	return errors.Join(failures...)
+}
+
+func addMatchingRoots(path string, roots map[string][]int, matched map[int]bool) {
+	if path == "" {
+		return
+	}
+	candidate := path
+	for {
+		for _, index := range roots[candidate] {
+			matched[index] = true
+		}
+		if candidate == "/" {
+			return
+		}
+		slash := strings.LastIndex(candidate, "/")
+		if slash < 0 {
+			return
+		}
+		if slash == 0 {
+			candidate = "/"
+		} else {
+			candidate = candidate[:slash]
+		}
+	}
+}
 
 // 清单先顺序落入临时文件并核对版本，再分批写业务库；损坏或更新中的清单不参与缺失对账。
 func (p *Pipeline) syncManifestRoots(ctx context.Context, roots []discovery.MonitorRoot) (map[string]discovery.SyncBatch, error) {
@@ -33,23 +115,34 @@ func (p *Pipeline) syncManifestRoots(ctx context.Context, roots []discovery.Moni
 		return result, err
 	}
 	defer os.RemoveAll(dir)
-	// 每个匹配项只编码一次；多根在回放时分别处理，内存与单批大小有关。
-	f, err := os.Create(filepath.Join(dir, "entries.jsonl"))
-	if err != nil {
-		return result, err
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
 	prefixes := make([]string, 0, len(roots))
-	for _, r := range roots {
+	rootIndexes := make(map[string][]int, len(roots))
+	for i, r := range roots {
 		norm, _, e := xiaoya.NormalizeMonitorPath(r.RootPath)
 		if e != nil {
 			return result, e
 		}
 		prefixes = append(prefixes, norm)
+		rootIndexes[norm] = append(rootIndexes[norm], i)
 	}
-	_, err = p.manifest.StreamMultiPrefix(ctx, prefixes, func(_ string, e xiaoya.ManifestEntry) error { return enc.Encode(e) })
+	spools := newManifestSpools(dir)
+	defer spools.close()
+	_, err = p.manifest.StreamMultiPrefix(ctx, prefixes, func(_ string, entry xiaoya.ManifestEntry) error {
+		matched := map[int]bool{}
+		relPath := "/" + strings.TrimPrefix(entry.RelPath, "/")
+		addMatchingRoots(entry.AListPath, rootIndexes, matched)
+		addMatchingRoots(relPath, rootIndexes, matched)
+		for index := range matched {
+			if err := spools.write(index, entry); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
+		return result, err
+	}
+	if err = spools.close(); err != nil {
 		return result, err
 	}
 	after, err := p.manifest.Fingerprint()
@@ -62,46 +155,45 @@ func (p *Pipeline) syncManifestRoots(ctx context.Context, roots []discovery.Moni
 	var failures []error
 	for i, r := range roots {
 		prefix := prefixes[i]
-		if _, err = f.Seek(0, io.SeekStart); err != nil {
-			return result, err
-		}
+		spoolPath := filepath.Join(dir, fmt.Sprintf("root-%d.jsonl", i))
 		m := discovery.ManualSnapshot{RootPath: prefix, OriginType: discovery.OriginXiaoyaSQLite, Mode: discovery.ManageManualSeriesDir}
 		b, e := p.discovery.ApplyManualStream(ctx, m, r.ID, func(yield func(discovery.ManualNode) error) error {
 			if e := yield(discovery.ManualNode{Path: prefix, RelPath: strings.TrimPrefix(prefix, "/"), Name: filepath.Base(prefix), IsDir: true}); e != nil {
 				return e
 			}
+			f, err := os.Open(spoolPath)
+			if os.IsNotExist(err) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			defer f.Close()
 			dec := json.NewDecoder(f)
 			for {
 				var entry xiaoya.ManifestEntry
-				e := dec.Decode(&entry)
-				if e == io.EOF {
+				err := dec.Decode(&entry)
+				if err == io.EOF {
 					return nil
 				}
-				if e != nil {
-					return e
+				if err != nil {
+					return err
 				}
 				aListPath := entry.AListPath
-				relPath := "/" + strings.TrimPrefix(entry.RelPath, "/")
+				entryRelPath := "/" + strings.TrimPrefix(entry.RelPath, "/")
 				cleanPrefix := strings.TrimRight(prefix, "/") + "/"
-
 				matchedAList := aListPath == prefix || strings.HasPrefix(aListPath, cleanPrefix)
-				matchedRel := relPath == prefix || strings.HasPrefix(relPath, cleanPrefix)
-
-				if !matchedAList && !matchedRel {
-					continue
-				}
-
+				matchedRel := entryRelPath == prefix || strings.HasPrefix(entryRelPath, cleanPrefix)
 				effectivePath := aListPath
 				if !matchedAList && matchedRel {
-					effectivePath = relPath
+					effectivePath = entryRelPath
 				}
-
 				cleanURL := entry.CleanPlayURL
 				if cleanURL == "" {
 					cleanURL = entry.PlayURL
 				}
-				if e = yield(discovery.ManualNode{Path: effectivePath, RelPath: entry.RelPath, Name: filepath.Base(effectivePath), Content: cleanURL}); e != nil {
-					return e
+				if err = yield(discovery.ManualNode{Path: effectivePath, RelPath: entry.RelPath, Name: filepath.Base(effectivePath), Content: cleanURL}); err != nil {
+					return err
 				}
 			}
 		}, p.consumeMaterialized)

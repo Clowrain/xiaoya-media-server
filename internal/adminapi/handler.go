@@ -39,7 +39,7 @@ func NewHandler(cfg *config.Config, store *discovery.SQLStore, pipeline *integra
 		pipeline: pipeline,
 		importer: importer,
 		sched:    sched,
-		jobs:     &jobRunner{ctx: context.Background(), db: store, active: map[string]bool{}},
+		jobs:     &jobRunner{ctx: context.Background(), db: store, active: map[string]bool{}, slots: make(chan struct{}, maxConcurrentAdminJobs)},
 	}
 }
 
@@ -398,9 +398,13 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 			h.jobs.submit(w, r, "import", scope, run)
 			return true
 		}
-		release, ok := h.jobs.acquire(scope)
-		if !ok {
-			writeErr(w, 409, "同一范围已有任务在运行")
+		release, status := h.jobs.acquire(scope)
+		if status != http.StatusOK {
+			if status == http.StatusConflict {
+				writeErr(w, status, "同一范围已有任务在运行")
+			} else {
+				writeErr(w, status, "后台任务繁忙，请稍后重试")
+			}
 			return true
 		}
 		defer release()
@@ -559,9 +563,13 @@ func (h *Handler) ServeExtension(w http.ResponseWriter, r *http.Request, _ embys
 		if r.URL.Query().Get("async") == "true" {
 			h.jobs.submit(w, r, "sync", scope, run)
 		} else {
-			release, ok := h.jobs.acquire(scope)
-			if !ok {
-				writeErr(w, 409, "同一范围已有任务在运行")
+			release, status := h.jobs.acquire(scope)
+			if status != http.StatusOK {
+				if status == http.StatusConflict {
+					writeErr(w, status, "同一范围已有任务在运行")
+				} else {
+					writeErr(w, status, "后台任务繁忙，请稍后重试")
+				}
 				return true
 			}
 			defer release()

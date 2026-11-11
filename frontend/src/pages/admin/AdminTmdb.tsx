@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Sparkles, CheckCircle2, AlertCircle, RefreshCw, 
   Search, Link2, ExternalLink, ShieldCheck, Film 
@@ -42,6 +42,8 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
   const [searchYear, setSearchYear] = useState<string>('');
   const [searchResults, setSearchResults] = useState<TmdbSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const searchRequestId = useRef(0);
+  const searchController = useRef<AbortController | null>(null);
   const [matchingId, setMatchingId] = useState<number | null>(null);
   const [pending, setPending] = useState<RecognitionPending[]>([]);
   const [pendingLoading, setPendingLoading] = useState(false);
@@ -131,16 +133,22 @@ export const AdminTmdb: React.FC<AdminTmdbProps> = ({
     }
   };
 
+  useEffect(() => () => searchController.current?.abort(), []);
+
   const doSearch = async (q: string = searchQuery, kind: string = searchKind, year?: string) => {
     if (!q.trim()) return;
+    searchController.current?.abort();
+    const controller = new AbortController();
+    searchController.current = controller;
+    const currentRequest = ++searchRequestId.current;
     setSearching(true);
     try {
-      const res = await searchTmdb(q.trim(), kind, year || searchYear || undefined);
-      setSearchResults(res);
+      const res = await searchTmdb(q.trim(), kind, year || searchYear || undefined, controller.signal);
+      if (currentRequest === searchRequestId.current && !controller.signal.aborted) setSearchResults(res);
     } catch (err: any) {
-      notifyToast(err.message || 'TMDB 搜索失败', 'error');
+      if (!controller.signal.aborted && currentRequest === searchRequestId.current) notifyToast(err.message || 'TMDB 搜索失败', 'error');
     } finally {
-      setSearching(false);
+      if (currentRequest === searchRequestId.current) setSearching(false);
     }
   };
 

@@ -14,11 +14,14 @@ import (
 	"xiaoya-media-server/internal/resource/discovery"
 )
 
+const maxConcurrentAdminJobs = 2
+
 type jobRunner struct {
 	ctx    context.Context
 	db     *discovery.SQLStore
 	mu     sync.Mutex
 	active map[string]bool
+	slots  chan struct{}
 }
 
 func (h *Handler) Start(ctx context.Context) error {
@@ -29,24 +32,42 @@ func (h *Handler) Start(ctx context.Context) error {
 	return nil
 }
 
-func (j *jobRunner) acquire(scope string) (func(), bool) {
+func (j *jobRunner) acquire(scope string) (func(), int) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	for active := range j.active {
 		if active == scope ||
 			(strings.HasPrefix(active, "scan:") && strings.HasPrefix(scope, "scan:") && (active == "scan:*" || scope == "scan:*" || strings.HasPrefix(active, scope+"/") || strings.HasPrefix(scope, active+"/"))) ||
 			(strings.HasPrefix(active, "import:") && strings.HasPrefix(scope, "import:") && (strings.HasPrefix(active, scope+"/") || strings.HasPrefix(scope, active+"/"))) {
-			return nil, false
+			return nil, http.StatusConflict
+		}
+	}
+	if j.slots != nil {
+		select {
+		case j.slots <- struct{}{}:
+		default:
+			return nil, http.StatusServiceUnavailable
 		}
 	}
 	j.active[scope] = true
-	return func() { j.mu.Lock(); delete(j.active, scope); j.mu.Unlock() }, true
+	return func() {
+		j.mu.Lock()
+		delete(j.active, scope)
+		if j.slots != nil {
+			<-j.slots
+		}
+		j.mu.Unlock()
+	}, http.StatusOK
 }
 
 func (j *jobRunner) submit(w http.ResponseWriter, r *http.Request, kind, scope string, work func(context.Context) (string, any, error)) {
-	release, ok := j.acquire(scope)
-	if !ok {
-		writeErr(w, http.StatusConflict, "同一范围已有任务在运行")
+	release, status := j.acquire(scope)
+	if status != http.StatusOK {
+		if status == http.StatusConflict {
+			writeErr(w, status, "同一范围已有任务在运行")
+		} else {
+			writeErr(w, status, "后台任务繁忙，请稍后重试")
+		}
 		return
 	}
 	job := discovery.AdminJob{ID: discovery.NewID(), Kind: kind, Scope: scope, Status: "RUNNING", CreatedAt: time.Now().Unix()}

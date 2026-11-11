@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useEffect } from 'react';
 import { User, MediaItem } from './types';
 import { getStoredUser, getStoredToken, logoutApi, fetchCurrentUser } from './api/client';
 import { Header } from './components/Header';
 import { LoginView } from './components/LoginView';
 import { MediaWall } from './pages/MediaWall';
-import { AdminLayout } from './pages/admin/AdminLayout';
+const AdminLayout = lazy(() => import('./pages/admin/AdminLayout').then(({ AdminLayout }) => ({ default: AdminLayout })));
 import { LogDrawer } from './components/LogDrawer';
 import { ToastContainer } from './components/Toast';
 import { 
@@ -164,11 +164,13 @@ export const App: React.FC = () => {
             onRematchTmdb={handleRematchTmdbFromWall}
           />
         ) : currentUser.Policy?.IsAdministrator ? (
-          <AdminLayout
-            initialMatchItem={matchTargetItem}
-            onClearInitialMatchItem={() => setMatchTargetItem(null)}
-            onOpenLogs={() => setShowLogs(true)}
-          />
+          <Suspense fallback={<div className="px-6 py-20 text-center text-zinc-400">正在加载管理界面…</div>}>
+            <AdminLayout
+              initialMatchItem={matchTargetItem}
+              onClearInitialMatchItem={() => setMatchTargetItem(null)}
+              onOpenLogs={() => setShowLogs(true)}
+            />
+          </Suspense>
         ) : (
           <div className="max-w-3xl mx-auto px-6 py-20 text-center text-zinc-400">没有管理权限</div>
         )}

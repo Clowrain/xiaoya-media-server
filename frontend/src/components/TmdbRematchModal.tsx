@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, Check, Star, Calendar, RefreshCw } from 'lucide-react';
 import { MediaItem, TmdbSearchResult } from '../types';
 import { searchTmdb, matchTmdb, notifyToast } from '../api/client';
@@ -21,6 +21,8 @@ export const TmdbRematchModal: React.FC<TmdbRematchModalProps> = ({
   const [year, setYear] = useState('');
   const [results, setResults] = useState<TmdbSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const searchRequestId = useRef(0);
+  const searchController = useRef<AbortController | null>(null);
   const [matching, setMatching] = useState(false);
 
   useEffect(() => {
@@ -31,19 +33,28 @@ export const TmdbRematchModal: React.FC<TmdbRematchModalProps> = ({
       setResults([]);
       // auto search
       handleSearch(item.Name.replace(/\(\d{4}\)/g, '').trim(), item.Type === 'Series' ? 'tv' : 'movie', item.ProductionYear ? String(item.ProductionYear) : '');
+    } else {
+      searchController.current?.abort();
+      searchRequestId.current++;
     }
   }, [item, isOpen]);
 
+  useEffect(() => () => searchController.current?.abort(), []);
+
   const handleSearch = async (searchQuery: string, searchKind: 'movie' | 'tv', searchYear?: string) => {
     if (!searchQuery.trim()) return;
+    searchController.current?.abort();
+    const controller = new AbortController();
+    searchController.current = controller;
+    const currentRequest = ++searchRequestId.current;
     setSearching(true);
     try {
-      const res = await searchTmdb(searchQuery.trim(), searchKind, searchYear?.trim() || undefined);
-      setResults(res || []);
+      const res = await searchTmdb(searchQuery.trim(), searchKind, searchYear?.trim() || undefined, controller.signal);
+      if (currentRequest === searchRequestId.current && !controller.signal.aborted) setResults(res || []);
     } catch (err: any) {
-      notifyToast(err.message || 'TMDB 搜索失败', 'error');
+      if (!controller.signal.aborted && currentRequest === searchRequestId.current) notifyToast(err.message || 'TMDB 搜索失败', 'error');
     } finally {
-      setSearching(false);
+      if (currentRequest === searchRequestId.current) setSearching(false);
     }
   };
 

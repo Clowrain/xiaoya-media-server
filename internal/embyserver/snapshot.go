@@ -49,6 +49,10 @@ func dependencyChanged(path string, dirs map[string]bool) bool {
 var seasonDirPattern = regexp.MustCompile(`(?i)^season[ _.-]*0*(\d+)$`)
 
 func seriesDirectory(root, path string) string {
+	return seriesDirectoryWithCache(root, path, nil)
+}
+
+func seriesDirectoryWithCache(root, path string, cache *localInfoCache) string {
 	dir := filepath.Dir(path)
 	for p := dir; p != root && p != "/" && p != "."; p = filepath.Dir(p) {
 		if seasonDirPattern.MatchString(filepath.Base(p)) {
@@ -58,7 +62,14 @@ func seriesDirectory(root, path string) string {
 			}
 			return cand
 		}
-		if st, e := os.Stat(filepath.Join(p, "tvshow.nfo")); e == nil && !st.IsDir() {
+		nfoPath := filepath.Join(p, "tvshow.nfo")
+		found := false
+		if cache != nil {
+			found = cache.posterExists(nfoPath, true)
+		} else if st, e := os.Stat(nfoPath); e == nil && !st.IsDir() {
+			found = true
+		}
+		if found {
 			cand := p
 			for cand != root && cand != "/" && cand != "." && tmdb.IsPureMetadataTagDir(filepath.Base(cand)) {
 				cand = filepath.Dir(cand)
@@ -69,7 +80,12 @@ func seriesDirectory(root, path string) string {
 	rel, _ := filepath.Rel(root, dir)
 	return filepath.Join(root, strings.Split(rel, string(filepath.Separator))[0])
 }
+
 func seasonPoster(path string, n int) string {
+	return seasonPosterWithCache(path, n, nil)
+}
+
+func seasonPosterWithCache(path string, n int, cache *localInfoCache) string {
 	candidates := []string{}
 	parentDir := filepath.Dir(path)
 	grandDir := ""
@@ -91,7 +107,11 @@ func seasonPoster(path string, n int) string {
 		}
 	}
 	for _, p := range candidates {
-		if st, e := os.Stat(p); e == nil && st.Mode().IsRegular() {
+		if cache != nil {
+			if cache.regularPosterExists(p) {
+				return p
+			}
+		} else if st, e := os.Stat(p); e == nil && st.Mode().IsRegular() {
 			return p
 		}
 	}
@@ -107,20 +127,30 @@ func withinScanScopes(path string, scopes []string) bool {
 	return false
 }
 func seriesFallbackPoster(path string) string {
-	entries, e := os.ReadDir(path)
-	if e != nil {
+	return seriesFallbackPosterWithCache(path, nil)
+}
+
+func seriesFallbackPosterWithCache(path string, cache *localInfoCache) string {
+	var entries []os.DirEntry
+	var err error
+	if cache != nil {
+		entries, err = cache.readDir(path)
+	} else {
+		entries, err = os.ReadDir(path)
+	}
+	if err != nil {
 		return ""
 	}
 	for _, d := range entries {
 		if d.IsDir() {
 			if m := seasonDirPattern.FindStringSubmatch(d.Name()); len(m) == 2 {
 				n, _ := strconv.Atoi(m[1])
-				if p := seasonPoster(filepath.Join(path, d.Name()), n); p != "" {
+				if p := seasonPosterWithCache(filepath.Join(path, d.Name()), n, cache); p != "" {
 					return p
 				}
 			}
 			if tmdb.IsPureMetadataTagDir(d.Name()) {
-				if p := seriesFallbackPoster(filepath.Join(path, d.Name())); p != "" {
+				if p := seriesFallbackPosterWithCache(filepath.Join(path, d.Name()), cache); p != "" {
 					return p
 				}
 			}

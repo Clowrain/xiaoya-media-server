@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useEffect } from 'react';
 import { Folder, FolderSync, Sparkles, Users, ListChecks } from 'lucide-react';
 import { MediaItem } from '../../types';
-import { AdminLibraries } from './AdminLibraries';
-import { AdminXiaoyaSync } from './AdminXiaoyaSync';
-import { AdminTmdb } from './AdminTmdb';
-import { AdminSystemUsers } from './AdminSystemUsers';
-import { AdminResources } from './AdminResources';
+const AdminLibraries = lazy(() => import('./AdminLibraries').then(({ AdminLibraries }) => ({ default: AdminLibraries })));
+const AdminXiaoyaSync = lazy(() => import('./AdminXiaoyaSync').then(({ AdminXiaoyaSync }) => ({ default: AdminXiaoyaSync })));
+const AdminTmdb = lazy(() => import('./AdminTmdb').then(({ AdminTmdb }) => ({ default: AdminTmdb })));
+const AdminSystemUsers = lazy(() => import('./AdminSystemUsers').then(({ AdminSystemUsers }) => ({ default: AdminSystemUsers })));
+const AdminResources = lazy(() => import('./AdminResources').then(({ AdminResources }) => ({ default: AdminResources })));
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 
 interface AdminLayoutProps {
@@ -97,18 +97,20 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
 
       {/* Tab Panels */}
       <ErrorBoundary fallbackTitle="管理面板加载异常">
-        <div>
-          {activeTab === 'libraries' && <AdminLibraries onOpenLogs={onOpenLogs} />}
-          {activeTab === 'sync' && <AdminXiaoyaSync onOpenLogs={onOpenLogs} />}
-          {activeTab === 'resources' && <AdminResources />}
-          {activeTab === 'tmdb' && (
-            <AdminTmdb
-              initialMatchItem={initialMatchItem}
-              onClearInitialMatchItem={onClearInitialMatchItem}
-            />
-          )}
-          {activeTab === 'users' && <AdminSystemUsers />}
-        </div>
+        <Suspense fallback={<div className="py-16 text-center text-zinc-400">正在加载管理面板…</div>}>
+          <div>
+            {activeTab === 'libraries' && <AdminLibraries onOpenLogs={onOpenLogs} />}
+            {activeTab === 'sync' && <AdminXiaoyaSync onOpenLogs={onOpenLogs} />}
+            {activeTab === 'resources' && <AdminResources />}
+            {activeTab === 'tmdb' && (
+              <AdminTmdb
+                initialMatchItem={initialMatchItem}
+                onClearInitialMatchItem={onClearInitialMatchItem}
+              />
+            )}
+            {activeTab === 'users' && <AdminSystemUsers />}
+          </div>
+        </Suspense>
       </ErrorBoundary>
     </div>
   );

@@ -78,9 +78,13 @@ func snapshotScope(column string, scopes []string) (string, []any) {
 	}
 	return " AND (" + strings.Join(clauses, " OR ") + ")", args
 }
-func (s *scanInventory) unchanged(path string, stamp fileStamp) (bool, error) {
+func (s *scanInventory) unchanged(path string, stamp fileStamp, itemID string) (bool, error) {
 	var same bool
-	e := s.app.db.QueryRow("SELECT EXISTS(SELECT 1 FROM scan_file_stamps WHERE lib=? AND path=? AND size=? AND mtime=?)", s.lib, path, stamp.Size, stamp.Mtime).Scan(&same)
+	e := s.app.db.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM scan_file_stamps stamp
+		JOIN items item ON item.id=? AND item.lib=stamp.lib AND item.path=stamp.path
+		WHERE stamp.lib=? AND stamp.path=? AND stamp.size=? AND stamp.mtime=?
+	)`, itemID, s.lib, path, stamp.Size, stamp.Mtime).Scan(&same)
 	return same, e
 }
 func (s *scanInventory) changedSidecars(scopes []string) (map[string]bool, error) {

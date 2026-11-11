@@ -59,9 +59,10 @@ export function notifyToast(msg: string, type: 'info' | 'success' | 'error' | 'w
 
 // Global API fetcher
 export async function request<T = any>(
-  path: string, 
-  method: string = 'GET', 
-  body?: any
+  path: string,
+  method: string = 'GET',
+  body?: any,
+  signal?: AbortSignal
 ): Promise<T> {
   const token = getStoredToken() || '';
   const device = getDeviceId();
@@ -78,6 +79,7 @@ export async function request<T = any>(
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
   });
 
   if (res.status === 401) {
@@ -129,13 +131,13 @@ export async function changePasswordApi(userId: string, oldPw: string, newPw: st
 }
 
 // Media Wall & SenPlayer API
-export async function fetchLibraryViews(userId: string): Promise<LibraryView[]> {
-  const data = await request(`/emby/Users/${userId}/Views`);
+export async function fetchLibraryViews(userId: string, signal?: AbortSignal): Promise<LibraryView[]> {
+  const data = await request(`/emby/Users/${userId}/Views`, 'GET', undefined, signal);
   return data.Items || [];
 }
 
-export async function fetchMediaItems(params: URLSearchParams): Promise<{ Items: MediaItem[]; TotalRecordCount: number }> {
-  return request(`/emby/Items?${params.toString()}`);
+export async function fetchMediaItems(params: URLSearchParams, signal?: AbortSignal): Promise<{ Items: MediaItem[]; TotalRecordCount: number }> {
+  return request(`/emby/Items?${params.toString()}`, 'GET', undefined, signal);
 }
 
 export async function fetchItemDetail(userId: string, itemId: string): Promise<MediaItem> {
@@ -151,19 +153,19 @@ export async function fetchResumeItems(userId: string): Promise<MediaItem[]> {
   }
 }
 
-export async function fetchNextUpItems(userId: string): Promise<MediaItem[]> {
+export async function fetchNextUpItems(userId: string, signal?: AbortSignal): Promise<MediaItem[]> {
   try {
-    const data = await request(`/emby/Shows/NextUp?UserId=${userId}&Limit=12&Fields=Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources`);
+    const data = await request(`/emby/Shows/NextUp?UserId=${userId}&Limit=12&Fields=Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources`, 'GET', undefined, signal);
     return data.Items || [];
   } catch {
     return [];
   }
 }
 
-export async function fetchLatestItems(userId: string, parentId?: string): Promise<MediaItem[]> {
+export async function fetchLatestItems(userId: string, parentId?: string, signal?: AbortSignal): Promise<MediaItem[]> {
   try {
     const url = `/emby/Users/${userId}/Items/Latest?Limit=16&Fields=Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources,ChildCount,RecursiveItemCount,EpisodeCount${parentId ? `&ParentId=${encodeURIComponent(parentId)}` : ''}`;
-    const data = await request(url);
+    const data = await request(url, 'GET', undefined, signal);
     if (Array.isArray(data)) return data;
     return data.Items || [];
   } catch {
@@ -369,10 +371,10 @@ export async function testTmdb(): Promise<any> {
   return request('/admin/tmdb/test', 'POST', {});
 }
 
-export async function searchTmdb(q: string, kind: string, year?: string): Promise<TmdbSearchResult[]> {
+export async function searchTmdb(q: string, kind: string, year?: string, signal?: AbortSignal): Promise<TmdbSearchResult[]> {
   const params: Record<string, string> = { q, kind };
   if (year) params.year = year;
-  const data = await request(`/admin/tmdb/search?${new URLSearchParams(params)}`);
+  const data = await request(`/admin/tmdb/search?${new URLSearchParams(params)}`, 'GET', undefined, signal);
   return Array.isArray(data) ? data : (data.Items || data.items || data.results || []);
 }
 
@@ -396,7 +398,7 @@ export async function confirmRecognition(resourceID: string, externalID: number 
 }
 
 // Logs API
-export async function fetchLogs(limit: number = 200, level?: string, source?: string, q?: string, order: string = 'asc'): Promise<{ logs: (string | LogEntry)[]; total?: number }> {
+export async function fetchLogs(limit: number = 200, level?: string, source?: string, q?: string, order: string = 'asc', signal?: AbortSignal): Promise<{ logs: (string | LogEntry)[]; total?: number }> {
   const params: Record<string, string> = { limit: String(limit), order };
   if (level) params.level = level;
   if (source) {
@@ -404,7 +406,7 @@ export async function fetchLogs(limit: number = 200, level?: string, source?: st
     params.category = source;
   }
   if (q) params.q = q;
-  const data = await request(`/admin/logs?${new URLSearchParams(params)}`);
+  const data = await request(`/admin/logs?${new URLSearchParams(params)}`, 'GET', undefined, signal);
   const rawList = data?.logs || data?.Items || data?.Entries || (Array.isArray(data) ? data : []);
   return {
     ...data,

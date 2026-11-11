@@ -24,7 +24,13 @@ func TestInventoryScopedCommitAndLegacyMigration(t *testing.T) {
 	}
 	s := &scanInventory{app: a, lib: "l", generation: id()}
 	defer s.close()
-	if same, e := s.unchanged("/media/b.strm", fileStamp{3, 4}); e != nil || !same {
+	if same, e := s.unchanged("/media/b.strm", fileStamp{3, 4}, "missing"); e != nil || same {
+		t.Fatalf("missing item must not be skipped: %v %v", same, e)
+	}
+	if _, e := a.db.Exec("INSERT INTO items(id,lib,parent,name,kind,path,seen) VALUES('b','l','l','B','Movie','/media/b.strm','g')"); e != nil {
+		t.Fatal(e)
+	}
+	if same, e := s.unchanged("/media/b.strm", fileStamp{3, 4}, "b"); e != nil || !same {
 		t.Fatalf("migration: %v %v", same, e)
 	}
 	var prior string
@@ -43,8 +49,14 @@ func TestInventoryScopedCommitAndLegacyMigration(t *testing.T) {
 	if prior != after {
 		t.Fatal("局部提交改写了其他路径")
 	}
-	if same, e := s.unchanged("/media/a.strm", fileStamp{5, 6}); e != nil || !same {
-		t.Fatalf("new stamp: %v %v", same, e)
+	if same, e := s.unchanged("/media/a.strm", fileStamp{5, 6}, "a"); e != nil || same {
+		t.Fatalf("missing item with new stamp must be reindexed: %v %v", same, e)
+	}
+	if _, e := a.db.Exec("INSERT INTO items(id,lib,parent,name,kind,path,seen) VALUES('a','l','l','A','Movie','/media/a.strm','g')"); e != nil {
+		t.Fatal(e)
+	}
+	if same, e := s.unchanged("/media/a.strm", fileStamp{5, 6}, "a"); e != nil || !same {
+		t.Fatalf("new stamp and existing item: %v %v", same, e)
 	}
 	missing := &scanInventory{app: a, lib: "l", generation: id()}
 	defer missing.close()

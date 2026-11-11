@@ -28,40 +28,124 @@ type nfo struct {
 
 var epPattern = regexp.MustCompile(`(?i)S(\d{1,3})E(\d{1,4})`)
 
+type cachedNFO struct {
+	value nfo
+	valid bool
+}
+
+const maxLocalProbeCacheEntries = 512
+
+type localInfoCache struct {
+	nfos    map[string]cachedNFO
+	posters map[string]bool
+	regular map[string]bool
+	dirs    map[string][]os.DirEntry
+}
+
+func newLocalInfoCache() *localInfoCache {
+	return &localInfoCache{nfos: map[string]cachedNFO{}, posters: map[string]bool{}, regular: map[string]bool{}, dirs: map[string][]os.DirEntry{}}
+}
+
+func (c *localInfoCache) hasRoom() bool {
+	return len(c.nfos)+len(c.posters)+len(c.regular)+len(c.dirs) < maxLocalProbeCacheEntries
+}
+
+func (c *localInfoCache) readNFO(path string, memoize bool) cachedNFO {
+	if memoize {
+		if result, ok := c.nfos[path]; ok {
+			return result
+		}
+	}
+	result := cachedNFO{}
+	f, err := os.Open(path)
+	if err == nil {
+		var value nfo
+		err = xml.NewDecoder(io.LimitReader(f, 2<<20)).Decode(&value)
+		_ = f.Close()
+		if err == nil {
+			result = cachedNFO{value: value, valid: true}
+		}
+	}
+	if memoize && c.hasRoom() {
+		c.nfos[path] = result
+	}
+	return result
+}
+
+func (c *localInfoCache) posterExists(path string, memoize bool) bool {
+	if memoize {
+		if exists, ok := c.posters[path]; ok {
+			return exists
+		}
+	}
+	info, err := os.Stat(path)
+	exists := err == nil && !info.IsDir()
+	if memoize && c.hasRoom() {
+		c.posters[path] = exists
+	}
+	return exists
+}
+
+func (c *localInfoCache) regularPosterExists(path string) bool {
+	if exists, ok := c.regular[path]; ok {
+		return exists
+	}
+	info, err := os.Stat(path)
+	exists := err == nil && info.Mode().IsRegular()
+	if c.hasRoom() {
+		c.regular[path] = exists
+	}
+	return exists
+}
+
+func (c *localInfoCache) readDir(path string) ([]os.DirEntry, error) {
+	if entries, ok := c.dirs[path]; ok {
+		return entries, nil
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) <= 128 && c.hasRoom() {
+		c.dirs[path] = entries
+	}
+	return entries, nil
+}
+
 // localInfo returns the sidecar rating so the scan can persist it without
 // extending Item; zero means the parsed NFO carried no usable rating.
 func localInfo(path string, x *Item) float64 {
+	return newLocalInfoCache().localInfo(path, x)
+}
+
+func (c *localInfoCache) localInfo(path string, x *Item) float64 {
 	rating := 0.0
 	base := strings.TrimSuffix(path, filepath.Ext(path))
 	dir := filepath.Dir(path)
-	for _, p := range []string{base + ".nfo", filepath.Join(dir, "movie.nfo"), filepath.Join(dir, "tvshow.nfo")} {
-		f, e := os.Open(p)
-		if e != nil {
+	for index, p := range []string{base + ".nfo", filepath.Join(dir, "movie.nfo"), filepath.Join(dir, "tvshow.nfo")} {
+		result := c.readNFO(p, index > 0)
+		if !result.valid {
 			continue
 		}
-		var n nfo
-		e = xml.NewDecoder(io.LimitReader(f, 2<<20)).Decode(&n)
-		f.Close()
-		if e == nil {
-			if n.Title != "" {
-				x.Name = n.Title
-			}
-			x.Overview = n.Plot
-			x.Year = n.Year
-			if n.Season > 0 {
-				x.Season = n.Season
-			}
-			if n.Episode > 0 {
-				x.Episode = n.Episode
-			}
-			if n.Rating > 0 {
-				rating = n.Rating
-			}
-			break
+		n := result.value
+		if n.Title != "" {
+			x.Name = n.Title
 		}
+		x.Overview = n.Plot
+		x.Year = n.Year
+		if n.Season > 0 {
+			x.Season = n.Season
+		}
+		if n.Episode > 0 {
+			x.Episode = n.Episode
+		}
+		if n.Rating > 0 {
+			rating = n.Rating
+		}
+		break
 	}
-	for _, p := range []string{base + "-poster.jpg", base + ".jpg", filepath.Join(dir, "poster.jpg"), filepath.Join(dir, "folder.jpg"), filepath.Join(dir, "poster.png")} {
-		if fi, e := os.Stat(p); e == nil && !fi.IsDir() {
+	for index, p := range []string{base + "-poster.jpg", base + ".jpg", filepath.Join(dir, "poster.jpg"), filepath.Join(dir, "folder.jpg"), filepath.Join(dir, "poster.png")} {
+		if c.posterExists(p, index >= 2) {
 			x.Poster = p
 			break
 		}
@@ -254,6 +338,8 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 		scanErr = e
 		return
 	}
+	// Cache sidecar probes only for this scan; changed sidecars bypass the unchanged-item path above.
+	probeCache := newLocalInfoCache()
 	// A directory-sized working set, no full-library item map.
 	scanErr = walk(func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -284,17 +370,12 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 		}
 		a.waitScan(job)
 		if (incremental || len(scopes) > 0) && !dependencyChanged(path, dirtyDirs) {
-			unchanged, err := inventory.unchanged(path, fileStamp{fi.Size(), fi.ModTime().UnixNano()})
+			unchanged, err := inventory.unchanged(path, fileStamp{fi.Size(), fi.ModTime().UnixNano()}, x.ID)
 			if err != nil {
 				return err
 			}
 			if unchanged {
-				var exists int
-				if e := a.db.QueryRow("SELECT 1 FROM items WHERE id=?", x.ID).Scan(&exists); e == nil {
-					return nil
-				} else if e != sql.ErrNoRows {
-					return e
-				}
+				return nil
 			}
 		}
 		if kind == "tvshows" {
@@ -302,25 +383,25 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 			seasonHint := 0
 			rel, _ := filepath.Rel(root, filepath.Dir(path))
 			if rel != "." {
-				seriesPath := seriesDirectory(root, path)
+				seriesPath := seriesDirectoryWithCache(root, path, probeCache)
 				seriesTitle, seriesYear := tmdb.ParseTitleAndYear(filepath.Base(seriesPath))
 				if seriesTitle == "" {
 					seriesTitle = filepath.Base(seriesPath)
 				}
 				series := Item{ID: digest(seriesPath)[:32], Lib: lib, Parent: lib, Name: seriesTitle, Kind: "Series", Path: seriesPath, Year: seriesYear}
 				if lastSeries != seriesPath {
-					seriesRating := localInfo(filepath.Join(seriesPath, "tvshow.strm"), &series)
-					if entries, rErr := os.ReadDir(seriesPath); rErr == nil && series.Overview == "" {
+					seriesRating := probeCache.localInfo(filepath.Join(seriesPath, "tvshow.strm"), &series)
+					if entries, rErr := probeCache.readDir(seriesPath); rErr == nil && series.Overview == "" {
 						for _, ent := range entries {
 							if ent.IsDir() && tmdb.IsPureMetadataTagDir(ent.Name()) {
-								if r := localInfo(filepath.Join(seriesPath, ent.Name(), "tvshow.strm"), &series); r > 0 {
+								if r := probeCache.localInfo(filepath.Join(seriesPath, ent.Name(), "tvshow.strm"), &series); r > 0 {
 									seriesRating = r
 								}
 							}
 						}
 					}
 					if series.Poster == "" {
-						series.Poster = seriesFallbackPoster(seriesPath)
+						series.Poster = seriesFallbackPosterWithCache(seriesPath, probeCache)
 					}
 					if e := save(series, seriesRating); e != nil {
 						return e
@@ -345,8 +426,8 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 						}
 					}
 					if lastSeason != seasonPath {
-						seasonRating := localInfo(filepath.Join(seasonPath, "season.strm"), &season)
-						season.Poster = seasonPoster(seasonPath, season.Season)
+						seasonRating := probeCache.localInfo(filepath.Join(seasonPath, "season.strm"), &season)
+						season.Poster = seasonPosterWithCache(seasonPath, season.Season, probeCache)
 						if e := save(season, seasonRating); e != nil {
 							return e
 						}
@@ -365,7 +446,7 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 						seasonPath := filepath.Join(seriesPath, "Season 1")
 						season := Item{ID: digest(seasonPath)[:32], Lib: lib, Parent: series.ID, Name: "Season 1", Kind: "Season", Path: seasonPath, Season: 1, Episode: 1}
 						if lastSeason != seasonPath {
-							season.Poster = seasonPoster(seriesPath, 1)
+							season.Poster = seasonPosterWithCache(seriesPath, 1, probeCache)
 							if e := save(season, 0); e != nil {
 								return e
 							}
@@ -411,7 +492,7 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 		} else {
 			x.URL = "file://" + path
 		}
-		rating := localInfo(path, &x)
+		rating := probeCache.localInfo(path, &x)
 		return save(x, rating)
 	})
 	if scanErr != nil {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Film, Search, Star, Play, Tv, ChevronRight, Layers, 
   ExternalLink, Copy, Check, Info, Sparkles, Filter 
@@ -31,7 +31,13 @@ export const MediaWall: React.FC<MediaWallProps> = ({
   const [gridItems, setGridItems] = useState<MediaItem[]>([]);
   const [totalCount, setTotalCount] = useState<number>(0);
   const [localSearch, setLocalSearch] = useState<string>(searchQuery);
+  const [debouncedSearch, setDebouncedSearch] = useState<string>(searchQuery);
   const [loading, setLoading] = useState<boolean>(true);
+  const [dataRefreshKey, setDataRefreshKey] = useState(0);
+  const [gridRefreshKey, setGridRefreshKey] = useState(0);
+  const gridRequestId = useRef(0);
+  const viewRequestId = useRef(0);
+  const loadedUserId = useRef(user.Id);
 
   // Selected item for detail & season/episode picker
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
@@ -39,46 +45,8 @@ export const MediaWall: React.FC<MediaWallProps> = ({
 
   const isAdmin = user.Policy?.IsAdministrator ?? false;
 
-  // 1. Load library views (My Media / 我的媒体)
-  const loadViews = async () => {
-    try {
-      const v = await fetchLibraryViews(user.Id);
-      setViews(v);
-      return v;
-    } catch (err: any) {
-      console.error('Failed to load library views:', err);
-      return [];
-    }
-  };
-
-  // 2. Load Continue Watching (继续观看)
-  const loadNextUp = async () => {
-    try {
-      const nextUp = await fetchNextUpItems(user.Id);
-      setNextUpItems(nextUp);
-    } catch {
-      // fallback
-    }
-  };
-
-  // 3. Load latest items for each library
-  const loadEachLibraryLatest = async (viewList: LibraryView[]) => {
-    const map: Record<string, MediaItem[]> = {};
-    await Promise.all(
-      viewList.map(async (v) => {
-        try {
-          const items = await fetchLatestItems(user.Id, v.Id);
-          map[v.Id] = items;
-        } catch {
-          map[v.Id] = [];
-        }
-      })
-    );
-    setLibraryLatest(map);
-  };
-
-  // 4. Load filtered grid items when a view is clicked or searching
-  const loadGridItems = async () => {
+  // Load filtered grid items when a view is clicked or searching.
+  const loadGridItems = async (signal: AbortSignal, requestId: number) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -94,35 +62,91 @@ export const MediaWall: React.FC<MediaWallProps> = ({
       if (selectedViewId) {
         params.set('ParentId', selectedViewId);
       }
-      if (localSearch.trim()) {
-        params.set('SearchTerm', localSearch.trim());
+      if (debouncedSearch.trim()) {
+        params.set('SearchTerm', debouncedSearch.trim());
       }
       if (activeTab === 'favorites') {
         params.set('Filters', 'IsFavorite');
       }
 
-      const res = await fetchMediaItems(params);
+      const res = await fetchMediaItems(params, signal);
+      if (requestId !== gridRequestId.current || signal.aborted) return;
       setGridItems(res.Items || []);
       setTotalCount(res.TotalRecordCount || 0);
     } catch (err: any) {
+      if (signal.aborted || requestId !== gridRequestId.current) return;
       notifyToast(err.message || '加载媒体库失败', 'error');
     } finally {
-      setLoading(false);
+      if (requestId === gridRequestId.current) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadViews().then((vList) => {
-      if (vList && vList.length > 0) {
-        loadEachLibraryLatest(vList);
+    if (loadedUserId.current !== user.Id) {
+      loadedUserId.current = user.Id;
+      setViews([]);
+      setSelectedViewId('');
+      setLibraryLatest({});
+      setNextUpItems([]);
+    }
+    const controller = new AbortController();
+    const requestId = ++viewRequestId.current;
+    const isCurrent = () => requestId === viewRequestId.current && !controller.signal.aborted;
+
+    const loadViewsAndLatest = async () => {
+      try {
+        const viewList = await fetchLibraryViews(user.Id, controller.signal);
+        if (!isCurrent()) return;
+        setViews(viewList);
+
+        const latest: Record<string, MediaItem[]> = {};
+        let nextIndex = 0;
+        const worker = async () => {
+          while (!controller.signal.aborted) {
+            const index = nextIndex++;
+            if (index >= viewList.length) return;
+            const view = viewList[index];
+            try {
+              latest[view.Id] = await fetchLatestItems(user.Id, view.Id, controller.signal);
+            } catch {
+              latest[view.Id] = [];
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(3, viewList.length) }, () => worker()));
+        if (isCurrent()) setLibraryLatest(latest);
+      } catch (err) {
+        if (isCurrent()) console.error('Failed to load library views:', err);
       }
-    });
-    loadNextUp();
-  }, [user.Id]);
+    };
+
+    const loadNextUp = async () => {
+      const nextUp = await fetchNextUpItems(user.Id, controller.signal);
+      if (isCurrent()) setNextUpItems(nextUp);
+    };
+
+    void loadViewsAndLatest();
+    void loadNextUp();
+    return () => {
+      controller.abort();
+      if (requestId === viewRequestId.current) viewRequestId.current++;
+    };
+  }, [user.Id, dataRefreshKey]);
 
   useEffect(() => {
-    loadGridItems();
-  }, [user.Id, selectedViewId, localSearch, activeTab]);
+    const timeout = window.setTimeout(() => setDebouncedSearch(localSearch), 250);
+    return () => window.clearTimeout(timeout);
+  }, [localSearch]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const requestId = ++gridRequestId.current;
+    void loadGridItems(controller.signal, requestId);
+    return () => {
+      controller.abort();
+      if (requestId === gridRequestId.current) gridRequestId.current++;
+    };
+  }, [user.Id, selectedViewId, debouncedSearch, activeTab, gridRefreshKey]);
 
   useEffect(() => {
     if (searchQuery !== localSearch) {
@@ -476,9 +500,8 @@ export const MediaWall: React.FC<MediaWallProps> = ({
           isOpen={!!selectedItem}
           onClose={() => setSelectedItem(null)}
           onItemUpdated={() => {
-            loadViews();
-            loadNextUp();
-            loadGridItems();
+            setDataRefreshKey((key) => key + 1);
+            setGridRefreshKey((key) => key + 1);
           }}
         />
       )}
@@ -491,9 +514,8 @@ export const MediaWall: React.FC<MediaWallProps> = ({
           onClose={() => setRematchItem(null)}
           onSuccess={() => {
             notifyToast('元数据纠偏已成功生效', 'success');
-            loadViews();
-            loadNextUp();
-            loadGridItems();
+            setDataRefreshKey((key) => key + 1);
+            setGridRefreshKey((key) => key + 1);
           }}
         />
       )}

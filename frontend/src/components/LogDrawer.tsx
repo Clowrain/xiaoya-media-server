@@ -13,6 +13,7 @@ export const LogDrawer: React.FC<LogDrawerProps> = ({ isOpen, onClose }) => {
   const [level, setLevel] = useState<string>('');
   const [source, setSource] = useState<string>('');
   const [search, setSearch] = useState<string>('');
+  const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [limit, setLimit] = useState<number>(200);
   const [order, setOrder] = useState<'asc' | 'desc'>('asc');
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
@@ -20,31 +21,68 @@ export const LogDrawer: React.FC<LogDrawerProps> = ({ isOpen, onClose }) => {
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const requestId = useRef(0);
+  const requestController = useRef<AbortController | null>(null);
+  const loadingRef = useRef(false);
 
   const loadLogs = async () => {
+    requestController.current?.abort();
+    const controller = new AbortController();
+    requestController.current = controller;
+    const currentRequest = ++requestId.current;
     try {
+      loadingRef.current = true;
       setLoading(true);
-      const res = await fetchLogs(limit, level || undefined, source || undefined, search || undefined, order);
-      setLogs(res.logs || []);
+      const res = await fetchLogs(limit, level || undefined, source || undefined, debouncedSearch || undefined, order, controller.signal);
+      if (currentRequest === requestId.current && !controller.signal.aborted) setLogs(res.logs || []);
     } catch (err: any) {
-      console.error('Fetch logs error:', err);
+      if (!controller.signal.aborted && currentRequest === requestId.current) console.error('Fetch logs error:', err);
     } finally {
-      setLoading(false);
+      if (currentRequest === requestId.current) {
+        loadingRef.current = false;
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    if (!isOpen) return;
-    loadLogs();
-  }, [isOpen, level, source, limit, order]);
+    const timeout = window.setTimeout(() => setDebouncedSearch(search), 250);
+    return () => window.clearTimeout(timeout);
+  }, [search]);
 
   useEffect(() => {
-    if (!isOpen || !autoRefresh) return;
-    const interval = setInterval(() => {
-      loadLogs();
-    }, 2500);
-    return () => clearInterval(interval);
-  }, [isOpen, autoRefresh, level, source, limit, search, order]);
+    requestController.current?.abort();
+    requestId.current++;
+    loadingRef.current = false;
+  }, [search]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      requestController.current?.abort();
+      requestId.current++;
+      loadingRef.current = false;
+      return;
+    }
+    let active = true;
+    let timeout: number | undefined;
+    const poll = async () => {
+      if (!active) return;
+      if (loadingRef.current) {
+        timeout = window.setTimeout(poll, 2500);
+        return;
+      }
+      await loadLogs();
+      if (active && autoRefresh) timeout = window.setTimeout(poll, 2500);
+    };
+    void poll();
+    return () => {
+      active = false;
+      if (timeout !== undefined) window.clearTimeout(timeout);
+      requestController.current?.abort();
+      requestId.current++;
+      loadingRef.current = false;
+    };
+  }, [isOpen, autoRefresh, level, source, limit, debouncedSearch, order]);
 
   useEffect(() => {
     if (autoScroll && containerRef.current) {
