@@ -76,28 +76,50 @@ func TestThirdPartyPlaybackPrefixAndAuthentication(t *testing.T) {
 
 func TestThirdPartyUserConfigurationShape(t *testing.T) {
 	a := testApp(t)
-	m := a.userDTO(User{})
-	config := m["Configuration"].(M)
-	if config["SubtitleMode"] != "Smart" {
+	user := a.userDTO(User{})
+	config := user.Configuration
+	if config.SubtitleMode != "Smart" {
 		t.Fatal("missing subtitle mode")
 	}
-	for _, k := range []string{"PlayDefaultAudioTrack", "EnableNextEpisodeAutoPlay", "RememberAudioSelections", "RememberSubtitleSelections"} {
-		if _, ok := config[k].(bool); !ok {
-			t.Fatalf("missing boolean %s", k)
-		}
+	if !config.PlayDefaultAudioTrack || !config.EnableNextEpisodeAutoPlay || config.RememberAudioSelections || config.RememberSubtitleSelections {
+		t.Fatalf("unexpected configuration capabilities: %+v", config)
 	}
-	b, err := json.Marshal(m)
+	b, err := json.Marshal(user)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(b), `"LatestItemsExcludes":null`) || strings.Contains(string(b), `"EnabledDevices":null`) {
 		t.Fatal("client arrays must not be null")
 	}
-	policy := m["Policy"].(M)
-	for _, k := range []string{"EnableContentDownloading", "EnableSubtitleDownloading", "EnablePlaybackRemuxing", "EnableVideoPlaybackTranscoding"} {
-		if policy[k] != false {
-			t.Fatalf("unexpected capability %s", k)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"Id", "Name", "ServerId", "HasPassword", "HasConfiguredPassword", "HasConfiguredEasyPassword", "Policy", "Configuration", "FirstAdmin", "MaxDevices"} {
+		if _, ok := fields[key]; !ok {
+			t.Fatalf("missing protocol field %s: %s", key, b)
 		}
+	}
+	var policyFields, configFields map[string]json.RawMessage
+	if err := json.Unmarshal(fields["Policy"], &policyFields); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(fields["Configuration"], &configFields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"IsAdministrator", "IsDisabled", "IsHidden", "IsHiddenRemotely", "IsHiddenFromUnusedDevices", "EnableMediaPlayback", "EnableVideoPlaybackTranscoding", "EnableAudioPlaybackTranscoding", "EnablePlaybackRemuxing", "EnableContentDeletion", "EnableContentDownloading", "EnableSubtitleDownloading", "EnableSubtitleManagement", "EnableSyncTranscoding", "EnableAllFolders", "EnableAllDevices", "EnableAllChannels", "EnableRemoteAccess", "EnableRemoteControlOfOtherUsers", "EnableSharedDeviceControl", "EnableLiveTvAccess", "EnableLiveTvManagement", "EnablePublicSharing", "EnableMediaConversion", "EnableUserPreferenceAccess", "BlockedTags", "IncludeTags", "AccessSchedules", "BlockUnratedItems", "EnabledFolders", "EnabledDevices", "EnabledChannels", "ExcludedSubFolders", "EnableContentDeletionFromFolders", "RemoteClientBitrateLimit", "InvalidLoginAttemptCount", "SimultaneousStreamLimit"} {
+		if _, ok := policyFields[key]; !ok {
+			t.Fatalf("missing policy field %s: %s", key, b)
+		}
+	}
+	for _, key := range []string{"OrderedViews", "DisplayMissingEpisodes", "PlayDefaultAudioTrack", "SubtitleMode", "LatestItemsExcludes", "MyMediaExcludes", "HidePlayedInLatest", "HidePlayedInMoreLikeThis", "HidePlayedInSuggestions", "RememberAudioSelections", "RememberSubtitleSelections", "EnableNextEpisodeAutoPlay", "ResumeRewindSeconds", "IntroSkipMode", "EnableLocalPassword"} {
+		if _, ok := configFields[key]; !ok {
+			t.Fatalf("missing configuration field %s: %s", key, b)
+		}
+	}
+	policy := user.Policy
+	if policy.EnableContentDownloading || policy.EnableSubtitleDownloading || policy.EnablePlaybackRemuxing || policy.EnableVideoPlaybackTranscoding {
+		t.Fatalf("unexpected playback capabilities: %+v", policy)
 	}
 }
 

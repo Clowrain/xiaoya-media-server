@@ -14,26 +14,13 @@ func pathWithin(root, p string) bool {
 }
 
 func (a *App) mediaLibraryLocations() (map[string][]string, error) {
-	rows, err := a.db.Query("SELECT id,path FROM libraries")
+	libraries, err := a.libraryStore().List()
 	if err != nil {
 		return nil, err
 	}
-	locations := map[string][]string{}
-	for rows.Next() {
-		var id, p string
-		if err = rows.Scan(&id, &p); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		locations[id] = []string{p}
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	for id, p := range locations {
-		locations[id] = a.libraryPaths(id, p[0])
+	locations := make(map[string][]string, len(libraries))
+	for _, library := range libraries {
+		locations[library.ID] = a.libraryPaths(library.ID, library.Path)
 	}
 	return locations, nil
 }
@@ -74,14 +61,14 @@ func (a *App) ResolveImportTarget(id, dir string) (string, error) {
 	}
 	var roots []string
 	if id != "" {
-		var p string
-		if err := a.db.QueryRow("SELECT path FROM libraries WHERE id=?", id).Scan(&p); err != nil {
+		library, err := a.libraryStore().GetByID(id)
+		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return "", fmt.Errorf("媒体库不存在")
 			}
 			return "", err
 		}
-		roots = a.libraryPaths(id, p)
+		roots = a.libraryPaths(id, library.Path)
 		if len(roots) == 0 {
 			return "", fmt.Errorf("媒体库尚未配置目录")
 		}

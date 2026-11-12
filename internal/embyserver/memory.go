@@ -19,7 +19,8 @@ func (a *App) reclaimIdleMemory() {
 			continue
 		}
 		var active int
-		if a.db.QueryRow("SELECT count(*) FROM plays WHERE updated>?", time.Now().Unix()-180).Scan(&active) != nil || active > 0 {
+		active, err := a.playbackSessionStore().ActiveCountSince(time.Now().Unix() - 180)
+		if err != nil || active > 0 {
 			continue
 		}
 		var stats runtime.MemStats

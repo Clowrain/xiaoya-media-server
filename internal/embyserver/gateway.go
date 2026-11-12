@@ -145,7 +145,7 @@ var cdnLinks = struct {
 func safeProxyError(err error) string {
 	var u *url.Error
 	if errors.As(err, &u) {
-		return u.Op + ": " + u.Err.Error()
+		return redactPlaybackText(u.Op + ": " + u.Err.Error())
 	}
-	return err.Error()
+	return redactPlaybackText(err.Error())
 }

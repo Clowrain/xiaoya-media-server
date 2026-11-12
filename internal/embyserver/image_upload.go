@@ -24,14 +24,14 @@ func (a *App) imageUploadRoute(w http.ResponseWriter, r *http.Request, u User, p
 		fail(w, 400, "仅支持主封面（索引0）操作")
 		return true
 	}
-	var exists int
-	if a.db.QueryRow("SELECT 1 FROM libraries WHERE id=? UNION ALL SELECT 1 FROM items WHERE id=? LIMIT 1", id, id).Scan(&exists) != nil {
+	exists, existsErr := a.coverEntityExists(id)
+	if existsErr != nil || !exists {
 		fail(w, 404, "媒体不存在")
 		return true
 	}
 	if r.Method == http.MethodDelete {
 		a.write.Lock()
-		_, err := a.db.Exec("DELETE FROM covers WHERE id=?", id)
+		err := a.coverStore().Delete(a.db, id)
 		a.write.Unlock()
 		if err != nil {
 			fail(w, 500, "清除封面失败")
@@ -65,7 +65,7 @@ func (a *App) imageUploadRoute(w http.ResponseWriter, r *http.Request, u User, p
 		return true
 	}
 	a.write.Lock()
-	_, err = a.db.Exec("INSERT INTO covers(id,mime,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET mime=excluded.mime,data=excluded.data", id, mime, data)
+	err = a.coverStore().Save(a.db, id, mime, data)
 	a.write.Unlock()
 	if err != nil {
 		fail(w, 500, "保存失败")

@@ -1,15 +1,20 @@
 import React from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchLatestItems, fetchLibraryViews, fetchMediaItems, fetchNextUpItems } from '../api/client';
+import { fetchLatestItems, fetchLibraryViews, fetchMediaItems, fetchNextUpItems } from '../api/media';
 import { MediaWall } from './MediaWall';
 import { User } from '../types';
 
-vi.mock('../api/client', () => ({
+vi.mock('../api/media', () => ({
   fetchLatestItems: vi.fn(),
   fetchLibraryViews: vi.fn(),
   fetchMediaItems: vi.fn(),
   fetchNextUpItems: vi.fn(),
+  getPrimaryImageUrl: vi.fn(),
+  getBackdropImageUrl: vi.fn(),
+}));
+
+vi.mock('../api/client', () => ({
   notifyToast: vi.fn(),
   getStoredToken: vi.fn(() => 'token'),
 }));

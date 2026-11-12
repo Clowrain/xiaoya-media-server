@@ -211,6 +211,9 @@ func TestFavoriteItemsPlayedItemsGetLists(t *testing.T) {
 	if m["TotalRecordCount"] != float64(1) || len(items) != 1 || items[0].(M)["Id"] != "fav-m1" {
 		t.Fatalf("收藏列表应只包含 fav-m1: %+v", m)
 	}
+	if userData := items[0].(M)["UserData"].(M); userData["IsFavorite"] != true {
+		t.Fatalf("收藏条目的 UserData 必须保留 IsFavorite: %+v", userData)
+	}
 
 	// POST 标记已看 fav-m2
 	w = routingServe(a, "POST", "/emby/Users/"+uid+"/PlayedItems/fav-m2?api_key="+tok, "")
@@ -225,6 +228,9 @@ func TestFavoriteItemsPlayedItemsGetLists(t *testing.T) {
 	items = m["Items"].([]any)
 	if m["TotalRecordCount"] != float64(1) || len(items) != 1 || items[0].(M)["Id"] != "fav-m2" {
 		t.Fatalf("已看列表应只包含 fav-m2: %+v", m)
+	}
+	if userData := items[0].(M)["UserData"].(M); userData["Played"] != true || userData["PlayCount"] != float64(1) {
+		t.Fatalf("已看条目的 UserData 状态不正确: %+v", userData)
 	}
 
 	// 第二个非管理员用户查询他人列表必须 403

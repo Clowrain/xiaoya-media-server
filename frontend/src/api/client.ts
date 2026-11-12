@@ -1,7 +1,4 @@
-import { 
-  User, LibraryView, MediaItem, AdminLibrary, SystemOverview, 
-  MonitorRoot, AListBrowseResult, AdminJob, TmdbConfig, TmdbSearchResult, RecognitionPending, LogEntry
-} from '../types';
+import { User } from '../types';
 
 const TOKEN_KEY = 'xiaoya_token';
 const USER_KEY = 'xiaoya_user';
@@ -30,10 +27,6 @@ export function getStoredToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
-export function fetchCurrentUser(userId: string): Promise<User> {
-  return request<User>(`/emby/Users/${encodeURIComponent(userId)}`);
-}
-
 export function setAuthSession(user: User, token: string) {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
   localStorage.setItem(TOKEN_KEY, token);
@@ -58,24 +51,29 @@ export function notifyToast(msg: string, type: 'info' | 'success' | 'error' | 'w
 }
 
 // Global API fetcher
+function getAuthHeaders(): Record<string, string> {
+  return {
+    'X-Emby-Token': getStoredToken() || '',
+    'X-Emby-Authorization': `Emby Client="Xiaoya Web React", Device="Browser", DeviceId="${getDeviceId()}", Version="2.0"`,
+  };
+}
+
+function normalizeUrl(path: string): string {
+  return path.startsWith('http') ? path : (path.startsWith('/') ? path : `/${path}`);
+}
+
 export async function request<T = any>(
   path: string,
   method: string = 'GET',
   body?: any,
   signal?: AbortSignal
 ): Promise<T> {
-  const token = getStoredToken() || '';
-  const device = getDeviceId();
-
   const headers: Record<string, string> = {
+    ...getAuthHeaders(),
     'Content-Type': 'application/json',
-    'X-Emby-Token': token,
-    'X-Emby-Authorization': `Emby Client="Xiaoya Web React", Device="Browser", DeviceId="${device}", Version="2.0"`,
   };
 
-  const url = path.startsWith('http') ? path : (path.startsWith('/') ? path : `/${path}`);
-
-  const res = await fetch(url, {
+  const res = await fetch(normalizeUrl(path), {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -105,380 +103,22 @@ export async function request<T = any>(
   return json as T;
 }
 
-// Auth API
-export async function loginApi(username: string, password: string):Promise<{ User: User; AccessToken: string }> {
-  const res = await request('/emby/Users/AuthenticateByName', 'POST', {
-    Username: username,
-    Pw: password,
-  });
-  setAuthSession(res.User, res.AccessToken);
-  return res;
-}
-
-export async function logoutApi(): Promise<void> {
-  try {
-    await request('/Sessions/Logout', 'POST', {});
-  } finally {
-    clearAuthSession();
-  }
-}
-
-export async function changePasswordApi(userId: string, oldPw: string, newPw: string): Promise<void> {
-  await request(`/Users/${userId}/Password`, 'POST', {
-    CurrentPw: oldPw,
-    NewPw: newPw,
-  });
-}
-
-// Media Wall & SenPlayer API
-export async function fetchLibraryViews(userId: string, signal?: AbortSignal): Promise<LibraryView[]> {
-  const data = await request(`/emby/Users/${userId}/Views`, 'GET', undefined, signal);
-  return data.Items || [];
-}
-
-export async function fetchMediaItems(params: URLSearchParams, signal?: AbortSignal): Promise<{ Items: MediaItem[]; TotalRecordCount: number }> {
-  return request(`/emby/Items?${params.toString()}`, 'GET', undefined, signal);
-}
-
-export async function fetchItemDetail(userId: string, itemId: string): Promise<MediaItem> {
-  return request(`/emby/Users/${userId}/Items/${itemId}`);
-}
-
-export async function fetchResumeItems(userId: string): Promise<MediaItem[]> {
-  try {
-    const data = await request(`/emby/Users/${userId}/Items/Resume?Limit=12&Recursive=true&Fields=Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources`);
-    return data.Items || [];
-  } catch {
-    return [];
-  }
-}
-
-export async function fetchNextUpItems(userId: string, signal?: AbortSignal): Promise<MediaItem[]> {
-  try {
-    const data = await request(`/emby/Shows/NextUp?UserId=${userId}&Limit=12&Fields=Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources`, 'GET', undefined, signal);
-    return data.Items || [];
-  } catch {
-    return [];
-  }
-}
-
-export async function fetchLatestItems(userId: string, parentId?: string, signal?: AbortSignal): Promise<MediaItem[]> {
-  try {
-    const url = `/emby/Users/${userId}/Items/Latest?Limit=16&Fields=Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources,ChildCount,RecursiveItemCount,EpisodeCount${parentId ? `&ParentId=${encodeURIComponent(parentId)}` : ''}`;
-    const data = await request(url, 'GET', undefined, signal);
-    if (Array.isArray(data)) return data;
-    return data.Items || [];
-  } catch {
-    return [];
-  }
-}
-
-export async function fetchSeasons(userId: string, seriesId: string): Promise<MediaItem[]> {
-  const data = await request(`/emby/Users/${userId}/Shows/${encodeURIComponent(seriesId)}/Seasons`);
-  return data.Items || [];
-}
-
-export async function fetchEpisodes(userId: string, seriesId: string, seasonId?: string): Promise<MediaItem[]> {
-  const qs = new URLSearchParams({
-    Fields: 'Overview,PrimaryImageAspectRatio,ProductionYear,CommunityRating,MediaSources,MediaStreams',
-  });
-  if (seasonId) {
-    qs.set('SeasonId', seasonId);
-  }
-  const data = await request(`/emby/Users/${userId}/Shows/${encodeURIComponent(seriesId)}/Episodes?${qs.toString()}`);
-  return data.Items || [];
-}
-
-export async function refreshItemMediaInfo(itemId: string): Promise<void> {
-  await request(`/emby/Items/${itemId}/RefreshMediaInfo`, 'POST', {});
-}
-
-export async function renameMediaItem(id: string, name: string): Promise<void> {
-  await request('/admin/media-item', 'PUT', { ID: id, Name: name });
-}
-
-export async function deleteMediaItem(id: string): Promise<void> {
-  await request('/admin/media-item', 'DELETE', { ID: id, DeleteDirectory: false });
-}
-
-// Admin Libraries API
-export async function fetchAdminLibraries(): Promise<AdminLibrary[]> {
-  const data = await request('/admin/libraries');
-  return Array.isArray(data) ? data : (data.Libraries || []);
-}
-
-export async function createAdminLibrary(name: string, kind: string, paths: string[]): Promise<void> {
-  await request('/admin/libraries', 'POST', { Name: name, Kind: kind, Paths: paths });
-}
-
-export async function updateAdminLibrary(id: string, name: string, kind: string, paths?: string[]): Promise<void> {
-  const payload: any = { ID: id, Name: name, Kind: kind };
-  if (paths && paths.length > 0) {
-    payload.Paths = paths;
-  }
-  await request('/admin/libraries', 'PUT', payload);
-}
-
-export async function deleteAdminLibrary(id: string): Promise<void> {
-  await request(`/admin/libraries?id=${encodeURIComponent(id)}`, 'DELETE', { ID: id });
-}
-
-export async function addLibraryFolder(id: string, path: string): Promise<void> {
-  await request('/admin/library-folders', 'POST', { ID: id, Path: path });
-}
-
-export async function removeLibraryFolder(id: string, path: string): Promise<void> {
-  await request('/admin/library-folders', 'DELETE', { ID: id, Path: path });
-}
-
-export async function scanLibrary(id: string, mode: string = 'scan'): Promise<void> {
-  await request('/admin/scan', 'POST', { ID: id, Mode: mode });
-}
-
-export async function scanAllLibraries(): Promise<void> {
-  await request('/admin/scan-all', 'POST', {});
-}
-
-export async function uploadItemCover(id: string, file: File): Promise<void> {
-  const token = getStoredToken() || '';
-  const device = getDeviceId();
-  const res = await fetch(`/Items/${encodeURIComponent(id)}/Images/Primary`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': file.type || 'image/jpeg',
-      'X-Emby-Token': token,
-      'X-Emby-Authorization': `Emby Client="Xiaoya Web React", Device="Browser", DeviceId="${device}", Version="2.0"`,
-    },
+export async function requestFile(
+  path: string,
+  method: 'POST' | 'DELETE',
+  file?: File,
+  contentType?: string,
+  fallbackMessage = '请求失败'
+): Promise<void> {
+  const headers = getAuthHeaders();
+  if (file) headers['Content-Type'] = contentType || file.type || 'application/octet-stream';
+  const res = await fetch(normalizeUrl(path), {
+    method,
+    headers,
     body: file,
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || '上传封面失败');
-  }
-}
-
-export async function deleteItemCover(id: string): Promise<void> {
-  const token = getStoredToken() || '';
-  const device = getDeviceId();
-  const res = await fetch(`/Items/${encodeURIComponent(id)}/Images/Primary`, {
-    method: 'DELETE',
-    headers: {
-      'X-Emby-Token': token,
-      'X-Emby-Authorization': `Emby Client="Xiaoya Web React", Device="Browser", DeviceId="${device}", Version="2.0"`,
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || '清除自定义封面失败');
-  }
-}
-
-export async function generateLibraryCover(id: string): Promise<void> {
-  await request(`/admin/cover?id=${encodeURIComponent(id)}&action=generate`, 'POST');
-}
-
-export async function fetchDirectories(basePath: string = '/media'): Promise<{ Path: string; Directories: any[] }> {
-  return request(`/admin/directories?${new URLSearchParams({ Path: basePath })}`);
-}
-
-export async function fetchScanSchedule(): Promise<any> {
-  return request('/admin/scan-schedule');
-}
-
-export async function updateScanSchedule(schedule: { Enabled: boolean; Frequency: string; Time: string; Minutes: number }): Promise<void> {
-  await request('/admin/scan-schedule', 'PUT', schedule);
-}
-
-// Xiaoya Sync & AList API
-export async function fetchSystemOverview(): Promise<SystemOverview> {
-  return request('/api/system/overview');
-}
-
-export async function fetchMonitorRoots(): Promise<MonitorRoot[]> {
-  const data = await request('/api/monitor/roots');
-  if (Array.isArray(data)) return data;
-  if (data && Array.isArray(data.items)) return data.items;
-  if (data && Array.isArray(data.roots)) return data.roots;
-  return [];
-}
-
-export async function addMonitorRoot(rootPath: string, intervalSec: number, enabled: boolean): Promise<void> {
-  await request('/api/monitor/roots', 'POST', {
-    root_path: rootPath,
-    interval_sec: intervalSec,
-    enabled,
-  });
-}
-
-export async function updateMonitorRoot(id: string, enabled: boolean, intervalSec: number): Promise<void> {
-  await request(`/api/monitor/roots/${encodeURIComponent(id)}`, 'PUT', {
-    enabled,
-    interval_sec: intervalSec,
-  });
-}
-
-export async function syncSingleMonitorRoot(id: string): Promise<any> {
-  return request(`/api/monitor/roots/${encodeURIComponent(id)}/sync`, 'POST');
-}
-
-export async function deleteMonitorRoot(id: string): Promise<void> {
-  await request(`/api/monitor/roots/${encodeURIComponent(id)}`, 'DELETE');
-}
-
-export async function triggerSync(id: string, full: boolean) {
-  return request<AdminJob>(full ? '/api/sync/full?async=true' : '/api/sync/incremental?async=true', 'POST', { root_id: id });
-}
-
-export async function importResource(path: string, isDir: boolean, trackUpdates: boolean, libraryID: string, outputDir: string, source: string = 'manifest') {
-  return request<AdminJob>('/api/resources/import?async=true', 'POST', {
-    path,
-    is_dir: isDir,
-    track_updates: trackUpdates,
-    library_id: libraryID,
-    output_dir: outputDir,
-    source,
-  });
-}
-
-export async function browseAList(path: string, page: number = 1, perPage: number = 25, source: 'sqlite' | 'alist' = 'sqlite'): Promise<AListBrowseResult> {
-  const qs = new URLSearchParams({ path, page: String(page), per_page: String(perPage), source });
-  return request(`/api/alist/browse?${qs.toString()}`);
-}
-
-export async function searchAList(keyword: string, path: string = '/', page: number = 1, perPage: number = 25): Promise<AListBrowseResult> {
-  const qs = new URLSearchParams({
-    keywords: keyword,
-    keyword: keyword,
-    q: keyword,
-    parent: path,
-    path: path,
-    page: String(page),
-    per_page: String(perPage),
-  });
-  return request(`/api/alist/search?${qs.toString()}`);
-}
-
-// TMDB API
-export async function fetchTmdbConfig(): Promise<TmdbConfig> {
-  return request('/admin/tmdb');
-}
-
-export async function updateTmdbConfig(cfg: TmdbConfig): Promise<void> {
-  await request('/admin/tmdb', 'PUT', cfg);
-}
-
-export async function testTmdb(): Promise<any> {
-  return request('/admin/tmdb/test', 'POST', {});
-}
-
-export async function searchTmdb(q: string, kind: string, year?: string, signal?: AbortSignal): Promise<TmdbSearchResult[]> {
-  const params: Record<string, string> = { q, kind };
-  if (year) params.year = year;
-  const data = await request(`/admin/tmdb/search?${new URLSearchParams(params)}`, 'GET', undefined, signal);
-  return Array.isArray(data) ? data : (data.Items || data.items || data.results || []);
-}
-
-export async function matchTmdb(itemId: string, tmdbId: number | string, kind: string): Promise<void> {
-  await request('/admin/tmdb/match', 'POST', {
-    ItemId: itemId,
-    TmdbId: String(tmdbId),
-    MediaType: kind,
-  });
-}
-
-export async function fetchRecognitionPending(limit: number = 100): Promise<RecognitionPending[]> {
-  const data = await request<{ items?: RecognitionPending[] }>(`/api/recognition/pending?limit=${limit}`);
-  return data.items || [];
-}
-
-export async function confirmRecognition(resourceID: string, externalID: number | string): Promise<void> {
-  await request(`/api/recognition/${encodeURIComponent(resourceID)}/confirm`, 'POST', {
-    external_id: String(externalID),
-  });
-}
-
-// Logs API
-export async function fetchLogs(limit: number = 200, level?: string, source?: string, q?: string, order: string = 'asc', signal?: AbortSignal): Promise<{ logs: (string | LogEntry)[]; total?: number }> {
-  const params: Record<string, string> = { limit: String(limit), order };
-  if (level) params.level = level;
-  if (source) {
-    params.source = source;
-    params.category = source;
-  }
-  if (q) params.q = q;
-  const data = await request(`/admin/logs?${new URLSearchParams(params)}`, 'GET', undefined, signal);
-  const rawList = data?.logs || data?.Items || data?.Entries || (Array.isArray(data) ? data : []);
-  return {
-    ...data,
-    logs: rawList,
-  };
-}
-
-export async function clearLogs(): Promise<void> {
-  await request('/admin/logs', 'DELETE');
-}
-
-// Users & System Settings
-export async function fetchUsers(): Promise<any[]> {
-  return request('/admin/users');
-}
-
-export async function createUser(data: { Name: string; Password?: string; MaxDevices: number; AllowPlayback: boolean }): Promise<void> {
-  await request('/admin/users', 'POST', {
-    Name: data.Name,
-    Password: data.Password || '',
-    MaxDevices: data.MaxDevices,
-    AllowPlayback: data.AllowPlayback,
-  });
-}
-
-export async function updateUser(id: string, data: { MaxDevices: number; Admin: boolean; AllowPlayback: boolean }): Promise<void> {
-  await request('/admin/users', 'PUT', {
-    ID: id,
-    MaxDevices: data.MaxDevices,
-    Admin: data.Admin,
-    AllowPlayback: data.AllowPlayback,
-  });
-}
-
-export async function updateUserIdentity(id: string, name: string, password?: string): Promise<void> {
-  await request('/admin/user-identity', 'PUT', {
-    ID: id,
-    Name: name,
-    Password: password || '',
-  });
-}
-
-export async function deleteUser(id: string): Promise<void> {
-  await request('/admin/users', 'DELETE', { ID: id });
-}
-
-export async function fetchEnhancements(): Promise<any> {
-  return request('/admin/enhancements');
-}
-
-export async function updateEnhancements(data: any): Promise<void> {
-  await request('/admin/enhancements', 'PUT', data);
-}
-
-export async function fetchMediaInfoSettings(): Promise<any> {
-  return request('/admin/media-info');
-}
-
-export async function updateMediaInfoSettings(data: any): Promise<void> {
-  await request('/admin/media-info', 'PUT', data);
-}
-
-
-export async function fetchAdminJobs() {
-  return (await request<{items: AdminJob[]}>('/api/jobs')).items;
-}
-
-export async function waitForAdminJob(id: string, signal?: AbortSignal): Promise<AdminJob> {
-  while (true) {
-    if (signal?.aborted) throw new DOMException('任务视图已关闭', 'AbortError');
-    const job = await request<AdminJob>(`/api/jobs/${encodeURIComponent(id)}`);
-    if (job.status !== 'RUNNING') return job;
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    throw new Error(text || fallbackMessage);
   }
 }

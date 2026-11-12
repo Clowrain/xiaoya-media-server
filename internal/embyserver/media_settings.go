@@ -2,7 +2,9 @@ package embyserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -240,7 +242,7 @@ func (a *App) preloadNext(x Item, r *http.Request) {
 	if parent.Kind == "Season" {
 		series = parent.Parent
 	}
-	n, e := readItem(a.db.QueryRow("SELECT "+cols+" FROM items WHERE kind='Episode' AND (parent=? OR parent IN (SELECT id FROM items WHERE parent=? AND kind='Season')) AND (season>? OR (season=? AND episode>?)) ORDER BY season,episode,id LIMIT 1", series, series, x.Season, x.Season, x.Episode))
+	n, e := a.mediaItems().NextEpisode(series, x.Season, x.Episode)
 	if e == nil {
 		a.queueProbe(n, token(r), r.UserAgent(), false, true)
 	}
@@ -328,18 +330,17 @@ func (a *App) cleanupMedia() error {
 		if json.Unmarshal(b, &rec) != nil || rec.ItemID == "" || filepath.Base(p) != digest(rec.ItemID)+".json" {
 			continue
 		}
-		var exists int
-		e = a.db.QueryRow("SELECT count(*) FROM items WHERE id=? AND url<>''", rec.ItemID).Scan(&exists)
-		if e != nil {
-			return e
+		item, itemErr := a.mediaItems().GetByID(rec.ItemID)
+		missing := errors.Is(itemErr, sql.ErrNoRows) || (itemErr == nil && item.URL == "")
+		if itemErr != nil && !errors.Is(itemErr, sql.ErrNoRows) {
+			return itemErr
 		}
-		missing := exists == 0
 		if !missing {
 			_, e = os.Stat(rec.Path)
 			missing = os.IsNotExist(e)
 			if missing {
 				var root string
-				if a.db.QueryRow("SELECT l.path FROM libraries l JOIN items i ON i.lib=l.id WHERE i.id=?", rec.ItemID).Scan(&root) != nil {
+				if root, e = a.mediaItems().LibraryRootForItem(rec.ItemID); e != nil {
 					continue
 				}
 				if st, err := os.Stat(root); err != nil || !st.IsDir() {

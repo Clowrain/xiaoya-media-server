@@ -2,7 +2,6 @@ package embyserver
 
 import (
 	"bytes"
-	"database/sql"
 	"image/png"
 	"io"
 	"net/http"
@@ -24,9 +23,8 @@ func (a *App) extraSchema() error {
 	return e
 }
 func (a *App) canPlay(uid string) bool {
-	var allowed bool
-	e := a.db.QueryRow("SELECT allowed FROM user_playback WHERE user_id=?", uid).Scan(&allowed)
-	return e == sql.ErrNoRows || (e == nil && allowed)
+	allowed, err := a.userStore().CanPlay(uid)
+	return err == nil && allowed
 }
 func mediaPath(p string) string {
 	p = filepath.Clean(p)
@@ -122,8 +120,8 @@ func (a *App) extraAdmin(w http.ResponseWriter, r *http.Request, p string) {
 			return
 		}
 		defer tx.Rollback()
-		var count int
-		if tx.QueryRow("SELECT count(*) FROM libraries").Scan(&count) != nil || count != len(b.IDs) {
+		count, countErr := a.libraryStore().CountWith(tx)
+		if countErr != nil || count != len(b.IDs) {
 			fail(w, 409, "媒体库已变化，请刷新")
 			return
 		}
@@ -134,7 +132,7 @@ func (a *App) extraAdmin(w http.ResponseWriter, r *http.Request, p string) {
 				return
 			}
 			seen[id] = true
-			if _, e = tx.Exec("INSERT INTO library_order VALUES(?,?) ON CONFLICT(library_id) DO UPDATE SET position=excluded.position", id, n); e != nil {
+			if e = a.libraryStore().SetOrderPosition(tx, id, n); e != nil {
 				fail(w, 400, "无效媒体库")
 				return
 			}
@@ -153,21 +151,21 @@ func (a *App) extraAdmin(w http.ResponseWriter, r *http.Request, p string) {
 		if id == "" {
 			id = q(r, "id")
 		}
-		var exists int
-		if a.db.QueryRow("SELECT 1 FROM libraries WHERE id=? UNION ALL SELECT 1 FROM items WHERE id=? LIMIT 1", id, id).Scan(&exists) != nil {
+		exists, existsErr := a.coverEntityExists(id)
+		if existsErr != nil || !exists {
 			fail(w, 404, "媒体不存在")
 			return
 		}
 		if strings.EqualFold(q(r, "action"), "generate") {
-			var libName, libKind string
-			if a.db.QueryRow("SELECT name, kind FROM libraries WHERE id=?", id).Scan(&libName, &libKind) != nil {
+			library, err := a.libraryStore().GetByID(id)
+			if err != nil {
 				fail(w, 404, "媒体库不存在")
 				return
 			}
-			img := a.generateLibraryCollage(id, libName, libKind)
+			img := a.generateLibraryCollage(id, library.Name, library.Kind)
 			var buf bytes.Buffer
 			png.Encode(&buf, img)
-			if _, e := a.db.Exec("INSERT INTO covers(id,mime,data) VALUES(?,'image/png',?) ON CONFLICT(id) DO UPDATE SET mime=excluded.mime,data=excluded.data", id, buf.Bytes()); e != nil {
+			if e := a.coverStore().Save(a.db, id, "image/png", buf.Bytes()); e != nil {
 				fail(w, 500, "保存生成封面失败")
 				return
 			}
@@ -185,7 +183,7 @@ func (a *App) extraAdmin(w http.ResponseWriter, r *http.Request, p string) {
 			fail(w, 400, "仅支持JPEG、PNG、WebP")
 			return
 		}
-		if _, e = a.db.Exec("INSERT INTO covers VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET mime=excluded.mime,data=excluded.data", id, mime, data); e != nil {
+		if e = a.coverStore().Save(a.db, id, mime, data); e != nil {
 			fail(w, 500, "保存失败")
 			return
 		}

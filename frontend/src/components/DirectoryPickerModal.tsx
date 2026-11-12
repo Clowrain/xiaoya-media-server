@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Folder, FolderPlus, ChevronRight, ArrowUp, Check, X, HardDrive } from 'lucide-react';
-import { fetchDirectories, notifyToast } from '../api/client';
+import { notifyToast } from '../api/client';
+import { fetchDirectories } from '../api/libraries';
 
 interface DirItem {
   name: string;

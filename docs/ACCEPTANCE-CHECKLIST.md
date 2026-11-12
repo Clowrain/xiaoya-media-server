@@ -48,7 +48,7 @@
 ### 15.7 统一后台控制台与单栈部署交付
 - [x] 后台异步同步/入库提供可查询的任务结果，重启中断的任务可以重跑。
 - [x] 资源与任务页支持查看变更、扫描批次、定时任务及取消管理预览。
-- [ ] 在实际 NAS 上验收部署与挂载，在目标 Emby 客户端验收选集、播放、字幕和续播。
+- [ ] 在实际 NAS 上验收部署与挂载，在目标 Emby 客户端验收选集、播放、字幕和续播；客户端场景、版本和样本记录见 [Emby 客户端兼容性矩阵](EMBY-COMPATIBILITY-MATRIX.md)，当前仍无实机记录。
 - [x] 单一服务进程与端口同时提供 Emby 兼容 API、影库前端与后台“资源与监控 / AList 入库 / 批次与任务 / TMDB 刮削”四大管理中心：`cmd/server/main.go`、`internal/adminapi/handler.go`、`web/index.html`
 - [x] 完整交付多阶段 `deployments/Dockerfile`、`deployments/compose.yaml`、`deployments/.env.example` 与部署文档：`deployments/`、`docs/DEPLOYMENT.md`
 

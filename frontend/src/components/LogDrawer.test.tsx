@@ -1,13 +1,16 @@
 import React from 'react';
 import { act, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchLogs } from '../api/client';
+import { fetchLogs } from '../api/logs';
 import { LogDrawer } from './LogDrawer';
 
 vi.mock('../api/client', () => ({
+  notifyToast: vi.fn(),
+}));
+
+vi.mock('../api/logs', () => ({
   fetchLogs: vi.fn(),
   clearLogs: vi.fn(),
-  notifyToast: vi.fn(),
 }));
 
 beforeEach(() => {

@@ -4,12 +4,13 @@ import {
   Clock, Play, ShieldAlert, Check, X, HardDrive, Image as ImageIcon, Upload, Sparkles 
 } from 'lucide-react';
 import { AdminLibrary } from '../../types';
-import { 
-  fetchAdminLibraries, createAdminLibrary, updateAdminLibrary, 
-  deleteAdminLibrary, addLibraryFolder, removeLibraryFolder, 
-  scanLibrary, scanAllLibraries, fetchScanSchedule, updateScanSchedule, 
-  uploadItemCover, deleteItemCover, generateLibraryCover, notifyToast, getStoredToken 
-} from '../../api/client';
+import { notifyToast, getStoredToken } from '../../api/client';
+import {
+  fetchAdminLibraries, createAdminLibrary, updateAdminLibrary,
+  deleteAdminLibrary, addLibraryFolder, removeLibraryFolder,
+  scanLibrary, scanAllLibraries, fetchScanSchedule, updateScanSchedule, generateLibraryCover,
+} from '../../api/libraries';
+import { uploadItemCover, deleteItemCover, getPrimaryImageUrl } from '../../api/media';
 import { DirectoryPickerModal } from '../../components/DirectoryPickerModal';
 
 interface AdminLibrariesProps {
@@ -31,7 +32,7 @@ export const AdminLibraries: React.FC<AdminLibrariesProps> = ({ onOpenLogs }) =>
 
   const getCoverUrl = (libId: string, height: number = 300) => {
     const token = getStoredToken() || '';
-    return `/Items/${libId}/Images/Primary?fillHeight=${height}&api_key=${encodeURIComponent(token)}&v=${coverVersion}`;
+    return getPrimaryImageUrl(libId, `fillHeight=${height}&api_key=${encodeURIComponent(token)}&v=${coverVersion}`);
   };
 
   // Directory picker state

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { RefreshCw, Edit3, Trash2, Search, X, Star, Calendar, Clock, Film } from 'lucide-react';
 import { MediaItem } from '../types';
-import { refreshItemMediaInfo, renameMediaItem, deleteMediaItem, notifyToast } from '../api/client';
+import { notifyToast } from '../api/client';
+import { refreshItemMediaInfo, renameMediaItem, deleteMediaItem, getPrimaryImageUrl, getBackdropImageUrl } from '../api/media';
 
 interface MediaDetailModalProps {
   item: MediaItem | null;
@@ -63,11 +64,11 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
   };
 
   const posterUrl = item.ImageTags?.Primary
-    ? `/Items/${item.Id}/Images/Primary?fillHeight=600&tag=${item.ImageTags.Primary}&quality=90`
+    ? getPrimaryImageUrl(item.Id, `fillHeight=600&tag=${item.ImageTags.Primary}&quality=90`)
     : null;
 
   const backdropUrl = item.BackdropImageTags?.[0]
-    ? `/Items/${item.Id}/Images/Backdrop/0?fillWidth=1200&tag=${item.BackdropImageTags[0]}&quality=80`
+    ? getBackdropImageUrl(item.Id, `fillWidth=1200&tag=${item.BackdropImageTags[0]}&quality=80`, 0)
     : null;
 
   const durationMin = item.RunTimeTicks ? Math.round(item.RunTimeTicks / 1e7 / 60) : null;

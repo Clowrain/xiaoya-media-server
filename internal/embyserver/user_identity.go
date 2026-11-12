@@ -1,9 +1,11 @@
 package embyserver
 
 import (
-	"golang.org/x/crypto/bcrypt"
+	"errors"
 	"net/http"
 	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func (a *App) userIdentity(w http.ResponseWriter, r *http.Request) {
@@ -20,38 +22,33 @@ func (a *App) userIdentity(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "名称不能为空，密码需要10–72字节")
 		return
 	}
-	tx, e := a.db.Begin()
-	if e != nil {
-		fail(w, 500, "保存失败")
-		return
-	}
-	defer tx.Rollback()
-	result, e := tx.Exec("UPDATE users SET name=? WHERE id=?", b.Name, b.ID)
-	if e != nil {
-		fail(w, 409, "用户名已存在或保存失败")
-		return
-	}
-	n, _ := result.RowsAffected()
-	if n == 0 {
-		fail(w, 404, "用户不存在")
-		return
-	}
+	passwordHash := ""
 	if b.Password != "" {
-		h, err := bcrypt.GenerateFromPassword([]byte(b.Password), 12)
+		hash, err := bcrypt.GenerateFromPassword([]byte(b.Password), 12)
 		if err != nil {
 			fail(w, 400, "无效密码")
 			return
 		}
-		if _, e = tx.Exec("UPDATE users SET hash=? WHERE id=?", string(h), b.ID); e == nil {
-			_, e = tx.Exec("DELETE FROM tokens WHERE user_id=?", b.ID)
-		}
-		if e != nil {
-			fail(w, 500, "密码保存失败")
-			return
-		}
+		passwordHash = string(hash)
 	}
-	if e = tx.Commit(); e != nil {
+	updated, err := a.userStore().UpdateIdentity(b.ID, b.Name, passwordHash)
+	if err != nil {
+		var identityErr *UserIdentityUpdateError
+		if errors.As(err, &identityErr) {
+			switch identityErr.Failure {
+			case UserIdentityNameFailure:
+				fail(w, 409, "用户名已存在或保存失败")
+				return
+			case UserIdentityPasswordFailure:
+				fail(w, 500, "密码保存失败")
+				return
+			}
+		}
 		fail(w, 500, "保存失败")
+		return
+	}
+	if !updated {
+		fail(w, 404, "用户不存在")
 		return
 	}
 	respond(w, M{"ok": true})

@@ -25,7 +25,7 @@
 │                   Web & Client Layer (客户端接入层)                      │
 │   React 19 SPA (/web, /assets)  │  Emby/Infuse 客户端 (/emby, /Items)   │
 └───────────────────────────────────┬────────────────────────────────────┘
-                                    │ HTTP / WebSocket
+                                    │ HTTP（当前实现）；WebSocket 尚未实现，需经目标客户端验收确认需求
 ┌───────────────────────────────────▼────────────────────────────────────┐
 │                  Routing & Gateway Layer (统一路由网关)                 │
 │  - embyserver.App (Emby 协议分发、会话校验、静态资源路由)                   │

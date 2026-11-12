@@ -27,6 +27,9 @@ func TestWatchDelayAndIdentity(t *testing.T) {
 	}
 	var uid string
 	a.db.QueryRow("SELECT id FROM users LIMIT 1").Scan(&uid)
+	if _, err := a.db.Exec("INSERT INTO tokens(hash,user_id,device,expires) VALUES(?,?,?,?)", "identity-token", uid, "test-device", time.Now().Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
 	w = httptest.NewRecorder()
 	a.userIdentity(w, httptest.NewRequest("PUT", "/admin/user-identity", strings.NewReader(`{"ID":"`+uid+`","Name":"renamed","Password":"new-password-123"}`)))
 	if w.Code != 200 {
@@ -36,6 +39,10 @@ func TestWatchDelayAndIdentity(t *testing.T) {
 	a.db.QueryRow("SELECT name FROM users WHERE id=?", uid).Scan(&name)
 	if name != "renamed" {
 		t.Fatal(name)
+	}
+	var remainingTokens int
+	if err := a.db.QueryRow("SELECT count(*) FROM tokens WHERE user_id=?", uid).Scan(&remainingTokens); err != nil || remainingTokens != 0 {
+		t.Fatalf("identity update left %d tokens, err=%v", remainingTokens, err)
 	}
 }
 func TestWatcherDebounce(t *testing.T) {

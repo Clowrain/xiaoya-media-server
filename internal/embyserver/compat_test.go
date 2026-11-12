@@ -52,8 +52,8 @@ func TestResumeIsolationAndDownloadPolicy(t *testing.T) {
 			t.Fatal("/emby/Videos/i/x/Subtitles/0/Stream.srt", w.Code)
 		}
 	}
-	p := a.userDTO(User{ID: uid})["Policy"].(M)
-	if p["EnableContentDownloading"] != false || p["EnableSubtitleDownloading"] != false {
+	p := a.userDTO(User{ID: uid}).Policy
+	if p.EnableContentDownloading || p.EnableSubtitleDownloading {
 		t.Fatal(p)
 	}
 }

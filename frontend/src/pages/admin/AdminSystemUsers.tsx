@@ -3,11 +3,9 @@ import {
   Users, UserPlus, Trash2, Edit2, Shield, Key, 
   Tv, Cpu, Sliders, Check, X 
 } from 'lucide-react';
-import { 
-  fetchUsers, createUser, updateUser, updateUserIdentity, 
-  deleteUser, fetchEnhancements, updateEnhancements, 
-  fetchMediaInfoSettings, updateMediaInfoSettings, notifyToast 
-} from '../../api/client';
+import { notifyToast } from '../../api/client';
+import { fetchUsers, createUser, updateUser, updateUserIdentity, deleteUser } from '../../api/users';
+import { fetchEnhancements, updateEnhancements, fetchMediaInfoSettings, updateMediaInfoSettings } from '../../api/settings';
 
 export const AdminSystemUsers: React.FC = () => {
   const [users, setUsers] = useState<any[]>([]);

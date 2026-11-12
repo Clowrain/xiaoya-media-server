@@ -1,0 +1,1 @@
+import{h as o}from"./index-Dx-YnDQD.js";async function i(t){return o(`/api/jobs/${encodeURIComponent(t)}`)}async function r(t,a){for(;;){const e=await i(t);if(e.status!=="RUNNING")return e;await new Promise(n=>setTimeout(n,1e3))}}export{i as f,r as w};

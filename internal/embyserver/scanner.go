@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -169,8 +170,11 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 	if incremental || len(scopes) > 0 {
 		category = "update"
 	}
-	var queuedName string
-	a.db.QueryRow("SELECT name FROM libraries WHERE id=?", lib).Scan(&queuedName)
+	queuedLibrary, queuedErr := a.libraryStore().GetByID(lib)
+	queuedName := queuedLibrary.Name
+	if queuedErr != nil {
+		log.Printf("read library name before scan: %v", queuedErr)
+	}
 	job := a.newActivity(category, lib, queuedName)
 	release := a.acquireLibraryJob(lib, incremental || len(scopes) > 0)
 	defer release()
@@ -178,15 +182,16 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 	defer a.scan.RUnlock()
 	var jobErr error
 	defer func() { a.finishActivity(job, jobErr) }()
-	var root, kind, libraryName string
-	if a.db.QueryRow("SELECT path,kind,name FROM libraries WHERE id=?", lib).Scan(&root, &kind, &libraryName) != nil {
+	library, err := a.libraryStore().GetByID(lib)
+	if err != nil {
 		jobErr = fmt.Errorf("媒体库不存在")
 		return
 	}
+	root, kind, libraryName := library.Path, library.Kind, library.Name
 	a.changeActivity(job, func(v *activityEntry) { v.State = "counting"; v.Name = libraryName })
 	start := time.Now()
 	gen := id()
-	if _, e := a.db.Exec("UPDATE libraries SET status='scanning',error='' WHERE id=?", lib); e != nil {
+	if e := a.libraryStore().SetScanStatus(lib, "scanning", ""); e != nil {
 		jobErr = e
 		return
 	}
@@ -199,9 +204,10 @@ func (a *App) scanLibraryScoped(lib string, incremental, allowEmpty bool, scopes
 			status = "error"
 			message = scanErr.Error()
 		}
-		var count int
-		a.db.QueryRow("SELECT count(*) FROM items WHERE lib=? AND kind IN ('Movie','Episode')", lib).Scan(&count)
-		a.db.Exec("UPDATE libraries SET status=?,error=?,count=?,duration=?,scanned=? WHERE id=?", status, message, count, time.Since(start).Seconds(), time.Now().Unix(), lib)
+		count, _ := a.mediaItems().CountPlayableByLibrary(lib)
+		if err := a.libraryStore().CompleteScan(lib, status, message, int64(count), time.Since(start).Seconds(), time.Now().Unix()); err != nil {
+			log.Printf("update library scan result: %v", err)
+		}
 		a.invalidateLibraryCollage(lib)
 		// 释放扫描 15,000+ 部媒体产生的临时堆对象，及时向操作系统归还内存
 		debug.FreeOSMemory()

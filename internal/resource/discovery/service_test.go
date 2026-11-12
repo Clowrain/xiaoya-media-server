@@ -12,6 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"xiaoya-media-server/internal/resource/xiaoya"
+	"xiaoya-media-server/migrations"
 )
 
 type mockSTRMProcessor struct {
@@ -329,7 +330,7 @@ func TestLegacyTrackingMigrationKeepsOnlyConfirmedRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err = db.Exec(resourceEngineDDL); err != nil {
+	if _, err = db.Exec(migrations.ResourceEngine); err != nil {
 		t.Fatal(err)
 	}
 	store := NewSQLStore(db, "sqlite")

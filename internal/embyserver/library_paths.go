@@ -1,7 +1,7 @@
 package embyserver
 
 import (
-	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,14 +10,11 @@ import (
 
 // An explicit empty list keeps a library with no indexed directories.
 func (a *App) libraryPaths(lib, fallback string) []string {
-	var raw string
-	if a.db.QueryRow("SELECT v FROM settings WHERE k=?", "library-paths:"+lib).Scan(&raw) == nil {
-		var paths []string
-		if json.Unmarshal([]byte(raw), &paths) == nil {
-			return paths
-		}
+	paths, err := a.libraryStore().Paths(lib, fallback)
+	if err != nil {
+		log.Printf("read library paths: %v", err)
 	}
-	return []string{fallback}
+	return paths
 }
 func pathsOverlap(a, b string) bool {
 	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
@@ -40,11 +37,12 @@ func (a *App) libraryFolders(w http.ResponseWriter, r *http.Request) {
 		}
 		defer a.scan.Unlock()
 	}
-	var fallback string
-	if a.db.QueryRow("SELECT path FROM libraries WHERE id=?", b.ID).Scan(&fallback) != nil {
+	library, err := a.libraryStore().GetByID(b.ID)
+	if err != nil {
 		fail(w, 404, "媒体库不存在")
 		return
 	}
+	fallback := library.Path
 	paths := a.libraryPaths(b.ID, fallback)
 	old := filepath.Clean(mediaPath(b.OldPath))
 	if r.Method == "PUT" {
@@ -107,30 +105,29 @@ func (a *App) libraryFolders(w http.ResponseWriter, r *http.Request) {
 		}
 		paths = kept
 	}
-	raw, _ := json.Marshal(paths)
 	tx, e := a.db.Begin()
 	if e != nil {
 		fail(w, 500, "索引事务失败")
 		return
 	}
 	defer tx.Rollback()
-	_, e = tx.Exec("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", "library-paths:"+b.ID, string(raw))
+	e = a.libraryStore().SavePaths(tx, b.ID, paths)
 	if e == nil && (r.Method == "DELETE" || r.Method == "PUT") {
 		removed := path
 		if r.Method == "PUT" {
 			removed = old
 		}
-		_, e = tx.Exec("DELETE FROM items WHERE lib=? AND (path=? OR substr(path,1,length(?))=?)", b.ID, removed, removed+"/", removed+"/")
+		e = a.mediaItems().DeleteItemsUnderLibraryPath(tx, b.ID, removed)
 	}
 	primary := "/media/.go-emby-empty-" + b.ID
 	if len(paths) > 0 {
 		primary = paths[0]
 	}
 	if e == nil {
-		_, e = tx.Exec("UPDATE libraries SET path=? WHERE id=?", primary, b.ID)
+		e = a.libraryStore().UpdatePath(tx, b.ID, primary)
 	}
 	if e == nil {
-		_, e = tx.Exec("UPDATE libraries SET count=(SELECT count(*) FROM items WHERE lib=? AND kind IN ('Movie','Episode')) WHERE id=?", b.ID, b.ID)
+		e = a.libraryStore().UpdateItemCount(tx, b.ID)
 	}
 	if e != nil {
 		fail(w, 500, "目录索引更新失败")

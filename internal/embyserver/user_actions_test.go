@@ -3,6 +3,7 @@ package embyserver
 import (
 	"database/sql"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -372,5 +373,101 @@ func TestEmbySpecificationCompliance(t *testing.T) {
 	_ = json.Unmarshal(wStudios.Body.Bytes(), &studiosRes)
 	if studiosRes.TotalRecordCount != 0 || studiosRes.StartIndex != 0 {
 		t.Fatalf("/Studios 响应格式不符合 QueryResult 规范: %+v", studiosRes)
+	}
+}
+
+func TestUserActionPersistenceFailuresReturnServerError(t *testing.T) {
+	uid := "test-user"
+	user := User{ID: uid}
+
+	tests := []struct {
+		name   string
+		table  string
+		invoke func(*App, *httptest.ResponseRecorder)
+	}{
+		{
+			name:  "favorite endpoint",
+			table: "user_favorites",
+			invoke: func(a *App, w *httptest.ResponseRecorder) {
+				a.setFavorite(w, httptest.NewRequest(http.MethodPost, "/", nil), user, uid, "item-1", true)
+			},
+		},
+		{
+			name:  "user data favorite",
+			table: "user_favorites",
+			invoke: func(a *App, w *httptest.ResponseRecorder) {
+				r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"IsFavorite":true}`))
+				a.updateUserData(w, r, user, uid, "item-1")
+			},
+		},
+		{
+			name:  "user data played",
+			table: "userdata",
+			invoke: func(a *App, w *httptest.ResponseRecorder) {
+				r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"Played":true}`))
+				a.updateUserData(w, r, user, uid, "item-1")
+			},
+		},
+		{
+			name:  "user data playback position",
+			table: "userdata",
+			invoke: func(a *App, w *httptest.ResponseRecorder) {
+				r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"PlaybackPositionTicks":42}`))
+				a.updateUserData(w, r, user, uid, "item-1")
+			},
+		},
+		{
+			name:  "played tree endpoint",
+			table: "userdata",
+			invoke: func(a *App, w *httptest.ResponseRecorder) {
+				a.setPlayed(w, httptest.NewRequest(http.MethodPost, "/", nil), user, uid, "item-1", true)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestSQLiteApp(t)
+			trigger := "CREATE TRIGGER fail_user_action_write BEFORE INSERT ON " + tc.table + " BEGIN SELECT RAISE(ABORT, 'write failed'); END"
+			if _, err := a.db.Exec(trigger); err != nil {
+				t.Fatal(err)
+			}
+			w := httptest.NewRecorder()
+			tc.invoke(a, w)
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("expected HTTP 500 on persistence failure, got %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestUpdateUserDataMalformedJSONReturnsBadRequest(t *testing.T) {
+	a := newTestSQLiteApp(t)
+	user := User{ID: "test-user"}
+
+	for _, body := range []string{`{"Played":`, `{"Played":true} trailing`} {
+		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		a.updateUserData(w, r, user, user.ID, "item-1")
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected HTTP 400 for malformed body %q, got %d: %s", body, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestUpdateUserDataEmptyBodyRemainsAccepted(t *testing.T) {
+	a := newTestSQLiteApp(t)
+	user := User{ID: "test-user"}
+	w := httptest.NewRecorder()
+	a.updateUserData(w, httptest.NewRequest(http.MethodPost, "/", nil), user, user.ID, "item-1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected empty body to remain accepted, got %d: %s", w.Code, w.Body.String())
+	}
+	var dto UserItemDataDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &dto); err != nil {
+		t.Fatalf("decode success DTO: %v", err)
+	}
+	if dto.ItemID != "item-1" {
+		t.Fatalf("unexpected success DTO: %+v", dto)
 	}
 }

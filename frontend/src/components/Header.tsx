@@ -4,7 +4,8 @@ import {
   Film, Settings, Terminal, LogOut, Key, User as UserIcon, 
   Search, Cast, Menu, Play, Star 
 } from 'lucide-react';
-import { changePasswordApi, notifyToast } from '../api/client';
+import { notifyToast } from '../api/client';
+import { changePasswordApi } from '../api/users';
 import { 
   APP_VERSION, BUILD_COMMIT, BUILD_TIME, 
   GITHUB_REPO_URL, getCommitUrl, formatCommitHash 

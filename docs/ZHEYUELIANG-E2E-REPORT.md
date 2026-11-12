@@ -36,7 +36,7 @@
 | **07** | 检查 NFO、字幕、图片 | 成功同步 `poster.jpg` 与 `E01.chs.srt` 并写入 `media_attachments`；源端无 NFO 时**不生成空 `tvshow.nfo`**；存在合法本地 NFO 时按 `prefer` 策略优先采用本地元数据 | PASS |
 | **08** | 媒体服务器建立电视剧、季、集关系 | 检查 `seriesDirectory()` 跨越 `{tmdb-270431}` 标签目录并归并至 `折月亮 (2026)`；季和集使用样本 Item 验证后续元数据关联 | PASS |
 | **09** | TMDB 元数据正确关联 | 通过模拟 TMDB v3 `tv/270431` 及 `tv/270431/season/1` 响应，断言 TMDB ID、中文剧名、简介、分集标题和时长 | PASS |
-| **10** | 播放解析、字幕和下一集逻辑 | 验证模拟 Xiaoya 302 返回的 CDN URL、`E01.chs.srt` 转换 WebVTT，以及向下一集计算函数传入 E01 完播状态后返回 E02 | PASS |
+| **10** | 播放解析、字幕和下一集计算 helper | 验证模拟 Xiaoya 302 返回的 CDN URL、`E01.chs.srt` 转换 WebVTT，以及内部下一集计算 helper 在 E01 完播后返回 E02。此断言不验证 `/Shows/NextUp` 协议端点；该端点按产品取舍仍返回空集合 | PASS |
 | **11** | 再次扫描无重复实体和无意义重写 | 二次完整扫描 `AddedCount=0`, `ModifiedCount=0`，`E01.strm`–`E27.strm` 文件 `mtime` 保持完全不变 | PASS |
 | **12** | 模拟新增一集，自动发现并生成 | 向 SQLite 插入 `E28` (`ID 641746`)，执行主键游标增量扫描 `ScanRootIncremental`，毫秒级识别 `AddedCount=1` 并落盘 `E28.strm` | PASS |
 | **13** | 模拟 `content` 变化，正确更新 STRM | 更新 `E01` (`ID 641719`) 的 `content` 为 4K 新签名地址，完整扫描识别 `ModifiedCount=1` 并通过临时文件 + `os.Rename` 原子替换 `E01.strm` | PASS |

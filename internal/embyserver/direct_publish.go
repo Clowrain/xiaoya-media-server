@@ -1,6 +1,7 @@
 package embyserver
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,12 +74,14 @@ func (a *App) PublishDirectMedia(pub DirectMediaPublication) error {
 		if pub.MediaType == "EPISODE" {
 			expectedKind = "tvshows"
 		}
-		var fallbackID string
-		_ = a.db.QueryRow("SELECT id FROM libraries WHERE kind=? ORDER BY id LIMIT 1", expectedKind).Scan(&fallbackID)
-		if fallbackID == "" {
-			_ = a.db.QueryRow("SELECT id FROM libraries ORDER BY id ASC LIMIT 1").Scan(&fallbackID)
+		library, err := a.libraryStore().FirstByKindOrFirst(expectedKind)
+		if errors.Is(err, sql.ErrNoRows) {
+			libID = ""
+		} else if err != nil {
+			return fmt.Errorf("resolve media publication library: %w", err)
+		} else {
+			libID = library.ID
 		}
-		libID = fallbackID
 	}
 	if libID == "" {
 		libID = "default"

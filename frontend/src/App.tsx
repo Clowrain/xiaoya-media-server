@@ -1,6 +1,8 @@
 import React, { lazy, Suspense, useState, useEffect } from 'react';
 import { User, MediaItem } from './types';
-import { getStoredUser, getStoredToken, logoutApi, fetchCurrentUser } from './api/client';
+import { getStoredUser, getStoredToken } from './api/client';
+import { logoutApi } from './api/auth';
+import { fetchCurrentUser } from './api/users';
 import { Header } from './components/Header';
 import { LoginView } from './components/LoginView';
 import { MediaWall } from './pages/MediaWall';

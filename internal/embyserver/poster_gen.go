@@ -618,34 +618,22 @@ var (
 
 // generateLibraryCollage attempts to stitch 4 movie posters into a 2x2 collage
 func (a *App) generateLibraryCollage(libID, libName, libKind string) image.Image {
-	// 优先查询 Series 与 Movie 头部有海报的项目
-	query := `SELECT id, path, kind, poster FROM items 
-		WHERE lib=? 
-		ORDER BY CASE WHEN kind IN ('Series', 'Movie') THEN 0 ELSE 1 END,
-		         CASE WHEN poster <> '' THEN 0 ELSE 1 END,
-		         id DESC 
-		LIMIT 30`
-	rows, err := a.db.Query(query, libID)
+	// The repository bounds the candidate set before image decoding starts.
+	items, err := a.mediaItems().LibraryCollageCandidates(libID)
 	if err != nil {
 		return generateLibraryFallbackPoster(libID, libName, libKind)
 	}
-	defer rows.Close()
 
 	var images []image.Image
-	for rows.Next() {
-		var it Item
-		if err := rows.Scan(&it.ID, &it.Path, &it.Kind, &it.Poster); err != nil {
-			continue
-		}
+	for _, it := range items {
 		path := a.imagePath(it.ID, "Primary")
 		if path == "" {
 			continue
 		}
 		var img image.Image
 		if path == "cover" {
-			var b []byte
-			if a.db.QueryRow("SELECT data FROM covers WHERE id=?", it.ID).Scan(&b) == nil {
-				img, _, _ = image.Decode(bytes.NewReader(b))
+			if cover, err := a.coverStore().Get(it.ID); err == nil {
+				img, _, _ = image.Decode(bytes.NewReader(cover.Data))
 			}
 		} else if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 			req, e := http.NewRequest("GET", path, nil)
@@ -728,10 +716,11 @@ func (a *App) generateLibraryCollage(libID, libName, libKind string) image.Image
 
 // libraryPhysicalImage probes the library root directory for physical files matching image kind
 func (a *App) libraryPhysicalImage(libID, kind string) string {
-	var libPath string
-	if a.db.QueryRow("SELECT path FROM libraries WHERE id=?", libID).Scan(&libPath) != nil || libPath == "" {
+	library, err := a.libraryStore().GetByID(libID)
+	if err != nil || library.Path == "" {
 		return ""
 	}
+	libPath := library.Path
 	names := map[string][]string{
 		"Primary":  {"poster", "folder", "cover"},
 		"Backdrop": {"backdrop", "fanart", "background"},
@@ -795,4 +784,3 @@ func (a *App) generatedTag(i, kind string) string {
 	h.Write([]byte(i + "|" + kind + "|generated:v2"))
 	return hex.EncodeToString(h.Sum(nil))[:32]
 }
-

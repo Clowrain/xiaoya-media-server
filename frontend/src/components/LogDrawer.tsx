@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Terminal, RefreshCw, Trash2, X, Download, Filter, Search, Play, Pause, ArrowDownUp } from 'lucide-react';
-import { fetchLogs, clearLogs, notifyToast } from '../api/client';
+import { notifyToast } from '../api/client';
+import { clearLogs, fetchLogs } from '../api/logs';
 import { LogEntry } from '../types';
 
 interface LogDrawerProps {

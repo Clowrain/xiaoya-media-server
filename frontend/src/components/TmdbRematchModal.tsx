@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, Check, Star, Calendar, RefreshCw } from 'lucide-react';
 import { MediaItem, TmdbSearchResult } from '../types';
-import { searchTmdb, matchTmdb, notifyToast } from '../api/client';
+import { notifyToast } from '../api/client';
+import { searchTmdb, matchTmdb } from '../api/tmdb';
 
 interface TmdbRematchModalProps {
   item: MediaItem | null;

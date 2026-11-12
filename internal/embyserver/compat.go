@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,11 +22,11 @@ type sidecar struct {
 	BackdropURL string   `xml:"-" json:"BackdropURL,omitempty"`
 	ThumbURL    string   `xml:"-" json:"ThumbURL,omitempty"`
 	Plot        string   `xml:"plot"`
-	Runtime float64  `xml:"runtime"`
-	Rating  float64  `xml:"rating"`
-	Genres  []string `xml:"genre"`
-	Studios []string `xml:"studio"`
-	Actors  []struct {
+	Runtime     float64  `xml:"runtime"`
+	Rating      float64  `xml:"rating"`
+	Genres      []string `xml:"genre"`
+	Studios     []string `xml:"studio"`
+	Actors      []struct {
 		Name  string `xml:"name"`
 		Role  string `xml:"role"`
 		Thumb string `xml:"thumb"`
@@ -170,9 +171,10 @@ func (a *App) enrich(x Item, m M) {
 	}
 	a.enrichMedia(x, n, m)
 	a.decorateImages(x, m)
-	var cover int
-	if a.db != nil && a.db.QueryRow("SELECT 1 FROM covers WHERE id=?", x.ID).Scan(&cover) == nil {
-		m["ImageTags"].(M)["Primary"] = a.imageTag(x.ID, "Primary", "cover")
+	if a.db != nil {
+		if exists, err := a.coverStore().Exists(x.ID); err == nil && exists {
+			m["ImageTags"].(M)["Primary"] = a.imageTag(x.ID, "Primary", "cover")
+		}
 	}
 	if x.Kind == "Episode" {
 		parent, _ := a.item(x.Parent)
@@ -247,7 +249,7 @@ func cleanDisplayXiaoyaURL(raw string) string {
 }
 
 func (a *App) viewerSource(x Item, r *http.Request, u User) M {
-	m := a.source(x, token(r))
+	m := a.source(x, token(r)).asMap()
 	meta := M{}
 	a.enrichMedia(x, a.metadata(x), meta)
 	m["MediaStreams"] = meta["MediaStreams"]
@@ -296,10 +298,20 @@ func (a *App) viewerDTO(x Item, r *http.Request, u User) M {
 		var played bool
 		var fav int
 		if a.db != nil {
-			a.db.QueryRow("SELECT position,played FROM userdata WHERE user_id=? AND item=?", u.ID, x.ID).Scan(&pos, &played)
-			a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", u.ID, x.ID).Scan(&fav)
+			state, stateErr := a.userStore().GetPlaybackState(u.ID, x.ID)
+			if stateErr != nil {
+				log.Printf("read user playback state: %v", stateErr)
+			} else {
+				pos, played = state.Position, state.Played
+			}
+			isFavorite, favoriteErr := a.userStore().IsFavorite(u.ID, x.ID)
+			if favoriteErr != nil {
+				log.Printf("read user favorite state: %v", favoriteErr)
+			} else if isFavorite {
+				fav = 1
+			}
 		}
-		m["UserData"] = userItemDataMap(x.ID, pos, played, fav > 0)
+		m["UserData"] = makeUserItemDataDTO(x.ID, pos, played, fav > 0)
 	}
 	if x.URL != "" {
 		m["MediaSources"] = a.versionSources(x, r, u, true)
@@ -321,39 +333,11 @@ func (a *App) similar(w http.ResponseWriter, r *http.Request, u User, i string) 
 		limit = 50
 	}
 
-	filter := "id IN (SELECT id FROM candidates) AND kind=? AND id<>?"
-	filterArgs := []any{x.Kind, x.ID}
-	if !u.API {
-		group := a.versionGrouping()
-		filter = "id IN (SELECT id FROM candidates) AND kind=? AND " + group + "<>(SELECT " + group + " FROM items WHERE id=?)"
-		filter, filterArgs = a.mergeWhere(filter, filterArgs)
-	}
-	params := []any{x.ID, x.Kind, x.Year, x.ID, x.Kind, x.ID}
-	params = append(params, filterArgs...)
-	params = append(params, x.ID, x.Year, limit)
-	rows, e := a.db.Query(`WITH candidates AS (
- (SELECT item AS id FROM item_genres WHERE genre IN (SELECT genre FROM item_genres WHERE item=?) LIMIT 512)
- UNION
- (SELECT id FROM items WHERE kind=? AND year=? AND id<>? ORDER BY name,id LIMIT 128)
- UNION
- (SELECT id FROM items WHERE kind=? AND id<>? ORDER BY name,id LIMIT 128)
- ) SELECT `+cols+` FROM items WHERE `+filter+`
- ORDER BY (SELECT count(*) FROM item_genres g WHERE g.item=items.id AND g.genre IN (SELECT genre FROM item_genres WHERE item=?)) DESC,abs(year-?),name,id LIMIT ?`, params...)
+	items, e := a.mediaItems().SimilarItems(x, u.API, a.versionGrouping(), limit)
 	if e != nil {
 		fail(w, 500, "查询失败")
 		return
 	}
-	items := []Item{}
-	for rows.Next() {
-		v, e := readItem(rows)
-		if e != nil {
-			rows.Close()
-			fail(w, 500, "读取失败")
-			return
-		}
-		items = append(items, v)
-	}
-	rows.Close()
 	out := a.listDTOs(items, r, u)
 	respond(w, M{"Items": out, "TotalRecordCount": len(out), "StartIndex": 0})
 }
@@ -453,8 +437,7 @@ func (a *App) normalizeBrowseTypes(r *http.Request, latest bool) {
 	}
 	lenna := strings.EqualFold(client, "Lenna") || strings.HasPrefix(strings.ToLower(r.UserAgent()), "lenna/")
 	if lenna && !latest && len(parts) == 1 && parts[0] == "Movie" && q(r, "ParentId") != "" && q(r, "Ids") == "" && q(r, "SearchTerm") == "" && q(r, "Filters") == "" && !strings.HasSuffix(strings.ToLower(r.URL.Path), "/resume") {
-		var kind string
-		if a.db.QueryRow("SELECT kind FROM libraries WHERE id=?", q(r, "ParentId")).Scan(&kind) == nil && strings.EqualFold(kind, "tvshows") {
+		if library, err := a.libraryStore().GetByID(q(r, "ParentId")); err == nil && strings.EqualFold(library.Kind, "tvshows") {
 			parts[0] = "Series"
 		}
 	}

@@ -4,10 +4,12 @@ import {
   Search, Link2, ExternalLink, ShieldCheck, Film 
 } from 'lucide-react';
 import { TmdbConfig, TmdbSearchResult, MediaItem, RecognitionPending } from '../../types';
-import { 
-  fetchTmdbConfig, updateTmdbConfig, testTmdb, 
-  searchTmdb, matchTmdb, fetchRecognitionPending, confirmRecognition, notifyToast
-} from '../../api/client';
+import { notifyToast } from '../../api/client';
+import {
+  fetchTmdbConfig, updateTmdbConfig, testTmdb,
+  searchTmdb, matchTmdb
+} from '../../api/tmdb';
+import { fetchRecognitionPending, confirmRecognition } from '../../api/resourceSync';
 
 interface AdminTmdbProps {
   initialMatchItem?: MediaItem | null;

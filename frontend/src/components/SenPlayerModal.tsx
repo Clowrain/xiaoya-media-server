@@ -6,11 +6,12 @@ import {
   Copy, ExternalLink, MonitorPlay 
 } from 'lucide-react';
 import { User, MediaItem } from '../types';
-import { 
-  fetchSeasons, fetchEpisodes, fetchItemDetail, 
-  refreshItemMediaInfo, renameMediaItem, deleteMediaItem, 
-  getStoredToken, notifyToast 
-} from '../api/client';
+import { getStoredToken, notifyToast } from '../api/client';
+import {
+  fetchSeasons, fetchEpisodes, fetchItemDetail,
+  refreshItemMediaInfo, renameMediaItem, deleteMediaItem,
+  getPrimaryImageUrl, getBackdropImageUrl,
+} from '../api/media';
 import { TmdbRematchModal } from './TmdbRematchModal';
 
 interface SenPlayerModalProps {
@@ -244,11 +245,11 @@ export const SenPlayerModal: React.FC<SenPlayerModalProps> = ({
   const container = mediaSource?.Container ? mediaSource.Container.toUpperCase() : 'STRM';
 
   const posterUrl = item.ImageTags?.Primary
-    ? `/Items/${item.Id}/Images/Primary?fillHeight=600&tag=${item.ImageTags.Primary}&quality=90`
+    ? getPrimaryImageUrl(item.Id, `fillHeight=600&tag=${item.ImageTags.Primary}&quality=90`)
     : null;
 
   const backdropUrl = item.BackdropImageTags?.[0]
-    ? `/Items/${item.Id}/Images/Backdrop/0?fillWidth=1600&tag=${item.BackdropImageTags[0]}&quality=85`
+    ? getBackdropImageUrl(item.Id, `fillWidth=1600&tag=${item.BackdropImageTags[0]}&quality=85`, 0)
     : null;
 
   const durationMin = item.RunTimeTicks ? Math.round(item.RunTimeTicks / 1e7 / 60) : null;
@@ -637,7 +638,7 @@ export const SenPlayerModal: React.FC<SenPlayerModalProps> = ({
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                       {episodes.map((ep) => {
                         const epThumb = ep.ImageTags?.Primary
-                          ? `/Items/${ep.Id}/Images/Primary?fillWidth=400&tag=${ep.ImageTags.Primary}&quality=80`
+                          ? getPrimaryImageUrl(ep.Id, `fillWidth=400&tag=${ep.ImageTags.Primary}&quality=80`)
                           : (backdropUrl || posterUrl);
                         const epDurationMin = ep.RunTimeTicks ? Math.round(ep.RunTimeTicks / 1e7 / 60) : null;
                         const epNumber = ep.IndexNumber !== undefined ? `E${String(ep.IndexNumber).padStart(2, '0')}` : 'EP';

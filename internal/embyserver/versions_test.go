@@ -112,6 +112,9 @@ func TestNanShareResolveOnce(t *testing.T) {
 			if w.Code != expected || requests.Load() != 1 {
 				t.Fatal(w.Code, requests.Load())
 			}
+			if status == http.StatusOK && !strings.Contains(w.Body.String(), "NanShare 直链解析失败") {
+				t.Fatalf("non-redirect upstream response should remain a 502 fallback: %s", w.Body.String())
+			}
 		})
 	}
 }
@@ -121,8 +124,8 @@ func TestResolverListIncludesSource(t *testing.T) {
 	x := Item{ID: "movie", Kind: "Movie", Path: "/media/movie.strm", URL: "http://origin/movie.mkv"}
 	r := httptest.NewRequest("GET", "/Items?Ids=movie&Fields=Path,MediaSources", nil)
 	m := a.listDTO(x, r, User{API: true})
-	sources, ok := m["MediaSources"].([]M)
-	if !ok || len(sources) != 1 || sources[0]["Path"] != x.URL {
+	sources, ok := m["MediaSources"].([]MediaSourceDTO)
+	if !ok || len(sources) != 1 || sources[0].Path != x.URL {
 		t.Fatal("NanShare cannot resolve the STRM source", m)
 	}
 	viewer := a.listDTO(x, r, User{})

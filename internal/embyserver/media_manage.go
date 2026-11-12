@@ -37,10 +37,7 @@ func (a *App) manageMediaItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer tx.Rollback()
-		_, e = tx.Exec("INSERT INTO media_display_names(item,name) VALUES(?,?) ON CONFLICT(item) DO UPDATE SET name=excluded.name", x.ID, b.Name)
-		if e == nil {
-			_, e = tx.Exec("UPDATE items SET name=? WHERE id=?", b.Name, x.ID)
-		}
+		e = a.mediaItems().SetManualName(tx, x.ID, b.Name)
 		if e == nil {
 			e = tx.Commit()
 		}
@@ -51,23 +48,7 @@ func (a *App) manageMediaItem(w http.ResponseWriter, r *http.Request) {
 		respond(w, M{"ok": true})
 		return
 	}
-	rows, e := a.db.Query("WITH RECURSIVE tree AS (SELECT "+cols+" FROM items WHERE id=? UNION ALL SELECT "+prefixedCols("i")+" FROM items i JOIN tree t ON i.parent=t.id) SELECT "+cols+" FROM tree", x.ID)
-	if e != nil {
-		fail(w, 500, e.Error())
-		return
-	}
-	items := []Item{}
-	for rows.Next() {
-		v, err := readItem(rows)
-		if err != nil {
-			rows.Close()
-			fail(w, 500, err.Error())
-			return
-		}
-		items = append(items, v)
-	}
-	e = rows.Err()
-	rows.Close()
+	items, e := a.mediaItems().ItemTree(x.ID)
 	if e != nil {
 		fail(w, 500, e.Error())
 		return
@@ -115,26 +96,22 @@ func (a *App) manageMediaItem(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			var count int
+			count := 0
 			selected := map[string]bool{}
 			for _, v := range items {
 				selected[v.ID] = true
 			}
-			rs, err := a.db.Query("SELECT id,path FROM items WHERE path=? OR left(path,char_length(?))=?", real, real+"/", real+"/")
+			pathItems, err := a.mediaItems().ItemsAtOrUnderPath(real)
 			if err != nil {
 				fail(w, 500, err.Error())
 				return
 			}
-			for rs.Next() {
-				var id, path string
-				rs.Scan(&id, &path)
-				if !selected[id] {
+			for _, pathItem := range pathItems {
+				if !selected[pathItem.ID] {
 					count++
 				}
 			}
-			err = rs.Err()
-			rs.Close()
-			if err != nil || count > 0 {
+			if count > 0 {
 				fail(w, 400, "目录包含其他媒体，请取消连同目录删除")
 				return
 			}
@@ -158,7 +135,7 @@ func (a *App) manageMediaItem(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	for i := len(items) - 1; i >= 0; i-- {
-		if _, e = tx.Exec("DELETE FROM items WHERE id=?", items[i].ID); e != nil {
+		if e = a.mediaItems().DeleteItem(tx, items[i].ID); e != nil {
 			fail(w, 500, e.Error())
 			return
 		}

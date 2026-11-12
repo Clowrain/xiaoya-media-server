@@ -2,6 +2,8 @@ package embyserver
 
 import (
 	"encoding/json"
+	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -136,37 +138,13 @@ func (a *App) handleUserActionRoutes(w http.ResponseWriter, r *http.Request, u U
 	return false
 }
 
-// userItemDataMap constructs a 100% compliant Emby UserItemDataDto model for clients like SenPlayer / Infuse / VidHub.
-func userItemDataMap(itemID string, pos int64, played, isFav bool) M {
-	var playCount int
-	var playedPct float64
-	if played {
-		playCount = 1
-		playedPct = 100.0
+// userItemDataDTO returns the protocol state shared by item and user-data endpoints.
+func (a *App) userItemDataDTO(uid, itemID string, isFav bool) UserItemDataDTO {
+	state, err := a.userStore().GetPlaybackState(uid, itemID)
+	if err != nil {
+		log.Printf("read user playback state: %v", err)
 	}
-	return M{
-		"Rating":                nil,
-		"PlayedPercentage":      playedPct,
-		"UnplayedItemCount":     0,
-		"PlaybackPositionTicks": pos,
-		"PlayCount":             playCount,
-		"IsFavorite":            isFav,
-		"Likes":                 nil,
-		"LastPlayedDate":        nil,
-		"Played":                played,
-		"Key":                   itemID,
-		"ItemId":                itemID,
-	}
-}
-
-// userItemDataDTO constructs a 100% compliant Emby UserItemDataDto model for clients like SenPlayer / Infuse.
-func (a *App) userItemDataDTO(uid, itemID string, isFav bool) M {
-	var pos int64
-	var played bool
-	if a.db != nil && uid != "" {
-		a.db.QueryRow("SELECT position,played FROM userdata WHERE user_id=? AND item=?", uid, itemID).Scan(&pos, &played)
-	}
-	return userItemDataMap(itemID, pos, played, isFav)
+	return makeUserItemDataDTO(itemID, state.Position, state.Played, isFav)
 }
 
 func (a *App) setFavorite(w http.ResponseWriter, r *http.Request, u User, uid, itemID string, fav bool) {
@@ -174,12 +152,10 @@ func (a *App) setFavorite(w http.ResponseWriter, r *http.Request, u User, uid, i
 		fail(w, http.StatusForbidden, "无权限")
 		return
 	}
-	if a.db != nil {
-		if fav {
-			_, _ = a.db.Exec("INSERT INTO user_favorites(user_id, item, created_at) VALUES(?,?,?) ON CONFLICT(user_id,item) DO NOTHING", uid, itemID, time.Now().Unix())
-		} else {
-			_, _ = a.db.Exec("DELETE FROM user_favorites WHERE user_id=? AND item=?", uid, itemID)
-		}
+	if err := a.userStore().SetFavorite(uid, itemID, fav, time.Now().Unix()); err != nil {
+		log.Printf("persist user favorite state for user %q item %q: %v", uid, itemID, err)
+		fail(w, http.StatusInternalServerError, "无法更新收藏状态")
+		return
 	}
 	respond(w, a.userItemDataDTO(uid, itemID, fav))
 }
@@ -194,37 +170,56 @@ func (a *App) updateUserData(w http.ResponseWriter, r *http.Request, u User, uid
 		Played                *bool
 		PlaybackPositionTicks *int64
 	}
-	_ = json.NewDecoder(r.Body).Decode(&b)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&b); err != nil && err != io.EOF {
+		fail(w, http.StatusBadRequest, "无效 JSON")
+		return
+	} else if err == nil {
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			fail(w, http.StatusBadRequest, "无效 JSON")
+			return
+		}
+	}
 
 	isFav := false
 	if a.db != nil {
-		var n int
-		a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", uid, itemID).Scan(&n)
-		isFav = (n > 0)
+		var err error
+		isFav, err = a.userStore().IsFavorite(uid, itemID)
+		if err != nil {
+			log.Printf("read user favorite state: %v", err)
+			isFav = false
+		}
 	}
 
+	var writeErr error
 	if b.IsFavorite != nil {
 		isFav = *b.IsFavorite
-		if a.db != nil {
-			if isFav {
-				_, _ = a.db.Exec("INSERT INTO user_favorites(user_id, item, created_at) VALUES(?,?,?) ON CONFLICT(user_id,item) DO NOTHING", uid, itemID, time.Now().Unix())
-			} else {
-				_, _ = a.db.Exec("DELETE FROM user_favorites WHERE user_id=? AND item=?", uid, itemID)
-			}
+		if err := a.userStore().SetFavorite(uid, itemID, isFav, time.Now().Unix()); err != nil {
+			log.Printf("persist user favorite state for user %q item %q: %v", uid, itemID, err)
+			writeErr = err
 		}
 	}
 
-	if a.db != nil {
-		if b.Played != nil {
-			playedVal := int64(0)
-			if *b.Played {
-				playedVal = 1
+	if b.Played != nil {
+		if err := a.userStore().SetPlayedItem(uid, itemID, *b.Played); err != nil {
+			log.Printf("persist user played state for user %q item %q: %v", uid, itemID, err)
+			if writeErr == nil {
+				writeErr = err
 			}
-			_, _ = a.db.Exec("INSERT INTO userdata(user_id,item,played,position) VALUES(?,?,?,0) ON CONFLICT(user_id,item) DO UPDATE SET played=excluded.played, position=0", uid, itemID, playedVal)
 		}
-		if b.PlaybackPositionTicks != nil {
-			_, _ = a.db.Exec("INSERT INTO userdata(user_id,item,played,position) VALUES(?,?,0,?) ON CONFLICT(user_id,item) DO UPDATE SET position=excluded.position", uid, itemID, *b.PlaybackPositionTicks)
+	}
+	if b.PlaybackPositionTicks != nil {
+		if err := a.userStore().SetPlaybackPosition(uid, itemID, *b.PlaybackPositionTicks); err != nil {
+			log.Printf("persist user playback position for user %q item %q: %v", uid, itemID, err)
+			if writeErr == nil {
+				writeErr = err
+			}
 		}
+	}
+	if writeErr != nil {
+		fail(w, http.StatusInternalServerError, "无法更新用户数据")
+		return
 	}
 
 	respond(w, a.userItemDataDTO(uid, itemID, isFav))
@@ -235,45 +230,17 @@ func (a *App) setPlayed(w http.ResponseWriter, r *http.Request, u User, uid, ite
 		fail(w, http.StatusForbidden, "无权限")
 		return
 	}
-	if a.db != nil {
-		playedVal := int64(0)
-		if played {
-			playedVal = 1
-		}
-		// 1. 更新当前 item
-		_, _ = a.db.Exec("INSERT INTO userdata(user_id,item,played,position) VALUES(?,?,?,0) ON CONFLICT(user_id,item) DO UPDATE SET played=excluded.played, position=0", uid, itemID, playedVal)
-
-		// 2. 如果是 Series 或 Season，级联更新其下的 Episode
-		var kind string
-		if a.db.QueryRow("SELECT kind FROM items WHERE id=?", itemID).Scan(&kind) == nil {
-			if kind == "Series" {
-				_, _ = a.db.Exec(`INSERT INTO userdata(user_id,item,played,position)
-					SELECT ?, id, ?, 0 FROM items 
-					WHERE kind='Episode' AND (parent=? OR parent IN (SELECT id FROM items WHERE parent=? AND kind='Season'))
-					ON CONFLICT(user_id,item) DO UPDATE SET played=excluded.played, position=0`, uid, playedVal, itemID, itemID)
-			} else if kind == "Season" {
-				_, _ = a.db.Exec(`INSERT INTO userdata(user_id,item,played,position)
-					SELECT ?, id, ?, 0 FROM items 
-					WHERE kind='Episode' AND parent=?
-					ON CONFLICT(user_id,item) DO UPDATE SET played=excluded.played, position=0`, uid, playedVal, itemID)
-			}
-		}
-
-		if !played {
-			// 标记未播放时，从继续观看活跃记录中删除
-			_, _ = a.db.Exec("DELETE FROM resume_activity WHERE user_id=? AND item=?", uid, itemID)
-			_, _ = a.db.Exec("DELETE FROM plays WHERE user_id=? AND item=?", uid, itemID)
-		}
+	if err := a.userStore().SetPlayedTree(uid, itemID, played); err != nil {
+		log.Printf("persist user played cascade for user %q item %q: %v", uid, itemID, err)
+		fail(w, http.StatusInternalServerError, "无法更新播放状态")
+		return
+	}
+	isFavorite, err := a.userStore().IsFavorite(uid, itemID)
+	if err != nil {
+		log.Printf("read user favorite state: %v", err)
 	}
 
-	var isFav bool
-	if a.db != nil {
-		var n int
-		a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", uid, itemID).Scan(&n)
-		isFav = (n > 0)
-	}
-
-	dto := a.userItemDataDTO(uid, itemID, isFav)
-	dto["Played"] = played
+	dto := a.userItemDataDTO(uid, itemID, isFavorite)
+	dto.Played = played
 	respond(w, dto)
 }

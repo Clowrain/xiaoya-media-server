@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"xiaoya-media-server/internal/config"
-	"xiaoya-media-server/internal/resource/discovery"
 	"xiaoya-media-server/web"
 )
 
@@ -33,29 +32,38 @@ type M = map[string]any
 type ExtensionHandler func(w http.ResponseWriter, r *http.Request, u User) bool
 
 type App struct {
-	cfg               *config.Config
-	extHandler        ExtensionHandler
-	alistPlaybackBase string
-	alistPlayback     alistFileLookup
-	scanControlMu     sync.Mutex
-	scanResume        chan struct{}
-	pages             pageCache
-	cursorSecret      string
-	proxyDebug        proxyDebugState
-	activity          activityState
-	probes            probeState
-	db                *Database
-	databaseDSN       string
-	backupMu          sync.Mutex
-	write             sync.Mutex
-	libraryConfig     sync.Mutex
-	scan              sync.RWMutex
-	jobs              libraryJobQueue
-	playing           sync.Mutex
-	loginMu           sync.Mutex
-	attempts          map[string][]time.Time
-	serverID          string
-	suppressor        watchSuppressor
+	cfg                       *config.Config
+	extHandler                ExtensionHandler
+	alistPlaybackBase         string
+	alistPlayback             alistFileLookup
+	scanControlMu             sync.Mutex
+	scanResume                chan struct{}
+	pages                     pageCache
+	cursorSecret              string
+	proxyDebug                proxyDebugState
+	activity                  activityState
+	probes                    probeState
+	db                        *Database
+	authenticator             Authenticator
+	mediaItemRepository       MediaItemRepository
+	itemPageRepository        ItemPageRepository
+	libraryRepository         LibraryRepository
+	userRepository            UserRepository
+	coverRepository           CoverRepository
+	playbackSessionRepository PlaybackSessionRepository
+	playbackSourceSelector    mediaSourceSelector
+	playbackURLResolver       playbackURLResolver
+	databaseDSN               string
+	backupMu                  sync.Mutex
+	write                     sync.Mutex
+	libraryConfig             sync.Mutex
+	scan                      sync.RWMutex
+	jobs                      libraryJobQueue
+	playing                   sync.Mutex
+	loginMu                   sync.Mutex
+	attempts                  map[string][]time.Time
+	serverID                  string
+	suppressor                watchSuppressor
 }
 type User struct {
 	ID     string
@@ -82,50 +90,30 @@ func must(e error) {
 	}
 }
 func (a *App) init() {
-	_, e := a.db.Exec(`CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY,v TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT UNIQUE NOT NULL ,hash TEXT NOT NULL,admin BIGINT NOT NULL DEFAULT 0,first_admin BIGINT NOT NULL DEFAULT 0,max_devices BIGINT NOT NULL DEFAULT 2);
- CREATE TABLE IF NOT EXISTS tokens(hash TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id) ON DELETE CASCADE,device TEXT NOT NULL,expires BIGINT NOT NULL);
- CREATE TABLE IF NOT EXISTS api_keys(id TEXT PRIMARY KEY,name TEXT NOT NULL,hash TEXT UNIQUE NOT NULL,created BIGINT NOT NULL);
- CREATE TABLE IF NOT EXISTS libraries(id TEXT PRIMARY KEY,name TEXT NOT NULL,path TEXT UNIQUE NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'idle',scanned BIGINT NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',count BIGINT NOT NULL DEFAULT 0,duration DOUBLE PRECISION NOT NULL DEFAULT 0);
- CREATE TABLE IF NOT EXISTS items(id TEXT PRIMARY KEY,lib TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,parent TEXT NOT NULL,name TEXT NOT NULL,kind TEXT NOT NULL,path TEXT UNIQUE NOT NULL,url TEXT NOT NULL DEFAULT '',overview TEXT NOT NULL DEFAULT '',poster TEXT NOT NULL DEFAULT '',year BIGINT NOT NULL DEFAULT 0,season BIGINT NOT NULL DEFAULT 0,episode BIGINT NOT NULL DEFAULT 0,mtime BIGINT NOT NULL DEFAULT 0,size BIGINT NOT NULL DEFAULT 0,seen TEXT NOT NULL);
- CREATE INDEX IF NOT EXISTS items_lib_name ON items(lib,name,id);
- CREATE INDEX IF NOT EXISTS items_parent_name ON items(parent,name,id);
- CREATE INDEX IF NOT EXISTS items_kind ON items(kind);
- CREATE INDEX IF NOT EXISTS items_seen ON items(lib,seen);
- CREATE TABLE IF NOT EXISTS plays(user_id TEXT REFERENCES users(id) ON DELETE CASCADE,device TEXT NOT NULL,item TEXT NOT NULL,updated BIGINT NOT NULL,PRIMARY KEY(user_id,device));
- CREATE TABLE IF NOT EXISTS userdata(user_id TEXT REFERENCES users(id) ON DELETE CASCADE,item TEXT REFERENCES items(id) ON DELETE CASCADE,position BIGINT NOT NULL DEFAULT 0,played BIGINT NOT NULL DEFAULT 0,PRIMARY KEY(user_id,item));
- CREATE TABLE IF NOT EXISTS user_favorites(user_id TEXT REFERENCES users(id) ON DELETE CASCADE,item TEXT REFERENCES items(id) ON DELETE CASCADE,created_at BIGINT NOT NULL DEFAULT 0,PRIMARY KEY(user_id,item));
- CREATE INDEX IF NOT EXISTS user_favorites_user ON user_favorites(user_id);`)
-	must(e)
-	must(a.extraSchema())
-	must(a.browseSchema())
-	must(a.postgresSchema())
-	must(a.versionsSchema())
-	must(a.initialsSchema())
-	must(a.tmdbSchema())
-	must(discovery.NewSQLStore(a.db.DB, "postgres").EnsureSchema(context.Background()))
-	mustExecLogin := `CREATE TABLE IF NOT EXISTS user_logins(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, last_login BIGINT NOT NULL)`
-	_, loginErr := a.db.Exec(mustExecLogin)
-	must(loginErr)
-	must(a.db.QueryRow("SELECT v FROM settings WHERE k='image_secret'").Scan(&a.cursorSecret))
+	must(a.ensureSchema())
 	if os.Getenv("SCHEMA_ONLY") == "1" {
 		return
 	}
-	a.db.Exec("UPDATE libraries SET status='interrupted',error='服务重启，请重新扫描' WHERE status='scanning'")
-	var libCount int
-	if flag.Lookup("test.v") == nil && a.db.QueryRow("SELECT count(*) FROM libraries").Scan(&libCount) == nil && libCount == 0 {
-		strmRoot := os.Getenv("MEDIA_ROOT_PATH")
-		if strmRoot == "" {
-			strmRoot = "/media/strm"
-		}
-		libID := id()
-		if _, err := a.db.Exec("INSERT INTO libraries(id,name,path,kind,status) VALUES(?,?,?,?,'idle') ON CONFLICT DO NOTHING", libID, "小雅影视", strmRoot, "tvshows"); err == nil {
-			rawPaths, _ := json.Marshal([]string{strmRoot})
-			_, _ = a.db.Exec("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT (k) DO UPDATE SET v=excluded.v", "library-paths:"+libID, string(rawPaths))
+	if err := a.libraryStore().MarkInterruptedScans("服务重启，请重新扫描"); err != nil {
+		log.Printf("mark interrupted library scans: %v", err)
+	}
+	if flag.Lookup("test.v") == nil {
+		libCount, countErr := a.libraryStore().Count()
+		if countErr == nil && libCount == 0 {
+			strmRoot := os.Getenv("MEDIA_ROOT_PATH")
+			if strmRoot == "" {
+				strmRoot = "/media/strm"
+			}
+			libID := id()
+			if err := a.libraryStore().Create(a.db, LibraryRecord{ID: libID, Name: "小雅影视", Path: strmRoot, Kind: "tvshows"}); err == nil {
+				if err := a.libraryStore().SavePaths(a.db, libID, []string{strmRoot}); err != nil {
+					log.Printf("save bootstrap library paths: %v", err)
+				}
+			}
 		}
 	}
-	var n int
-	must(a.db.QueryRow("SELECT count(*) FROM users").Scan(&n))
+	n, err := a.userStore().CountAccounts()
+	must(err)
 	if n == 0 {
 		p := os.Getenv("ADMIN_PASSWORD")
 		if len(p) < 12 {
@@ -133,8 +121,7 @@ func (a *App) init() {
 		}
 		h, e := bcrypt.GenerateFromPassword([]byte(p), 12)
 		must(e)
-		_, e = a.db.Exec("INSERT INTO users VALUES(?,?,?,?,?,?)", id(), "admin", string(h), 1, 1, 5)
-		must(e)
+		must(a.userStore().CreateAccount(UserAccount{ID: id(), Name: "admin", Hash: string(h), Admin: true, First: true, MaxDevices: 5}, nil))
 	}
 	if k := os.Getenv("BOOTSTRAP_API_KEY"); k != "" {
 		var initialized string
@@ -207,39 +194,6 @@ func device(r *http.Request) string {
 	}
 	return ""
 }
-func (a *App) auth(r *http.Request) (User, error) {
-	var u User
-	t := token(r)
-	if t == "" {
-		return u, errors.New("missing token")
-	}
-	e := a.db.QueryRow(`SELECT u.id,u.name,u.hash,u.admin,u.first_admin,u.max_devices,t.device FROM users u JOIN tokens t ON t.user_id=u.id WHERE t.hash=? AND t.expires>?`, digest(t), time.Now().Unix()).Scan(&u.ID, &u.Name, &u.Hash, &u.Admin, &u.First, &u.Max, &u.Device)
-	if e == nil {
-		return u, nil
-	}
-	var key string
-	e = a.db.QueryRow("SELECT id FROM api_keys WHERE hash=?", digest(t)).Scan(&key)
-	if e == nil {
-		u.API = true
-		return u, nil
-	}
-	return u, e
-}
-func (a *App) userDTO(u User) M {
-	return M{"Id": u.ID, "Name": u.Name, "ServerId": a.serverID, "HasPassword": true, "HasConfiguredPassword": true, "HasConfiguredEasyPassword": false,
-		"Policy": M{"IsAdministrator": u.Admin, "IsDisabled": false, "IsHidden": true, "IsHiddenRemotely": true, "IsHiddenFromUnusedDevices": true,
-			"EnableMediaPlayback": a.canPlay(u.ID), "EnableVideoPlaybackTranscoding": false, "EnableAudioPlaybackTranscoding": false, "EnablePlaybackRemuxing": false,
-			"EnableContentDeletion": false, "EnableContentDownloading": false, "EnableSubtitleDownloading": false, "EnableSubtitleManagement": false, "EnableSyncTranscoding": false,
-			"EnableAllFolders": true, "EnableAllDevices": true, "EnableAllChannels": false, "EnableRemoteAccess": true,
-			"EnableRemoteControlOfOtherUsers": false, "EnableSharedDeviceControl": false, "EnableLiveTvAccess": false, "EnableLiveTvManagement": false,
-			"EnablePublicSharing": false, "EnableMediaConversion": false, "EnableUserPreferenceAccess": false,
-			"BlockedTags": []string{}, "IncludeTags": []string{}, "AccessSchedules": []M{}, "BlockUnratedItems": []string{}, "EnabledFolders": []string{}, "EnabledDevices": []string{}, "EnabledChannels": []string{}, "ExcludedSubFolders": []string{}, "EnableContentDeletionFromFolders": []string{},
-			"RemoteClientBitrateLimit": 0, "InvalidLoginAttemptCount": 0, "SimultaneousStreamLimit": u.Max},
-		"Configuration": M{"OrderedViews": a.orderedViews(), "DisplayMissingEpisodes": false, "PlayDefaultAudioTrack": true, "SubtitleMode": "Smart",
-			"LatestItemsExcludes": []string{}, "MyMediaExcludes": []string{}, "HidePlayedInLatest": false, "HidePlayedInMoreLikeThis": false, "HidePlayedInSuggestions": false,
-			"RememberAudioSelections": false, "RememberSubtitleSelections": false, "EnableNextEpisodeAutoPlay": true, "ResumeRewindSeconds": 0, "IntroSkipMode": "ShowButton", "EnableLocalPassword": false},
-		"FirstAdmin": u.First, "MaxDevices": u.Max}
-}
 
 // Some clients join an /emby base URL with an already prefixed API path.
 func embyPath(p string) string {
@@ -252,59 +206,6 @@ func embyPath(p string) string {
 		p = p[5:]
 	}
 	return p
-}
-func (a *App) login(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		fail(w, 405, "POST required")
-		return
-	}
-	a.loginMu.Lock()
-	ip := strings.Split(r.RemoteAddr, ":")[0]
-	ts := a.attempts[ip]
-	recent := ts[:0]
-	for _, t := range ts {
-		if time.Since(t) < time.Minute {
-			recent = append(recent, t)
-		}
-	}
-	if len(recent) >= 15 {
-		a.loginMu.Unlock()
-		a.authWarning(r, "", "登录过于频繁")
-		fail(w, 429, "登录过于频繁，请稍后再试")
-		return
-	}
-	a.attempts[ip] = append(recent, time.Now())
-	a.loginMu.Unlock()
-	var b loginCredentials
-	if !loginBody(w, r, &b) {
-		return
-	}
-	var u User
-	e := a.db.QueryRow("SELECT id,name,hash,admin,first_admin,max_devices FROM users WHERE lower(name)=lower(?)", b.Username).Scan(&u.ID, &u.Name, &u.Hash, &u.Admin, &u.First, &u.Max)
-	if e != nil || bcrypt.CompareHashAndPassword([]byte(u.Hash), []byte(b.Pw)) != nil {
-		reason := "密码错误"
-		if e == sql.ErrNoRows {
-			reason = "用户不存在"
-		} else if e != nil {
-			reason = "用户查询失败"
-		}
-		a.authWarning(r, b.Username, reason)
-		fail(w, 401, "用户名或密码错误")
-		return
-	}
-	d := device(r)
-	if d == "" {
-		d = id()
-	}
-	t := id() + id()
-	_, e = a.db.Exec("INSERT INTO tokens VALUES(?,?,?,?)", digest(t), u.ID, d, time.Now().Add(30*24*time.Hour).Unix())
-	if e != nil {
-		fail(w, 500, "登录写入失败")
-		return
-	}
-	a.db.Exec("INSERT INTO user_logins VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET last_login=excluded.last_login", u.ID, time.Now().Unix())
-	a.loginSuccess(r, u, d)
-	respond(w, M{"User": a.userDTO(u), "AccessToken": t, "ServerId": a.serverID, "SessionInfo": a.loginSession(r, u, d)})
 }
 func (a *App) serverInfo() M {
 	return M{"Id": a.serverID, "ServerName": a.displayName(), "Name": a.displayName(), "Version": "4.8.0.80", "OperatingSystem": "Linux", "ProductName": "Xiaoya Media Server", "LocalAddress": os.Getenv("PUBLIC_URL"), "WanAddress": os.Getenv("PUBLIC_URL"), "LocalAddresses": []string{os.Getenv("PUBLIC_URL")}, "RemoteAddresses": []string{os.Getenv("PUBLIC_URL")}, "StartupWizardCompleted": true, "SupportsLibraryMonitor": false, "HasUpdateAvailable": false}
@@ -336,6 +237,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 				if status == http.StatusFound || status == http.StatusMovedPermanently || status == http.StatusTemporaryRedirect {
 					level = "302"
 					title = "播放直链 302 重定向"
+					target = redactPlaybackURL(target)
 					msg = fmt.Sprintf("播放重定向成功 -> 目标 CDN: %s (耗时 %.1fms)", target, durMs)
 				} else if status >= 400 {
 					level = "ERROR"
@@ -655,7 +557,10 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if l == "/sessions/logout" {
-		a.db.Exec("DELETE FROM tokens WHERE hash=?", digest(token(r)))
+		if err := a.resolveAuthenticator().Revoke(token(r)); err != nil {
+			fail(w, 500, "登出失败")
+			return
+		}
 		w.WriteHeader(204)
 		return
 	}
@@ -675,8 +580,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	if l == "/items/counts" {
 		m := M{}
 		for k, v := range map[string]string{"MovieCount": "Movie", "EpisodeCount": "Episode", "SeriesCount": "Series"} {
-			var n int
-			a.db.QueryRow("SELECT count(*) FROM items WHERE kind=?", v).Scan(&n)
+			n, _ := a.mediaItems().CountByKind(v)
 			m[k] = n
 		}
 		respond(w, m)
@@ -699,66 +603,46 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 			fail(w, 403, "播放需要用户令牌")
 			return
 		}
-		var b struct {
-			ItemId        string
-			PositionTicks *clientTicks
-			RunTimeTicks  clientTicks
-			MediaSourceId string
-		}
-		// 官方 Emby 允许把播放参数放在查询串里；空/坏报文不直接拒绝，回退到查询参数。
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&b)
-		if b.ItemId == "" {
-			b.ItemId = q(r, "ItemId")
-		}
-		if b.MediaSourceId == "" {
-			b.MediaSourceId = q(r, "MediaSourceId")
-		}
-		if b.ItemId == "" {
-			b.ItemId = b.MediaSourceId
-		}
-		if b.PositionTicks == nil {
-			if v := q(r, "PositionTicks"); v != "" {
-				if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-					t := clientTicks(n)
-					b.PositionTicks = &t
-				}
+		b := parsePlaybackCheckInRequest(w, r)
+		if b.ItemID == "" {
+			currentItem, err := a.playbackSessionStore().CurrentItem(u.ID, u.Device)
+			if err != nil {
+				log.Printf("read current playback session: %v", err)
+			} else {
+				b.ItemID = currentItem
 			}
 		}
-		if b.RunTimeTicks == 0 {
-			if v := q(r, "RunTimeTicks"); v != "" {
-				if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-					b.RunTimeTicks = clientTicks(n)
-				}
-			}
-		}
-		if b.ItemId == "" {
-			a.db.QueryRow("SELECT item FROM plays WHERE user_id=? AND device=?", u.ID, u.Device).Scan(&b.ItemId)
-		}
-		if b.ItemId == "" && b.PositionTicks == nil && l != "/sessions/playing/stopped" {
+		if b.ItemID == "" && b.PositionTicks == nil && l != "/sessions/playing/stopped" {
 			fail(w, 400, "缺少播放参数")
 			return
 		}
 		if l == "/sessions/playing/stopped" {
-			a.db.Exec("DELETE FROM plays WHERE user_id=? AND device=?", u.ID, u.Device)
-		} else if e := a.reserve(u, b.ItemId); e != nil {
+			if err := a.playbackSessionStore().Release(u.ID, u.Device); err != nil {
+				log.Printf("release playback session: %v", err)
+			}
+		} else if e := a.reserve(u, b.ItemID); e != nil {
 			fail(w, 403, e.Error())
 			return
 		}
-		if b.ItemId != "" {
-			if x, err := a.item(b.ItemId); err == nil && l != "/sessions/playing/stopped" {
+		if b.ItemID != "" {
+			if x, err := a.item(b.ItemID); err == nil && l != "/sessions/playing/stopped" {
 				a.logPlayback(r, u, x)
 				if l == "/sessions/playing" {
 					a.scheduleNext(x, r)
 				}
 			}
 			if b.PositionTicks != nil {
-				a.playbackProgress(u, b.ItemId, int64(*b.PositionTicks), int64(b.RunTimeTicks))
+				a.playbackProgress(u, b.ItemID, int64(*b.PositionTicks), int64(b.RunTimeTicks))
 			}
-			a.updatePlaybackActivity(u, b.ItemId, l == "/sessions/playing/stopped")
+			a.updatePlaybackActivity(u, b.ItemID, l == "/sessions/playing/stopped")
 			if b.PositionTicks != nil {
-				a.db.Exec("INSERT INTO userdata(user_id,item,position) VALUES(?,?,?) ON CONFLICT(user_id,item) DO UPDATE SET position=excluded.position", u.ID, b.ItemId, max(int64(*b.PositionTicks), 0))
+				if err := a.userStore().SetPlaybackPosition(u.ID, b.ItemID, max(int64(*b.PositionTicks), 0)); err != nil {
+					log.Printf("update session playback position: %v", err)
+				}
 			}
-			a.db.Exec("INSERT INTO resume_activity VALUES(?,?,?) ON CONFLICT(user_id,item) DO UPDATE SET updated=excluded.updated", u.ID, b.ItemId, time.Now().UnixNano())
+			if err := a.playbackSessionStore().TouchResume(u.ID, b.ItemID, time.Now().UnixNano()); err != nil {
+				log.Printf("update resume activity: %v", err)
+			}
 		}
 		w.WriteHeader(204)
 		return
@@ -772,12 +656,12 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if len(s) == 3 {
-				var x User
-				e := a.db.QueryRow("SELECT id,name,hash,admin,first_admin,max_devices FROM users WHERE id=?", uid).Scan(&x.ID, &x.Name, &x.Hash, &x.Admin, &x.First, &x.Max)
+				account, e := a.userStore().GetAccount(uid)
 				if e != nil {
 					fail(w, 404, "用户不存在")
 					return
 				}
+				x := User{ID: account.ID, Name: account.Name, Hash: account.Hash, Admin: account.Admin, First: account.First, Max: account.MaxDevices}
 				respond(w, a.userDTO(x))
 				return
 			}
@@ -786,7 +670,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 				a.password(w, r, u, uid)
 				return
 			case "views":
-				respond(w, M{"Items": a.libraryDTOs(), "TotalRecordCount": len(a.libraries()), "StartIndex": 0})
+				respond(w, ItemsQueryResultDTO{Items: a.libraryDTOs(), TotalRecordCount: len(a.libraries()), StartIndex: 0})
 				return
 			case "items":
 				if len(s) > 5 {
@@ -824,7 +708,7 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				if len(s) == 5 && strings.EqualFold(s[4], "folderviews") {
-					respond(w, M{"Items": a.libraryDTOs(), "TotalRecordCount": len(a.libraries()), "StartIndex": 0})
+					respond(w, ItemsQueryResultDTO{Items: a.libraryDTOs(), TotalRecordCount: len(a.libraries()), StartIndex: 0})
 					return
 				}
 				if len(s) > 4 && strings.ToLower(s[4]) != "latest" && strings.ToLower(s[4]) != "resume" {
@@ -932,33 +816,18 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	fail(w, 404, "未实现此接口")
 }
-func (a *App) users() []M {
-	out := []M{}
-	// Collect rows before building DTOs: userDTO/canPlay issue nested queries,
-	// which would deadlock on a single-connection pool while the rows cursor holds it.
-	rows, e := a.db.Query("SELECT id,name,hash,admin,first_admin,max_devices FROM users ORDER BY first_admin DESC,name")
-	if e != nil {
+func (a *App) users() []UserDTO {
+	out := []UserDTO{}
+	// Load account rows before DTO mapping because userDTO/canPlay issue nested queries.
+	accounts, err := a.userStore().ListAccounts()
+	if err != nil {
 		return out
 	}
-	type userRow struct {
-		u    User
-		last int64
-	}
-	list := []userRow{}
-	for rows.Next() {
-		var r userRow
-		if rows.Scan(&r.u.ID, &r.u.Name, &r.u.Hash, &r.u.Admin, &r.u.First, &r.u.Max) == nil {
-			list = append(list, r)
-		}
-	}
-	rows.Close()
-	if e := rows.Err(); e != nil {
-		return out
-	}
-	for _, r := range list {
-		dto := a.userDTO(r.u)
-		if err := a.db.QueryRow("SELECT last_login FROM user_logins WHERE user_id=?", r.u.ID).Scan(&r.last); err == nil && r.last > 0 {
-			dto["LastLoginDate"] = time.Unix(r.last, 0).UTC().Format("2006-01-02T15:04:05.0000000Z")
+	for _, account := range accounts {
+		user := User{ID: account.ID, Name: account.Name, Hash: account.Hash, Admin: account.Admin, First: account.First, Max: account.MaxDevices}
+		dto := a.userDTO(user)
+		if account.LastLogin > 0 {
+			dto.LastLoginDate = time.Unix(account.LastLogin, 0).UTC().Format("2006-01-02T15:04:05.0000000Z")
 		}
 		out = append(out, dto)
 	}
@@ -990,19 +859,7 @@ func (a *App) password(w http.ResponseWriter, r *http.Request, u User, uid strin
 		fail(w, 500, "密码生成失败")
 		return
 	}
-	tx, e := a.db.Begin()
-	if e != nil {
-		fail(w, 500, "数据库繁忙")
-		return
-	}
-	defer tx.Rollback()
-	_, e = tx.Exec("UPDATE users SET hash=? WHERE id=?", string(h), uid)
-	if e == nil {
-		_, e = tx.Exec("DELETE FROM tokens WHERE user_id=?", uid)
-	}
-	if e == nil {
-		e = tx.Commit()
-	}
+	e = a.userStore().UpdatePasswordAndRevokeTokens(uid, string(h))
 	if e != nil {
 		fail(w, 500, "保存失败")
 		return
@@ -1099,8 +956,8 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u User, p string) {
 		if !body(w, r, &b) {
 			return
 		}
-		var exists int
-		if a.db.QueryRow("SELECT 1 FROM libraries WHERE id=?", b.ID).Scan(&exists) != nil {
+		exists, lookupErr := a.libraryStore().Exists(b.ID)
+		if lookupErr != nil || !exists {
 			fail(w, 404, "媒体库不存在")
 			return
 		}
@@ -1133,8 +990,7 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u User, p string) {
 			return
 		}
 		if r.Method == "DELETE" {
-			var first bool
-			e := a.db.QueryRow("SELECT first_admin FROM users WHERE id=?", b.ID).Scan(&first)
+			first, e := a.userStore().IsFirstAdmin(b.ID)
 			if e != nil {
 				fail(w, 404, "用户不存在")
 				return
@@ -1143,10 +999,12 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u User, p string) {
 				fail(w, 403, "不能删除首位管理员或当前账号")
 				return
 			}
-			_, e = a.db.Exec("DELETE FROM users WHERE id=?", b.ID)
-			if e != nil {
+			if e = a.userStore().DeleteUser(b.ID); e != nil {
 				fail(w, 500, "删除失败")
 				return
+			}
+			if err := a.playbackSessionStore().ReleaseUser(b.ID); err != nil {
+				log.Printf("release deleted user playback sessions: %v", err)
 			}
 			respond(w, M{"ok": true})
 			return
@@ -1156,26 +1014,28 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u User, p string) {
 			return
 		}
 		if r.Method == "PUT" {
-			var first bool
-			if a.db.QueryRow("SELECT first_admin FROM users WHERE id=?", b.ID).Scan(&first) != nil {
+			first, lookupErr := a.userStore().IsFirstAdmin(b.ID)
+			if lookupErr != nil {
 				fail(w, 404, "用户不存在")
 				return
 			}
 			if first {
 				b.Admin = true
 			}
-			_, e := a.db.Exec("UPDATE users SET max_devices=?,admin=? WHERE id=?", b.MaxDevices, b.Admin, b.ID)
+			e := a.userStore().SetAccountSettings(b.ID, b.MaxDevices, b.Admin)
 			if e != nil {
 				fail(w, 500, "保存失败")
 				return
 			}
 			if b.AllowPlayback != nil {
-				if _, e := a.db.Exec("INSERT INTO user_playback(user_id,allowed) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET allowed=excluded.allowed", b.ID, *b.AllowPlayback); e != nil {
+				if e := a.userStore().SetPlaybackAllowed(b.ID, *b.AllowPlayback); e != nil {
 					fail(w, 500, "播放权限保存失败")
 					return
 				}
 				if !*b.AllowPlayback {
-					a.db.Exec("DELETE FROM plays WHERE user_id=?", b.ID)
+					if err := a.playbackSessionStore().ReleaseUser(b.ID); err != nil {
+						log.Printf("release playback sessions after permission change: %v", err)
+					}
 				}
 			}
 			respond(w, M{"ok": true})
@@ -1191,19 +1051,7 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u User, p string) {
 			return
 		}
 		uid := id()
-		tx, e := a.db.Begin()
-		if e != nil {
-			fail(w, 500, "保存失败")
-			return
-		}
-		defer tx.Rollback()
-		_, e = tx.Exec("INSERT INTO users VALUES(?,?,?,?,?,?)", uid, b.Name, string(h), b.Admin, false, b.MaxDevices)
-		if e == nil && b.AllowPlayback != nil {
-			_, e = tx.Exec("INSERT INTO user_playback(user_id,allowed) VALUES(?,?)", uid, *b.AllowPlayback)
-		}
-		if e == nil {
-			e = tx.Commit()
-		}
+		e = a.userStore().CreateAccount(UserAccount{ID: uid, Name: b.Name, Hash: string(h), Admin: b.Admin, MaxDevices: b.MaxDevices}, b.AllowPlayback)
 		if e != nil {
 			fail(w, 409, "用户名重复或保存失败")
 			return
@@ -1285,77 +1133,11 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u User, p string) {
 	case "/admin/logs":
 		a.handleUnifiedLogs(w, r)
 	case "/admin/status":
-		var n int
-		a.db.QueryRow("SELECT count(*) FROM items").Scan(&n)
+		n, _ := a.mediaItems().CountAll()
 		respond(w, M{"Items": n, "Database": "PostgreSQL", "Transcoding": false, "Playback": "302 redirect", "DeviceLeaseSeconds": 180})
 	default:
 		fail(w, 404, "not found")
 	}
-}
-func (a *App) libraries() []M {
-	out := []M{}
-	rows, e := a.db.Query("SELECT id,name,path,kind,status,scanned,error,count,duration FROM libraries ORDER BY COALESCE((SELECT position FROM library_order WHERE library_id=libraries.id),2147483647),name")
-	if e != nil {
-		return out
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var i, n, p, k, s, er string
-		var t, c int64
-		var d float64
-		rows.Scan(&i, &n, &p, &k, &s, &t, &er, &c, &d)
-		out = append(out, M{
-			"Id":             i,
-			"ItemId":         i,
-			"Name":           n,
-			"Path":           p,
-			"Locations":      []string{p},
-			"Paths":          []string{p},
-			"CollectionType": k,
-			"Kind":           k,
-			"Status":         s,
-			"Scanned":        t,
-			"Error":          er,
-			"Count":          c,
-			"Items":          c,
-			"Duration":       d,
-		})
-	}
-	rows.Close()
-	for _, lib := range out {
-		paths := a.libraryPaths(lib["Id"].(string), lib["Path"].(string))
-		lib["Locations"] = paths
-		lib["Paths"] = paths
-	}
-	return out
-}
-func (a *App) libraryDTOs() []M {
-	out := []M{}
-	for _, v := range a.libraries() {
-		vid := v["Id"].(string)
-		out = append(out, M{"Id": vid, "Name": v["Name"], "Type": "CollectionFolder", "IsFolder": true, "CollectionType": v["CollectionType"], "SortName": v["Name"], "ForcedSortName": v["Name"], "ExternalUrls": []M{}, "ProviderIds": M{}, "RemoteTrailers": []M{}, "Taglines": []string{}, "LockedFields": []string{}, "LockData": false, "CanDelete": false, "CanDownload": false, "PresentationUniqueKey": vid, "ServerId": a.serverID, "ImageTags": a.libraryImageTags(vid), "ParentId": "root", "LocationType": "Virtual", "ChildCount": v["Count"], "RecursiveItemCount": v["Count"], "PrimaryImageAspectRatio": 2.0 / 3, "BackdropImageTags": []string{}, "UserData": userItemDataMap(vid, 0, false, false), "DisplayPreferencesId": vid})
-	}
-	return out
-}
-
-type Item struct {
-	ID, Lib, Parent, Name, Kind, Path, URL, Overview, Poster string
-	Year, Season, Episode                                    int
-	Mtime, Size                                              int64
-}
-
-const cols = "id,lib,parent,name,kind,path,url,overview,poster,year,season,episode,mtime,size"
-
-func readItem(s interface{ Scan(...any) error }) (Item, error) {
-	var x Item
-	e := s.Scan(&x.ID, &x.Lib, &x.Parent, &x.Name, &x.Kind, &x.Path, &x.URL, &x.Overview, &x.Poster, &x.Year, &x.Season, &x.Episode, &x.Mtime, &x.Size)
-	return x, e
-}
-func (a *App) item(i string) (Item, error) {
-	if a.db == nil || i == "" {
-		return Item{}, sql.ErrNoRows
-	}
-	return readItem(a.db.QueryRow("SELECT "+cols+" FROM items WHERE id=?", i))
 }
 func (a *App) dto(x Item) M {
 	folder := x.Kind == "Series" || x.Kind == "Season"
@@ -1363,10 +1145,10 @@ func (a *App) dto(x Item) M {
 	if x.Poster != "" {
 		tags["Primary"] = digest(x.Poster + strconv.FormatInt(x.Mtime, 10))[:12]
 	}
-	m := M{"Id": x.ID, "ServerId": a.serverID, "ParentId": x.Parent, "Name": x.Name, "SortName": itemSortName(x), "Type": x.Kind, "IsFolder": folder, "Path": x.Path, "Overview": x.Overview, "ProductionYear": x.Year, "IndexNumber": x.Episode, "ParentIndexNumber": x.Season, "ImageTags": tags, "BackdropImageTags": []string{}, "LocationType": "FileSystem", "UserData": userItemDataMap(x.ID, 0, false, false), "CanDownload": false}
+	m := M{"Id": x.ID, "ServerId": a.serverID, "ParentId": x.Parent, "Name": x.Name, "SortName": itemSortName(x), "Type": x.Kind, "IsFolder": folder, "Path": x.Path, "Overview": x.Overview, "ProductionYear": x.Year, "IndexNumber": x.Episode, "ParentIndexNumber": x.Season, "ImageTags": tags, "BackdropImageTags": []string{}, "LocationType": "FileSystem", "UserData": makeUserItemDataDTO(x.ID, 0, false, false), "CanDownload": false}
 	if !folder {
 		m["MediaType"] = "Video"
-		m["MediaSources"] = []M{a.source(x, "")}
+		m["MediaSources"] = []MediaSourceDTO{a.source(x, "")}
 	}
 	a.enrich(x, m)
 	if x.Kind == "Movie" || x.Kind == "Series" {
@@ -1381,7 +1163,7 @@ func (a *App) dto(x Item) M {
 	}
 	return m
 }
-func (a *App) source(x Item, t string) M {
+func (a *App) source(x Item, t string) MediaSourceDTO {
 	cleanURL := cleanDisplayXiaoyaURL(x.URL)
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(strings.Split(x.URL, "?")[0]), "."))
 	if ext == "" || len(ext) > 5 {
@@ -1391,202 +1173,20 @@ func (a *App) source(x Item, t string) M {
 	if isRemoteURL(x.URL) {
 		name = cleanURL
 	}
-	return M{"Id": x.ID, "Name": name, "Path": cleanURL, "Protocol": "Http", "Type": "Default", "Container": ext, "IsRemote": true, "SupportsDirectPlay": true, "SupportsDirectStream": true, "SupportsTranscoding": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": []any{}, "DirectStreamUrl": "/emby/Videos/" + x.ID + "/stream." + ext + "?Static=true&api_key=" + url.QueryEscape(t), "AddApiKeyToDirectStreamUrl": false}
-}
-func (a *App) single(w http.ResponseWriter, r *http.Request, u User, i string) {
-	if i == "root" || i == a.serverID {
-		respond(w, a.rootDTO())
-		return
+	return MediaSourceDTO{
+		ID:                         x.ID,
+		Name:                       name,
+		Path:                       cleanURL,
+		Protocol:                   "Http",
+		Type:                       "Default",
+		Container:                  ext,
+		IsRemote:                   true,
+		SupportsDirectPlay:         true,
+		SupportsDirectStream:       true,
+		MediaStreams:               []struct{}{},
+		DirectStreamURL:            "/emby/Videos/" + x.ID + "/stream." + ext + "?Static=true&api_key=" + url.QueryEscape(t),
+		AddAPIKeyToDirectStreamURL: false,
 	}
-	if strings.HasPrefix(i, "person-") {
-		a.personDetail(w, r, u, i)
-		return
-	}
-	x, e := a.item(i)
-	if e != nil {
-		for _, v := range a.libraryDTOs() {
-			if v["Id"] == i {
-				respond(w, v)
-				return
-			}
-		}
-		fail(w, 404, "媒体不存在")
-		return
-	}
-	// Respond with local/cached metadata first; network probing never blocks detail rendering.
-	if cfg := a.probeSettings(); !u.API && cfg.Browse {
-		defer func() {
-			a.queueProbe(x, token(r), r.UserAgent(), false)
-		}()
-	}
-	m := a.viewerDTO(x, r, u)
-	if !u.API {
-		var pos int64
-		var played bool
-		var fav int
-		if a.db != nil {
-			a.db.QueryRow("SELECT position,played FROM userdata WHERE user_id=? AND item=?", u.ID, i).Scan(&pos, &played)
-			a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", u.ID, i).Scan(&fav)
-		}
-		m["UserData"] = userItemDataMap(i, pos, played, fav > 0)
-	}
-	respond(w, m)
-	_ = http.NewResponseController(w).Flush()
-}
-func (a *App) items(w http.ResponseWriter, r *http.Request, u User, latest bool) {
-	a.normalizeBrowseTypes(r, latest)
-	where := "1=1"
-	resume := strings.HasSuffix(strings.ToLower(r.URL.Path), "/resume") || strings.Contains(strings.ToLower(q(r, "Filters")), "isresumable")
-	args := []any{}
-	if !resume && !latest && (parentlessBrowse(r) || libraryTypes(r)) {
-		respond(w, M{"Items": a.libraryDTOs(), "TotalRecordCount": len(a.libraries()), "StartIndex": 0})
-		return
-	}
-	if resume {
-		where += " AND kind IN ('Movie','Episode') AND id IN (SELECT item FROM userdata WHERE user_id=? AND position>0 AND played=0)"
-		args = append(args, u.ID)
-	}
-	parent := q(r, "ParentId")
-	if parent == "root" || parent == a.serverID {
-		parent = ""
-		if !strings.EqualFold(q(r, "Recursive"), "true") && q(r, "IncludeItemTypes") == "" {
-			respond(w, M{"Items": a.libraryDTOs(), "TotalRecordCount": len(a.libraries()), "StartIndex": 0})
-			return
-		}
-	}
-	if parent != "" {
-		var n int
-		a.db.QueryRow("SELECT count(*) FROM libraries WHERE id=?", parent).Scan(&n)
-		if n > 0 {
-			where += " AND lib=?"
-			args = append(args, parent)
-			if !resume && !latest && !strings.EqualFold(q(r, "Recursive"), "true") {
-				where += " AND parent=?"
-				args = append(args, parent)
-			}
-		} else if !u.API && a.versionGrouping() != "id" {
-			group := a.versionGrouping()
-			parents := "SELECT id FROM items WHERE " + group + "=(SELECT " + group + " FROM items WHERE id=?)"
-			if strings.EqualFold(q(r, "Recursive"), "true") {
-				where += " AND id IN (WITH RECURSIVE tree(id) AS (SELECT id FROM items WHERE parent IN (" + parents + ") UNION SELECT items.id FROM items JOIN tree ON items.parent=tree.id) SELECT id FROM tree)"
-			} else {
-				where += " AND parent IN (" + parents + ")"
-			}
-			args = append(args, parent)
-		} else if strings.EqualFold(q(r, "Recursive"), "true") {
-			where += " AND id IN (WITH RECURSIVE tree(id) AS (SELECT id FROM items WHERE parent=? UNION SELECT items.id FROM items JOIN tree ON items.parent=tree.id) SELECT id FROM tree)"
-			args = append(args, parent)
-		} else {
-			where += " AND parent=?"
-			args = append(args, parent)
-		}
-	}
-	if ids := q(r, "Ids"); ids != "" {
-		parts := strings.Split(ids, ",")
-		if len(parts) > 1000 {
-			fail(w, 400, "too many ids")
-			return
-		}
-		where += " AND id IN (" + strings.TrimRight(strings.Repeat("?,", len(parts)), ",") + ")"
-		for _, v := range parts {
-			args = append(args, v)
-		}
-	}
-	if s := strings.TrimSpace(q(r, "SearchTerm")); s != "" {
-		initials := a.defaultOn("search_by_initials") && isInitialsQuery(s)
-		prefix := "%"
-		if initials && len(s) <= 2 {
-			prefix = ""
-		}
-		clause := "name ILIKE ? ESCAPE '\\'"
-		s = strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(s)
-		args = append(args, prefix+s+"%")
-		if initials {
-			clause += " OR media_initials(name) LIKE ? ESCAPE '\\'"
-			args = append(args, prefix+strings.ToLower(s)+"%")
-		}
-		where += " AND (" + clause + ")"
-	}
-	if s := strings.TrimSpace(q(r, "NameStartsWith")); s != "" {
-		s = strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(s)
-		clause := "name ILIKE ? ESCAPE '\\'"
-		args = append(args, s+"%")
-		if a.defaultOn("search_by_initials") {
-			clause += " OR media_initials(name) LIKE ? ESCAPE '\\'"
-			args = append(args, strings.ToLower(s)+"%")
-		}
-		where += " AND (" + clause + ")"
-	}
-	if kinds := q(r, "IncludeItemTypes"); kinds != "" {
-		parts := strings.Split(kinds, ",")
-		if len(parts) > 10 {
-			fail(w, 400, "too many types")
-			return
-		}
-		where += " AND kind IN (" + strings.TrimRight(strings.Repeat("?,", len(parts)), ",") + ")"
-		for _, v := range parts {
-			args = append(args, v)
-		}
-	}
-	where, args = a.browseFilters(r, u, where, args, latest)
-	if !u.API && !resume && q(r, "Ids") == "" {
-		where, args = a.mergeWhere(where, args)
-	}
-	limit, _ := strconv.Atoi(q(r, "Limit"))
-	maxLimit := 200
-	var parentItem *Item
-	if parent != "" {
-		if p, err := a.item(parent); err == nil {
-			parentItem = &p
-			if p.Kind == "Series" || p.Kind == "Season" {
-				maxLimit = 10000
-				if limit < 1 {
-					limit = maxLimit
-				}
-			}
-		}
-	}
-	if limit < 1 {
-		limit = 60
-	}
-	if limit > maxLimit {
-		limit = maxLimit
-	}
-	order := browseOrderWithContext(r, parentItem)
-	if latest {
-		order = "mtime DESC,id DESC"
-	}
-	if resume {
-		order = "resume"
-	}
-	loaded, p, next, more, e := a.pageItems(r, u, where, args, order, limit)
-	if e != nil {
-		log.Printf("items query: %v", e)
-		fail(w, 500, "查询失败: "+e.Error())
-		return
-	}
-	if !u.API && browseMediaDetails(r) && len(loaded) == 1 && loaded[0].ID == strings.TrimSpace(q(r, "Ids")) && a.probeSettings().Browse {
-		defer func() {
-			_ = http.NewResponseController(w).Flush()
-			a.queueProbe(loaded[0], token(r), r.UserAgent(), false)
-		}()
-	}
-	out := a.listDTOs(loaded, r, u)
-	if p.Count < 0 {
-		p.Count = p.Position + len(out)
-		if more {
-			p.Count++
-		}
-	}
-	if next != "" {
-		w.Header().Set("X-Next-Cursor", next)
-	}
-	if latest {
-		respond(w, out)
-	} else {
-		respond(w, M{"Items": out, "TotalRecordCount": p.Count, "StartIndex": p.Position, "NextCursor": next, "HasMore": more})
-	}
-
 }
 func (a *App) reserve(u User, item string) error {
 	if !a.canPlay(u.ID) {
@@ -1597,46 +1197,14 @@ func (a *App) reserve(u User, item string) error {
 	}
 	a.playing.Lock()
 	defer a.playing.Unlock()
-	tx, e := a.db.Begin()
-	if e != nil {
-		return e
+	limitReached, err := a.playbackSessionStore().Reserve(u.ID, u.Device, item, u.Max, time.Now().Unix())
+	if err != nil {
+		return err
 	}
-	defer tx.Rollback()
-	now := time.Now().Unix()
-	if _, e = tx.Exec("DELETE FROM plays WHERE updated<?", now-180); e != nil {
-		return e
-	}
-	var n int
-	e = tx.QueryRow("SELECT count(*) FROM plays WHERE user_id=? AND device<>?", u.ID, u.Device).Scan(&n)
-	if e != nil {
-		return e
-	}
-	if n >= u.Max {
+	if limitReached {
 		return errors.New("已达到同时播放设备上限")
 	}
-	_, e = tx.Exec("INSERT INTO plays VALUES(?,?,?,?) ON CONFLICT(user_id,device) DO UPDATE SET item=excluded.item,updated=excluded.updated", u.ID, u.Device, item, now)
-	if e != nil {
-		return e
-	}
-	return tx.Commit()
-}
-func (a *App) playback(w http.ResponseWriter, r *http.Request, u User, i string) {
-	x, e := a.item(i)
-	if e != nil {
-		fail(w, 404, "媒体不存在")
-		return
-	}
-	if x.URL == "" {
-		respond(w, M{"MediaSources": []M{}, "PlaySessionId": id(), "ErrorCode": "NoCompatibleStreams"})
-		return
-	}
-	if !u.API {
-		if e = a.reserve(u, i); e != nil {
-			fail(w, 403, e.Error())
-			return
-		}
-	}
-	respond(w, M{"MediaSources": a.versionSources(x, r, u, false), "PlaySessionId": id()})
+	return nil
 }
 func (a *App) stream(w http.ResponseWriter, r *http.Request, u User, i string) {
 	if r.Method != "GET" && r.Method != "HEAD" {
@@ -1680,34 +1248,7 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request, u User, i string) {
 			}
 		}()
 	}
-	if !u.API {
-		if target := a.thirdPartyPlaybackURL(r); target != "" {
-			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("Location", target)
-			w.WriteHeader(http.StatusFound)
-			return
-		}
-	}
-	if endpoint := strmResolver(x.URL); !u.API && endpoint != "" {
-		a.resolveSTRM(w, r, x, endpoint)
-		return
-	}
-	if !u.API && os.Getenv("NANSHARE_URL") != "" {
-		a.resolveNanShare(w, r)
-		return
-	}
-	if !u.API && os.Getenv("PUBLIC_PLAYBACK_URL") != "" {
-		w.Header().Set("Location", strings.TrimRight(os.Getenv("PUBLIC_PLAYBACK_URL"), "/")+a.playURL(x, token(r)))
-		w.WriteHeader(302)
-		return
-	}
-	target, e := url.Parse(x.URL)
-	if e != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" {
-		fail(w, 422, "仅支持 HTTP/HTTPS STRM")
-		return
-	}
-	w.Header().Set("Location", target.String())
-	w.WriteHeader(http.StatusFound)
+	a.resolvePlaybackRedirect(w, r, u, x)
 }
 func (a *App) poster(w http.ResponseWriter, r *http.Request, i string) { a.serveImage(w, r, i) }
 
@@ -1782,7 +1323,21 @@ func OpenApp(ctx context.Context, cfg *config.Config, extraMigrate func(*sql.DB)
 	if err != nil {
 		return nil, nil, err
 	}
-	a := &App{cfg: cfg, db: db, databaseDSN: dsn, attempts: map[string][]time.Time{}}
+	a := &App{
+		cfg:                       cfg,
+		db:                        db,
+		databaseDSN:               dsn,
+		attempts:                  map[string][]time.Time{},
+		authenticator:             authenticationService{repository: sqlAuthRepository{db: db}},
+		mediaItemRepository:       sqlMediaItemRepository{db: db},
+		itemPageRepository:        sqlMediaItemRepository{db: db},
+		libraryRepository:         sqlLibraryRepository{db: db},
+		userRepository:            sqlUserRepository{db: db},
+		coverRepository:           sqlCoverRepository{db: db},
+		playbackSessionRepository: sqlPlaybackSessionRepository{db: db},
+		playbackSourceSelector:    groupedMediaSourceSelector{versions: sqlMediaItemRepository{db: db}},
+	}
+	a.playbackURLResolver = strmPlaybackURLResolver{cache: &strmLinks, resolveLink: a.resolvePlaybackLink}
 	a.init()
 	if extraMigrate != nil {
 		if err := extraMigrate(db.DB); err != nil {

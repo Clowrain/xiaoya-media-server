@@ -311,8 +311,12 @@ func TestGeneratedPosterAndLibraryCollage(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO libraries(id,name,path,kind) VALUES('lib1','电影',?,'movies')", libDir); err != nil {
 		t.Fatal(err)
 	}
-	if p := a.imagePath("lib1", "Primary"); p != libPoster {
-		t.Fatalf("媒体库物理海报探测失败: got %q, want %q", p, libPoster)
+	wantPoster, err := filepath.EvalSymlinks(libPoster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := a.imagePath("lib1", "Primary"); p != wantPoster {
+		t.Fatalf("媒体库物理海报探测失败: got %q, want %q", p, wantPoster)
 	}
 
 	// 2. 测试普通无海报影片的兜底生成
@@ -369,8 +373,12 @@ func TestGeneratedPosterAndLibraryCollage(t *testing.T) {
 	// 6. 测试媒体库根目录 Backdrop 物理探测
 	libBackdrop := filepath.Join(libDir, "backdrop.jpg")
 	os.WriteFile(libBackdrop, []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F'}, 0644)
-	if p := a.imagePath("lib1", "Backdrop"); p != libBackdrop {
-		t.Fatalf("媒体库物理背景图探测失败: got %q, want %q", p, libBackdrop)
+	wantBackdrop, err := filepath.EvalSymlinks(libBackdrop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := a.imagePath("lib1", "Backdrop"); p != wantBackdrop {
+		t.Fatalf("媒体库物理背景图探测失败: got %q, want %q", p, wantBackdrop)
 	}
 
 	// 7. 测试 fillHeight 缩略图等比缩放
@@ -379,4 +387,3 @@ func TestGeneratedPosterAndLibraryCollage(t *testing.T) {
 		t.Fatalf("fillHeight 缩略图请求失败: code=%d", wThumb.Code)
 	}
 }
-

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Film, Lock, User as UserIcon, ArrowRight } from 'lucide-react';
-import { loginApi, notifyToast } from '../api/client';
+import { notifyToast } from '../api/client';
+import { loginApi } from '../api/auth';
 import { User } from '../types';
 
 interface LoginViewProps {

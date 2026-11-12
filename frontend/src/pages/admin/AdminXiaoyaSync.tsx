@@ -6,11 +6,15 @@ import {
   ExternalLink, AlertCircle, ListChecks, X, Clock, GitBranch, Terminal 
 } from 'lucide-react';
 import { SystemOverview, MonitorRoot, AListFileItem, AdminJob, AdminLibrary } from '../../types';
-import { 
-  fetchSystemOverview, fetchMonitorRoots, addMonitorRoot, 
-  updateMonitorRoot, deleteMonitorRoot, triggerSync, 
-  importResource, browseAList, searchAList, notifyToast, fetchAdminJobs, fetchAdminLibraries, request
-} from '../../api/client';
+import { notifyToast } from '../../api/client';
+import { fetchAdminLibraries } from '../../api/libraries';
+import {
+  fetchSystemOverview, fetchMonitorRoots, addMonitorRoot,
+  updateMonitorRoot, deleteMonitorRoot, triggerSync,
+  importResource, browseAList, searchAList, fetchAdminJobs,
+} from '../../api/resourceSync';
+import { fetchAdminJob } from '../../api/jobs';
+import { searchManifest } from '../../api/sync';
 import { 
   APP_VERSION, BUILD_COMMIT, BUILD_TIME, 
   GITHUB_REPO_URL, getCommitUrl, formatCommitHash 
@@ -81,8 +85,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
     setAlistError('');
     try {
       if (source === 'manifest') {
-        const res = await request(`/api/xiaoya/manifest/search?query=${encodeURIComponent(targetPath === '/' ? '' : targetPath)}&limit=100`);
-        const entries = (res.items || []).map((e: any) => {
+        const entries = (await searchManifest(targetPath)).map(e => {
           let displayName = e.title || e.rel_path;
           const isSeries = e.media_type === 'Series';
           if (isSeries) {
@@ -163,7 +166,7 @@ export const AdminXiaoyaSync: React.FC<AdminXiaoyaSyncProps> = ({ onOpenLogs }) 
     const timer = setInterval(async () => {
       try {
         const running = jobs.filter(j => j.status === 'RUNNING');
-        const updated = await Promise.all(running.map(j => request<AdminJob>(`/api/jobs/${encodeURIComponent(j.id)}`)));
+        const updated = await Promise.all(running.map(j => fetchAdminJob(j.id)));
         const byID = new Map(updated.map(j => [j.id, j]));
         setJobs(current => current.map(j => byID.get(j.id) ?? j));
         setJobsError('');

@@ -37,33 +37,21 @@ func (a *App) versions(x Item) []Item {
 	if x.URL == "" {
 		return []Item{x}
 	}
-	group := a.versionGrouping()
-	rows, e := a.db.Query("SELECT "+cols+" FROM items WHERE "+group+"=(SELECT "+group+" FROM items WHERE id=?) AND url<>'' ORDER BY id", x.ID)
-	if e != nil {
+	versions, err := a.mediaItems().VersionsByGrouping(a.versionGrouping(), x.ID)
+	if err != nil {
 		return []Item{x}
 	}
-	defer rows.Close()
 	out := []Item{x}
-	for rows.Next() {
-		v, e := readItem(rows)
-		if e != nil {
-			return []Item{x}
+	for _, version := range versions {
+		if version.ID != x.ID {
+			out = append(out, version)
 		}
-		if v.ID != x.ID {
-			out = append(out, v)
-		}
-	}
-	if rows.Err() != nil {
-		return []Item{x}
 	}
 	return out
 }
 func (a *App) versionSources(x Item, r *http.Request, u User, display bool) []M {
 	out := []M{}
-	versions := []Item{x}
-	if !u.API && a.db != nil {
-		versions = a.versions(x)
-	}
+	versions := a.mediaSourceSelector().Select(x, u, a.versionGrouping())
 	for _, v := range versions {
 		m := a.viewerSource(v, r, u)
 		if isRemoteURL(v.URL) {

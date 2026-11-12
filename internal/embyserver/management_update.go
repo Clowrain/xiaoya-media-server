@@ -2,6 +2,7 @@ package embyserver
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -69,10 +70,9 @@ func (a *App) createLibrary(w http.ResponseWriter, name, kind, path string, path
 		return
 	}
 	defer tx.Rollback()
-	_, e = tx.Exec("INSERT INTO libraries(id,name,path,kind) VALUES(?,?,?,?)", key, name, validated[0], kind)
-	raw, _ := json.Marshal(validated)
+	e = a.libraryStore().Create(tx, LibraryRecord{ID: key, Name: name, Path: validated[0], Kind: kind})
 	if e == nil {
-		_, e = tx.Exec("INSERT INTO settings(k,v) VALUES(?,?)", "library-paths:"+key, string(raw))
+		e = a.libraryStore().SavePaths(tx, key, validated)
 	}
 	if e == nil {
 		e = tx.Commit()
@@ -95,8 +95,7 @@ func (a *App) deleteLibrary(w http.ResponseWriter, libID string) {
 		return
 	}
 
-	var exists int
-	if err := a.db.QueryRow("SELECT count(*) FROM libraries WHERE id=?", libID).Scan(&exists); err != nil || exists == 0 {
+	if _, err := a.libraryStore().GetByID(libID); err != nil {
 		fail(w, 404, "媒体库不存在或已被删除")
 		return
 	}
@@ -109,11 +108,17 @@ func (a *App) deleteLibrary(w http.ResponseWriter, libID string) {
 	defer tx.Rollback()
 
 	// 彻底级联清理从属表，杜绝孤儿数据
-	_, _ = tx.Exec("DELETE FROM library_order WHERE library_id=?", libID)
+	if err := a.libraryStore().DeleteOrderPosition(tx, libID); err != nil {
+		log.Printf("delete library order: %v", err)
+	}
 	_, _ = tx.Exec("DELETE FROM scan_snapshots WHERE lib=?", libID)
-	_, _ = tx.Exec("DELETE FROM settings WHERE k=?", "library-paths:"+libID)
-	_, _ = tx.Exec("DELETE FROM items WHERE lib=?", libID)
-	res, err := tx.Exec("DELETE FROM libraries WHERE id=?", libID)
+	if err := a.libraryStore().DeletePaths(tx, libID); err != nil {
+		log.Printf("delete library paths: %v", err)
+	}
+	if err := a.mediaItems().DeleteItemsByLibrary(tx, libID); err != nil {
+		log.Printf("delete library media items: %v", err)
+	}
+	res, err := a.libraryStore().Delete(tx, libID)
 	if err != nil {
 		fail(w, 500, "删除媒体库失败: "+err.Error())
 		return
@@ -146,11 +151,12 @@ func (a *App) updateLibrary(w http.ResponseWriter, libID, name, kind string, pat
 		return
 	}
 
-	var curName, curKind, curPath string
-	if err := a.db.QueryRow("SELECT name, kind, path FROM libraries WHERE id=?", libID).Scan(&curName, &curKind, &curPath); err != nil {
+	currentLibrary, err := a.libraryStore().GetByID(libID)
+	if err != nil {
 		fail(w, 404, "媒体库不存在")
 		return
 	}
+	curName, curKind := currentLibrary.Name, currentLibrary.Kind
 
 	newName := strings.TrimSpace(name)
 	if newName == "" {
@@ -171,7 +177,7 @@ func (a *App) updateLibrary(w http.ResponseWriter, libID, name, kind string, pat
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec("UPDATE libraries SET name=?, kind=? WHERE id=?", newName, newKind, libID); err != nil {
+	if err := a.libraryStore().UpdateDetails(tx, libID, newName, newKind); err != nil {
 		fail(w, 500, "更新媒体库失败: "+err.Error())
 		return
 	}
@@ -220,12 +226,11 @@ func (a *App) updateLibrary(w http.ResponseWriter, libID, name, kind string, pat
 			fail(w, 400, "请至少保留一个有效的媒体目录")
 			return
 		}
-		raw, _ := json.Marshal(validated)
-		if _, err := tx.Exec("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", "library-paths:"+libID, string(raw)); err != nil {
+		if err := a.libraryStore().SavePaths(tx, libID, validated); err != nil {
 			fail(w, 500, "更新媒体库目录失败: "+err.Error())
 			return
 		}
-		if _, err := tx.Exec("UPDATE libraries SET path=? WHERE id=?", validated[0], libID); err != nil {
+		if err := a.libraryStore().UpdatePath(tx, libID, validated[0]); err != nil {
 			fail(w, 500, "更新媒体库主路径失败: "+err.Error())
 			return
 		}
@@ -349,40 +354,4 @@ func (a *App) authWarning(r *http.Request, name, reason string) {
 		v.Client = r.UserAgent()
 		v.Error = reason
 	})
-}
-func (a *App) playbackProgress(u User, item string, position, duration int64) {
-	if duration <= 0 {
-		var raw string
-		if a.db.QueryRow("SELECT data FROM media_probe WHERE item=?", item).Scan(&raw) == nil {
-			var m struct{ RunTimeTicks int64 }
-			json.Unmarshal([]byte(raw), &m)
-			duration = m.RunTimeTicks
-		}
-	}
-	if duration <= 0 {
-		if x, e := a.item(item); e == nil {
-			m := M{}
-			a.enrichMedia(x, a.metadata(x), m)
-			switch n := m["RunTimeTicks"].(type) {
-			case int64:
-				duration = n
-			case float64:
-				duration = int64(n)
-			}
-		}
-	}
-	a.activity.mu.Lock()
-	defer a.activity.mu.Unlock()
-	for _, v := range a.activity.entries {
-		if v.Category == "playback" && v.Username == u.Name && v.DeviceKey == u.Device && v.ItemID == item && v.State == "requested" {
-			v.PositionTicks = max(position, 0)
-			if duration > 0 {
-				v.RunTimeTicks = duration
-			}
-			if v.RunTimeTicks > 0 {
-				v.Progress = min(100, float64(v.PositionTicks)*100/float64(v.RunTimeTicks))
-			}
-			v.Updated = time.Now()
-		}
-	}
 }

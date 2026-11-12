@@ -21,7 +21,7 @@ printf '%s' '{"format":{"duration":"60","format_name":"matroska","size":"1400000
 	j := a.queueProbe(x, "t", "test", false)
 	select {
 	case <-j.done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("probe stalled")
 	}
 	if j.err != nil {

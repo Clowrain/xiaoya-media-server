@@ -3,11 +3,11 @@ package embyserver
 import (
 	"crypto/hmac"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -125,122 +125,39 @@ func (a *App) savePage(p pageToken) string {
 	a.pages.Entries[p.Query+":"+strconv.Itoa(p.Position)] = pageEntry{s, time.Unix(p.Expires, 0)}
 	return s
 }
-func itemSortValue(x Item, col string) string {
-	switch col {
-	case "id":
-		return x.ID
-	case "name":
-		return x.Name
-	case "year":
-		return strconv.Itoa(x.Year)
-	case "mtime":
-		return strconv.FormatInt(x.Mtime, 10)
-	case "season":
-		return strconv.Itoa(x.Season)
-	case "episode":
-		return strconv.Itoa(x.Episode)
-	}
-	return ""
-}
 func (a *App) pageItems(r *http.Request, u User, where string, args []any, order string, limit int) ([]Item, pageToken, string, bool, error) {
 	key := a.pageSignature(r, where, order, args)
-	p, e := a.pageStart(r, key)
-	if e != nil {
-		return nil, p, "", false, e
+	page, err := a.pageStart(r, key)
+	if err != nil {
+		return nil, page, "", false, err
 	}
 	// Optional totals are calculated once per cursor chain, never on every deep page.
-	if p.Count < 0 && !strings.EqualFold(q(r, "EnableTotalRecordCount"), "false") {
-		if e = a.db.QueryRow("SELECT count(*) FROM items WHERE "+where, args...).Scan(&p.Count); e != nil {
-			return nil, p, "", false, e
+	if page.Count < 0 && !strings.EqualFold(q(r, "EnableTotalRecordCount"), "false") {
+		page.Count, err = a.itemPageStore().Count(where, args)
+		if err != nil {
+			return nil, page, "", false, err
 		}
 	}
-	columns := []string{}
-	desc := strings.Contains(order, "DESC")
-	if order == "resume" {
-		columns = []string{"COALESCE((SELECT updated FROM resume_activity WHERE user_id='" + strings.ReplaceAll(u.ID, "'", "''") + "' AND item=items.id),0)", "id"}
-		desc = true
-	} else {
-		for _, part := range strings.Split(order, ",") {
-			columns = append(columns, strings.Fields(part)[0])
-		}
-	}
-	direction, op := " ASC", ">"
-	if desc {
-		direction = " DESC"
-		op = "<"
-	}
-	orderParts := []string{}
-	for _, col := range columns {
-		orderParts = append(orderParts, col+direction)
-	}
-	params := append([]any{}, args...)
-	if len(p.Values) > 0 {
-		if len(p.Values) != len(columns) {
-			return nil, p, "", false, errors.New("invalid cursor keys")
-		}
-		where += " AND (" + strings.Join(columns, ",") + ") " + op + " (" + strings.TrimRight(strings.Repeat("?,", len(columns)), ",") + ")"
-		for _, v := range p.Values {
-			params = append(params, v)
-		}
-	}
-	params = append(params, limit+1)
-	sql := "SELECT " + cols + " FROM items WHERE " + where + " ORDER BY " + strings.Join(orderParts, ",") + " LIMIT ?"
-	if len(p.Values) == 0 && p.Position > 0 {
-		sql += " OFFSET ?"
-		params = append(params, p.Position)
-	}
-	rows, e := a.db.Query(sql, params...)
-	if e != nil {
-		return nil, p, "", false, e
-	}
-	loaded := []Item{}
-	for rows.Next() {
-		x, e := readItem(rows)
-		if e != nil {
-			rows.Close()
-			return nil, p, "", false, e
-		}
-		loaded = append(loaded, x)
-	}
-	e = rows.Err()
-	rows.Close()
-	if e != nil {
-		return nil, p, "", false, e
-	}
-	more := len(loaded) > limit
-	if more {
-		loaded = loaded[:limit]
+	result, err := a.itemPageStore().LoadPage(ItemPageQuery{
+		Where:        where,
+		Args:         args,
+		Order:        order,
+		UserID:       u.ID,
+		CursorValues: page.Values,
+		Position:     page.Position,
+		Limit:        limit,
+	})
+	if err != nil {
+		return nil, page, "", false, err
 	}
 	next := ""
-	if more {
-		last := loaded[len(loaded)-1]
-		n := p
-		n.Expires = time.Now().Add(15 * time.Minute).Unix()
-		n.Position += len(loaded)
-		n.Values = nil
-		for _, col := range columns {
-			if strings.HasPrefix(col, "COALESCE") {
-				var updated int64
-				e = a.db.QueryRow("SELECT COALESCE((SELECT updated FROM resume_activity WHERE user_id=? AND item=?),0)", u.ID, last.ID).Scan(&updated)
-				if e != nil {
-					return nil, p, "", false, e
-				}
-				n.Values = append(n.Values, fmt.Sprint(updated))
-			} else if col == "rating" {
-				// rating lives outside cols/Item; read the cursor key like the resume column above.
-				var rating float64
-				e = a.db.QueryRow("SELECT rating FROM items WHERE id=?", last.ID).Scan(&rating)
-				if e != nil {
-					return nil, p, "", false, e
-				}
-				n.Values = append(n.Values, strconv.FormatFloat(rating, 'g', -1, 64))
-			} else {
-				n.Values = append(n.Values, itemSortValue(last, col))
-			}
-		}
-		next = a.savePage(n)
+	if result.HasMore {
+		page.Expires = time.Now().Add(15 * time.Minute).Unix()
+		page.Position += len(result.Items)
+		page.Values = result.CursorValues
+		next = a.savePage(page)
 	}
-	return loaded, p, next, more, nil
+	return result.Items, page, next, result.HasMore, nil
 }
 
 // Listing avoids sidecar parsing, actor lookups, filesystem image discovery and probing.
@@ -255,7 +172,7 @@ func (a *App) listDTO(x Item, r *http.Request, u User) M {
 		return m
 	}
 	folder := x.Kind == "Series" || x.Kind == "Season"
-	m := M{"Id": x.ID, "ServerId": a.serverID, "ParentId": x.Parent, "Name": x.Name, "SortName": itemSortName(x), "Overview": x.Overview, "Type": x.Kind, "IsFolder": folder, "LocationType": "FileSystem", "ProductionYear": x.Year, "IndexNumber": x.Episode, "ParentIndexNumber": x.Season, "ImageTags": M{}, "BackdropImageTags": []string{}, "PrimaryImageAspectRatio": 2.0 / 3, "DateCreated": time.Unix(0, x.Mtime).UTC().Format(time.RFC3339), "UserData": userItemDataMap(x.ID, 0, false, false)}
+	m := M{"Id": x.ID, "ServerId": a.serverID, "ParentId": x.Parent, "Name": x.Name, "SortName": itemSortName(x), "Overview": x.Overview, "Type": x.Kind, "IsFolder": folder, "LocationType": "FileSystem", "ProductionYear": x.Year, "IndexNumber": x.Episode, "ParentIndexNumber": x.Season, "ImageTags": M{}, "BackdropImageTags": []string{}, "PrimaryImageAspectRatio": 2.0 / 3, "DateCreated": time.Unix(0, x.Mtime).UTC().Format(time.RFC3339), "UserData": makeUserItemDataDTO(x.ID, 0, false, false)}
 	if !folder {
 		m["MediaType"] = "Video"
 	}
@@ -283,7 +200,7 @@ func (a *App) listDTO(x Item, r *http.Request, u User) M {
 	if u.API {
 		m["Path"] = x.Path
 		if x.URL != "" && strings.Contains(strings.ToLower(q(r, "Fields")), "mediasources") {
-			m["MediaSources"] = []M{a.source(x, token(r))}
+			m["MediaSources"] = []MediaSourceDTO{a.source(x, token(r))}
 		}
 	}
 	if !u.API && r != nil && x.URL != "" && strings.Contains(strings.ToLower(q(r, "Fields")), "mediasources") {
@@ -293,17 +210,9 @@ func (a *App) listDTO(x Item, r *http.Request, u User) M {
 		delete(m, "IndexNumber")
 		delete(m, "ParentIndexNumber")
 		if x.Kind == "Series" {
-			var n int
-			a.db.QueryRow("SELECT count(*) FROM items WHERE parent=?", x.ID).Scan(&n)
-			m["ChildCount"] = n
-			var episodes int
-			a.db.QueryRow(`WITH RECURSIVE tree(id) AS (
-				SELECT id FROM items WHERE parent=?
-				UNION
-				SELECT items.id FROM items JOIN tree ON items.parent=tree.id
-			) SELECT count(*) FROM items WHERE id IN (SELECT id FROM tree) AND kind='Episode'`, x.ID).Scan(&episodes)
-			m["RecursiveItemCount"] = episodes
-			m["EpisodeCount"] = episodes
+			m["ChildCount"] = 0
+			m["RecursiveItemCount"] = 0
+			m["EpisodeCount"] = 0
 		}
 	}
 	if x.Year <= 0 {
@@ -317,78 +226,55 @@ func (a *App) listDTO(x Item, r *http.Request, u User) M {
 	return m
 }
 
-// Episode rows in a listing still need their series/season ancestry; one chunked
-// join query serves the whole page without sidecar reads or probe triggers.
-func (a *App) attachSeriesInfo(items []Item, out []M) {
-	if a.db == nil {
+// Browse item relationships are batched by the repository to avoid per-row SQL.
+func (a *App) attachBrowseMetadata(items []Item, out []M) {
+	if a.db == nil || len(items) == 0 {
 		return
 	}
-	rowOf := map[string]int{}
-	ids := []string{}
-	for i, x := range items {
-		if x.Kind == "Episode" {
-			rowOf[x.ID] = i
-			ids = append(ids, x.ID)
-		}
+	metadata, err := a.mediaItems().BrowseMetadata(items)
+	if err != nil {
+		log.Printf("load browse item metadata: %v", err)
 	}
-	for start := 0; start < len(ids); start += 500 {
-		end := start + 500
-		if end > len(ids) {
-			end = len(ids)
+	for i, item := range items {
+		if i >= len(out) {
+			continue
 		}
-		chunk := ids[start:end]
-		args := make([]any, len(chunk))
-		for j, v := range chunk {
-			args[j] = v
+		value, ok := metadata[item.ID]
+		if !ok {
+			continue
 		}
-		rows, e := a.db.Query(`SELECT ep.id, se.id, se.name, sr.id, sr.name
-FROM items ep
-LEFT JOIN items se ON se.id = ep.parent AND se.kind = 'Season'
-LEFT JOIN items sr ON sr.id = CASE WHEN se.id IS NOT NULL THEN se.parent ELSE ep.parent END
-WHERE ep.id IN (`+strings.TrimRight(strings.Repeat("?,", len(chunk)), ",")+`)`, args...)
-		if e != nil {
-			return
+		if item.Kind == "Series" {
+			out[i]["ChildCount"] = value.ChildCount
+			out[i]["RecursiveItemCount"] = value.EpisodeCount
+			out[i]["EpisodeCount"] = value.EpisodeCount
 		}
-		for rows.Next() {
-			var id, seasonID, seasonName, seriesID, seriesName sql.NullString
-			if e := rows.Scan(&id, &seasonID, &seasonName, &seriesID, &seriesName); e != nil {
-				continue
-			}
-			i, ok := rowOf[id.String]
-			if !ok {
-				continue
-			}
-			if seasonID.Valid && seasonID.String != "" {
-				out[i]["SeasonId"] = seasonID.String
-				if seasonName.Valid {
-					out[i]["SeasonName"] = seasonName.String
+		if item.Kind == "Episode" {
+			if value.SeasonID != "" {
+				out[i]["SeasonId"] = value.SeasonID
+				if value.SeasonName != "" {
+					out[i]["SeasonName"] = value.SeasonName
 				}
 			}
-			if seriesID.Valid && seriesID.String != "" {
-				out[i]["SeriesId"] = seriesID.String
-				if seriesName.Valid {
-					out[i]["SeriesName"] = seriesName.String
+			if value.SeriesID != "" {
+				out[i]["SeriesId"] = value.SeriesID
+				if value.SeriesName != "" {
+					out[i]["SeriesName"] = value.SeriesName
 				}
 			}
-		}
-		rows.Close()
-		if e := rows.Err(); e != nil {
-			return
 		}
 	}
 }
-
 func (a *App) listDTOs(items []Item, r *http.Request, u User) []M {
 	out := make([]M, 0, len(items))
 	positions := map[string]int{}
-	args := []any{u.ID}
+	itemIDs := make([]string, 0, len(items))
 	for _, x := range items {
 		positions[x.ID] = len(out)
-		args = append(args, x.ID)
+		itemIDs = append(itemIDs, x.ID)
 		m := a.listDTO(x, r, u)
 		if !m["IsFolder"].(bool) {
-			if sources, ok := m["MediaSources"].([]M); ok {
-				m["MediaSourceCount"] = len(sources)
+			if count, ok := mediaSourceCount(m["MediaSources"]); ok {
+				m["MediaSourceCount"] = count
 			} else {
 				delete(m, "MediaSourceCount")
 			}
@@ -396,38 +282,33 @@ func (a *App) listDTOs(items []Item, r *http.Request, u User) []M {
 		out = append(out, m)
 	}
 	if !u.API && len(items) > 0 && !strings.EqualFold(q(r, "EnableUserData"), "false") && a.db != nil {
-		rows, e := a.db.Query("SELECT item,position,played FROM userdata WHERE user_id=? AND item IN ("+strings.TrimRight(strings.Repeat("?,", len(items)), ",")+")", args...)
-		if e == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var item string
-				var pos int64
-				var played bool
-				if rows.Scan(&item, &pos, &played) == nil {
-					if i, ok := positions[item]; ok {
-						out[i]["UserData"] = userItemDataMap(item, pos, played, false)
-					}
+		states, err := a.userStore().ListPlaybackStates(u.ID, itemIDs)
+		if err != nil {
+			log.Printf("list user playback data: %v", err)
+		} else {
+			for itemID, state := range states {
+				if i, ok := positions[itemID]; ok {
+					out[i]["UserData"] = makeUserItemDataDTO(itemID, state.Position, state.Played, false)
 				}
 			}
 		}
-		favRows, fe := a.db.Query("SELECT item FROM user_favorites WHERE user_id=? AND item IN ("+strings.TrimRight(strings.Repeat("?,", len(items)), ",")+")", args...)
-		if fe == nil {
-			defer favRows.Close()
-			for favRows.Next() {
-				var item string
-				if favRows.Scan(&item) == nil {
-					if i, ok := positions[item]; ok {
-						if ud, ok := out[i]["UserData"].(M); ok {
-							ud["IsFavorite"] = true
-						} else {
-							out[i]["UserData"] = userItemDataMap(item, 0, false, true)
-						}
+		favorites, err := a.userStore().ListFavorites(u.ID, itemIDs)
+		if err != nil {
+			log.Printf("list user favorites: %v", err)
+		} else {
+			for itemID := range favorites {
+				if i, ok := positions[itemID]; ok {
+					if ud, ok := out[i]["UserData"].(UserItemDataDTO); ok {
+						ud.IsFavorite = true
+						out[i]["UserData"] = ud
+					} else {
+						out[i]["UserData"] = makeUserItemDataDTO(itemID, 0, false, true)
 					}
 				}
 			}
 		}
 	}
-	a.attachSeriesInfo(items, out)
+	a.attachBrowseMetadata(items, out)
 	return out
 }
 

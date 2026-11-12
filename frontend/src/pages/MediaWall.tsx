@@ -4,10 +4,11 @@ import {
   ExternalLink, Copy, Check, Info, Sparkles, Filter 
 } from 'lucide-react';
 import { User, LibraryView, MediaItem } from '../types';
-import { 
-  fetchLibraryViews, fetchMediaItems, fetchLatestItems, 
-  fetchNextUpItems, notifyToast, getStoredToken 
-} from '../api/client';
+import { notifyToast, getStoredToken } from '../api/client';
+import {
+  fetchLibraryViews, fetchMediaItems, fetchLatestItems, fetchNextUpItems,
+  getPrimaryImageUrl, getBackdropImageUrl,
+} from '../api/media';
 import { SenPlayerModal } from '../components/SenPlayerModal';
 import { TmdbRematchModal } from '../components/TmdbRematchModal';
 
@@ -156,20 +157,20 @@ export const MediaWall: React.FC<MediaWallProps> = ({
 
   const getPosterUrl = (item: MediaItem) => {
     if (item.ImageTags?.Primary) {
-      return `/Items/${item.Id}/Images/Primary?fillHeight=450&tag=${item.ImageTags.Primary}&quality=85`;
+      return getPrimaryImageUrl(item.Id, `fillHeight=450&tag=${item.ImageTags.Primary}&quality=85`);
     }
     return null;
   };
 
   const getBackdropUrl = (item: MediaItem) => {
     if (item.BackdropImageTags && item.BackdropImageTags.length > 0) {
-      return `/Items/${item.Id}/Images/Backdrop/0?fillWidth=640&tag=${item.BackdropImageTags[0]}&quality=80`;
+      return getBackdropImageUrl(item.Id, `fillWidth=640&tag=${item.BackdropImageTags[0]}&quality=80`, 0);
     }
     if (item.ImageTags?.Backdrop) {
-      return `/Items/${item.Id}/Images/Backdrop?fillWidth=640&tag=${item.ImageTags.Backdrop}&quality=80`;
+      return getBackdropImageUrl(item.Id, `fillWidth=640&tag=${item.ImageTags.Backdrop}&quality=80`);
     }
     if (item.ImageTags?.Primary) {
-      return `/Items/${item.Id}/Images/Primary?fillWidth=640&tag=${item.ImageTags.Primary}&quality=80`;
+      return getPrimaryImageUrl(item.Id, `fillWidth=640&tag=${item.ImageTags.Primary}&quality=80`);
     }
     return null;
   };
@@ -260,7 +261,7 @@ export const MediaWall: React.FC<MediaWallProps> = ({
                 {/* Background Artwork or Stylized Gradient */}
                 <div className="absolute inset-0 bg-gradient-to-tr from-zinc-950 via-zinc-900 to-zinc-800/80 group-hover:brightness-110 transition" />
                 <img
-                  src={`/Items/${v.Id}/Images/Primary?fillWidth=400&quality=85${v.ImageTags?.Primary ? `&tag=${v.ImageTags.Primary}` : `&api_key=${encodeURIComponent(getStoredToken() || '')}`}`}
+                  src={getPrimaryImageUrl(v.Id, `fillWidth=400&quality=85${v.ImageTags?.Primary ? `&tag=${v.ImageTags.Primary}` : `&api_key=${encodeURIComponent(getStoredToken() || '')}`}`)}
                   alt={v.Name}
                   className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition duration-500 opacity-60 group-hover:opacity-80"
                   onError={(e) => {

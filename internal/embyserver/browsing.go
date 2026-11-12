@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image/png"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -233,15 +234,13 @@ func (a *App) imagePath(i, kind string) string {
 		return ""
 	}
 	if kind == "Primary" {
-		var n int
-		if a.db.QueryRow("SELECT 1 FROM covers WHERE id=?", i).Scan(&n) == nil {
+		if exists, err := a.coverStore().Exists(i); err == nil && exists {
 			return "cover"
 		}
 		if strings.HasPrefix(i, "person-") {
-			var p string
-			a.db.QueryRow("SELECT thumb FROM item_people WHERE person=? AND thumb<>'' ORDER BY item LIMIT 1", i).Scan(&p)
-			var failed int
-			if a.db.QueryRow("SELECT 1 FROM actor_image_failures WHERE person=? AND path=? AND expires>?", i, p, time.Now().Unix()).Scan(&failed) == nil {
+			p, _ := a.mediaItems().PersonImageThumb(i)
+			failed, _ := a.mediaItems().PersonImageFailed(i, p, time.Now().Unix())
+			if failed {
 				return ""
 			}
 			if strings.HasPrefix(p, "https://image.tmdb.org/") {
@@ -255,10 +254,8 @@ func (a *App) imagePath(i, kind string) string {
 		if p := a.libraryPhysicalImage(i, kind); p != "" {
 			return p
 		}
-		if kind == "Primary" {
-			x, e = readItem(a.db.QueryRow("SELECT "+cols+" FROM items WHERE lib=? AND poster<>'' ORDER BY name,id LIMIT 1", i))
-		} else if kind == "Backdrop" {
-			x, e = readItem(a.db.QueryRow("SELECT "+cols+" FROM items WHERE lib=? AND (url LIKE '%.jpg' OR poster<>'') ORDER BY name,id LIMIT 1", i))
+		if kind == "Primary" || kind == "Backdrop" {
+			x, e = a.mediaItems().LibraryImageCandidate(i, kind)
 		}
 	}
 	if e != nil {
@@ -339,9 +336,8 @@ func (a *App) imageTag(i, kind, p string) string {
 	}
 	revision := p
 	if p == "cover" {
-		var b []byte
-		a.db.QueryRow("SELECT data FROM covers WHERE id=?", i).Scan(&b)
-		revision = digest(string(b))
+		cover, _ := a.coverStore().Get(i)
+		revision = digest(string(cover.Data))
 	} else if st, e := os.Stat(p); e == nil {
 		revision += fmt.Sprint(st.ModTime().UnixNano(), st.Size())
 	}
@@ -373,18 +369,15 @@ func (a *App) decorateImages(x Item, m M) {
 	}
 	m["DateCreated"] = time.Unix(0, x.Mtime).UTC().Format(time.RFC3339)
 	if x.Kind == "Series" || x.Kind == "Season" {
-		var n int
-		a.db.QueryRow("SELECT count(*) FROM items WHERE parent=?", x.ID).Scan(&n)
-		m["ChildCount"] = n
+		metadata, err := a.mediaItems().BrowseMetadata([]Item{x})
+		if err != nil {
+			log.Printf("load detail browse metadata for %s: %v", x.ID, err)
+		}
+		value := metadata[x.ID]
+		m["ChildCount"] = value.ChildCount
 		if x.Kind == "Series" {
-			var episodes int
-			a.db.QueryRow(`WITH RECURSIVE tree(id) AS (
-				SELECT id FROM items WHERE parent=?
-				UNION
-				SELECT items.id FROM items JOIN tree ON items.parent=tree.id
-			) SELECT count(*) FROM items WHERE id IN (SELECT id FROM tree) AND kind='Episode'`, x.ID).Scan(&episodes)
-			m["RecursiveItemCount"] = episodes
-			m["EpisodeCount"] = episodes
+			m["RecursiveItemCount"] = value.EpisodeCount
+			m["EpisodeCount"] = value.EpisodeCount
 		}
 	}
 	if x.Kind == "Season" {
@@ -483,11 +476,11 @@ func (a *App) serveImage(w http.ResponseWriter, r *http.Request, i string) {
 		}
 		var isLib bool
 		var libName, libKind string
-		if a.db.QueryRow("SELECT name, kind FROM libraries WHERE id=?", i).Scan(&libName, &libKind) == nil {
+		if library, err := a.libraryStore().GetByID(i); err == nil {
+			libName, libKind = library.Name, library.Kind
 			isLib = true
 		} else {
-			var n int
-			if a.db.QueryRow("SELECT 1 FROM items WHERE id=?", i).Scan(&n) != nil {
+			if exists, err := a.mediaItems().Exists(i); err != nil || !exists {
 				fail(w, 404, "图片不存在")
 				return
 			}
@@ -534,17 +527,16 @@ func (a *App) serveImage(w http.ResponseWriter, r *http.Request, i string) {
 		return
 	}
 	if path == "cover" {
-		var b []byte
-		var mime string
-		if a.db.QueryRow("SELECT data,mime FROM covers WHERE id=?", i).Scan(&b, &mime) != nil {
+		cover, err := a.coverStore().Get(i)
+		if err != nil {
 			fail(w, 404, "图片不存在")
 			return
 		}
-		w.Header().Set("Content-Type", mime)
-		if serveThumbnail(w, r, bytes.NewReader(b)) {
+		w.Header().Set("Content-Type", cover.MIME)
+		if serveThumbnail(w, r, bytes.NewReader(cover.Data)) {
 			return
 		}
-		http.ServeContent(w, r, "cover", time.Time{}, bytes.NewReader(b))
+		http.ServeContent(w, r, "cover", time.Time{}, bytes.NewReader(cover.Data))
 		return
 	}
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
@@ -594,7 +586,7 @@ func (a *App) serveImage(w http.ResponseWriter, r *http.Request, i string) {
 	http.ServeFile(w, r, path)
 }
 func (a *App) rootDTO() M {
-	return M{"Id": "root", "Name": "媒体库", "Type": "UserRootFolder", "IsFolder": true, "DisplayPreferencesId": "root", "SortName": "媒体库", "ExternalUrls": []M{}, "ProviderIds": M{}, "Taglines": []string{}, "RemoteTrailers": []M{}, "ServerId": a.serverID, "ChildCount": len(a.libraries()), "ImageTags": M{}, "BackdropImageTags": []string{}, "UserData": userItemDataMap("root", 0, false, false)}
+	return M{"Id": "root", "Name": "媒体库", "Type": "UserRootFolder", "IsFolder": true, "DisplayPreferencesId": "root", "SortName": "媒体库", "ExternalUrls": []M{}, "ProviderIds": M{}, "Taglines": []string{}, "RemoteTrailers": []M{}, "ServerId": a.serverID, "ChildCount": len(a.libraries()), "ImageTags": M{}, "BackdropImageTags": []string{}, "UserData": makeUserItemDataDTO("root", 0, false, false)}
 }
 func setQuery(r *http.Request, k, v string) {
 	qv := r.URL.Query()
@@ -781,8 +773,7 @@ func (a *App) browseRoute(w http.ResponseWriter, r *http.Request, u User, p stri
 		return true
 	}
 	if l == "/movies/recommendations" {
-		var seed, name string
-		err := a.db.QueryRow("SELECT i.id,i.name FROM items i JOIN userdata d ON d.item=i.id LEFT JOIN resume_activity ra ON ra.item=i.id AND ra.user_id=d.user_id WHERE d.user_id=? AND (d.played=1 OR d.position>0) AND i.kind='Movie' AND (?='' OR i.lib=?) ORDER BY ra.updated DESC,i.id LIMIT 1", u.ID, q(r, "ParentId"), q(r, "ParentId")).Scan(&seed, &name)
+		seed, err := a.userStore().ResumeSeed(u.ID, q(r, "ParentId"))
 		if err != nil {
 			respond(w, []M{})
 			return true
@@ -794,13 +785,13 @@ func (a *App) browseRoute(w http.ResponseWriter, r *http.Request, u User, p stri
 			setQuery(rr, "Limit", n)
 		}
 		rec := &jsonCapture{header: http.Header{}}
-		a.similar(rec, rr, u, seed)
+		a.similar(rec, rr, u, seed.ID)
 		var result struct{ Items []M }
 		if json.Unmarshal(rec.buf.Bytes(), &result) != nil || result.Items == nil {
 			fail(w, 500, "推荐查询失败")
 			return true
 		}
-		respond(w, []M{{"BaselineItemName": name, "CategoryId": 1, "RecommendationType": "SimilarToRecentlyPlayed", "Items": result.Items}})
+		respond(w, []M{{"BaselineItemName": seed.Name, "CategoryId": 1, "RecommendationType": "SimilarToRecentlyPlayed", "Items": result.Items}})
 		return true
 	}
 	if strings.HasPrefix(l, "/searchhints") {
@@ -860,18 +851,14 @@ func (a *App) browseRoute(w http.ResponseWriter, r *http.Request, u User, p stri
 	}
 	if l == "/years" || strings.HasSuffix(l, "/years") {
 		parent := q(r, "ParentId")
-		rows, e := a.db.Query("SELECT DISTINCT year FROM items WHERE year>0 AND (?='' OR lib=?) ORDER BY year DESC", parent, parent)
+		years, e := a.mediaItems().YearsInLibrary(parent)
 		if e != nil {
 			fail(w, 500, "年份查询失败")
 			return true
 		}
-		defer rows.Close()
-		out := []M{}
-		for rows.Next() {
-			var y int
-			if rows.Scan(&y) == nil {
-				out = append(out, M{"Name": strconv.Itoa(y), "Id": strconv.Itoa(y)})
-			}
+		out := make([]M, 0, len(years))
+		for _, year := range years {
+			out = append(out, M{"Name": strconv.Itoa(year), "Id": strconv.Itoa(year)})
 		}
 		respond(w, M{"Items": out, "TotalRecordCount": len(out), "StartIndex": 0})
 		return true
@@ -900,19 +887,24 @@ func (c *jsonCapture) WriteHeader(int)             {}
 func (a *App) personDTO(i, name, uid string) M {
 	var isFav bool
 	if a.db != nil && uid != "" {
-		var n int
-		a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", uid, i).Scan(&n)
-		isFav = (n > 0)
+		favorite, err := a.userStore().IsFavorite(uid, i)
+		if err != nil {
+			log.Printf("read person favorite: %v", err)
+		} else {
+			isFav = favorite
+		}
 	}
-	m := M{"Id": i, "Name": name, "Type": "Person", "ServerId": a.serverID, "IsFolder": false, "ImageTags": a.libraryImageTags(i), "BackdropImageTags": []string{}, "Overview": "", "PrimaryImageAspectRatio": 2.0 / 3, "UserData": userItemDataMap(i, 0, false, isFav)}
-	var n int
-	a.db.QueryRow("SELECT count(DISTINCT item) FROM item_people WHERE person=?", i).Scan(&n)
+	m := M{"Id": i, "Name": name, "Type": "Person", "ServerId": a.serverID, "IsFolder": false, "ImageTags": a.libraryImageTags(i), "BackdropImageTags": []string{}, "Overview": "", "PrimaryImageAspectRatio": 2.0 / 3, "UserData": makeUserItemDataDTO(i, 0, false, isFav)}
+	n, err := a.mediaItems().PersonItemCount(i)
+	if err != nil {
+		log.Printf("count person media items: %v", err)
+	}
 	m["MovieCount"] = n
 	return m
 }
 func (a *App) personDetail(w http.ResponseWriter, r *http.Request, u User, i string) {
-	var name string
-	if a.db.QueryRow("SELECT name FROM item_people WHERE person=? LIMIT 1", i).Scan(&name) != nil {
+	name, err := a.mediaItems().PersonName(i)
+	if err != nil {
 		fail(w, 404, "演员不存在")
 		return
 	}
@@ -921,18 +913,21 @@ func (a *App) personDetail(w http.ResponseWriter, r *http.Request, u User, i str
 func (a *App) persons(w http.ResponseWriter, r *http.Request, u User) {
 	where := "1=1"
 	args := []any{}
-	if a.hideMissingActors() {
-		where += " AND EXISTS (SELECT 1 FROM item_people visible WHERE visible.person=item_people.person AND visible.thumb<>'' AND NOT EXISTS (SELECT 1 FROM actor_image_failures f WHERE f.person=visible.person AND f.path=visible.thumb AND f.expires>?))"
-		args = append(args, time.Now().Unix())
+	requireAvailableImage := a.hideMissingActors()
+	imageCheckedAt := int64(0)
+	if requireAvailableImage {
+		imageCheckedAt = time.Now().Unix()
 	}
 	filters := strings.ToLower(q(r, "Filters"))
 	if strings.EqualFold(q(r, "IsFavorite"), "true") || strings.Contains(filters, "isfavorite") {
-		where += " AND person IN (SELECT item FROM user_favorites WHERE user_id=?)"
-		args = append(args, u.ID)
+		predicate := a.userStore().FavoritePredicate(u.ID, FavoritePerson, false)
+		where += " AND " + predicate.SQL
+		args = append(args, predicate.Args...)
 	}
 	if strings.EqualFold(q(r, "IsFavorite"), "false") {
-		where += " AND person NOT IN (SELECT item FROM user_favorites WHERE user_id=?)"
-		args = append(args, u.ID)
+		predicate := a.userStore().FavoritePredicate(u.ID, FavoritePerson, true)
+		where += " AND " + predicate.SQL
+		args = append(args, predicate.Args...)
 	}
 	if s := q(r, "SearchTerm"); s != "" {
 		where += " AND name ILIKE ?"
@@ -946,14 +941,22 @@ func (a *App) persons(w http.ResponseWriter, r *http.Request, u User) {
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	key := a.pageSignature(r, where, "persons", args)
+	signatureArgs := append([]any{}, args...)
+	if requireAvailableImage {
+		signatureArgs = append(signatureArgs, imageCheckedAt)
+	}
+	key := a.pageSignature(r, where, "persons", signatureArgs)
 	p, e := a.pageStart(r, key)
 	if e != nil {
 		fail(w, 500, e.Error())
 		return
 	}
+	personPage := PersonPageQuery{
+		Where: where, Args: args, Position: p.Position, Limit: limit,
+		RequireAvailableImage: requireAvailableImage, ImageCheckedAt: imageCheckedAt,
+	}
 	if p.Count < 0 && !strings.EqualFold(q(r, "EnableTotalRecordCount"), "false") {
-		if e = a.db.QueryRow("SELECT count(DISTINCT person) FROM item_people WHERE "+where, args...).Scan(&p.Count); e != nil {
+		if p.Count, e = a.mediaItems().CountPeople(personPage); e != nil {
 			fail(w, 500, "演员查询失败: "+e.Error())
 			return
 		}
@@ -963,35 +966,17 @@ func (a *App) persons(w http.ResponseWriter, r *http.Request, u User) {
 			fail(w, 400, "invalid cursor")
 			return
 		}
-		where += " AND (name,person)>(?,?)"
-		args = append(args, p.Values[0], p.Values[1])
+		personPage.AfterName = p.Values[0]
+		personPage.AfterID = p.Values[1]
 	}
-	sql := "SELECT DISTINCT person,name FROM item_people WHERE " + where + " ORDER BY name,person LIMIT ?"
-	args = append(args, limit+1)
-	if len(p.Values) == 0 && p.Position > 0 {
-		sql += " OFFSET ?"
-		args = append(args, p.Position)
-	}
-	rows, e := a.db.Query(sql, args...)
+	people, e := a.mediaItems().ListPeople(personPage)
 	if e != nil {
 		fail(w, 500, "演员查询失败")
 		return
 	}
-	pairs := [][2]string{}
-	for rows.Next() {
-		var pair [2]string
-		if e = rows.Scan(&pair[0], &pair[1]); e != nil {
-			rows.Close()
-			fail(w, 500, "演员读取失败")
-			return
-		}
-		pairs = append(pairs, pair)
-	}
-	e = rows.Err()
-	rows.Close()
-	if e != nil {
-		fail(w, 500, "演员读取失败")
-		return
+	pairs := make([][2]string, 0, len(people))
+	for _, person := range people {
+		pairs = append(pairs, [2]string{person.ID, person.Name})
 	}
 	more := len(pairs) > limit
 	if more {
@@ -1006,20 +991,22 @@ func (a *App) persons(w http.ResponseWriter, r *http.Request, u User) {
 		next = a.savePage(n)
 	}
 	out := []M{}
+	personIDs := make([]string, 0, len(pairs))
 	for _, pair := range pairs {
-		var isFav bool
-		if a.db != nil && u.ID != "" {
-			var n int
-			a.db.QueryRow("SELECT 1 FROM user_favorites WHERE user_id=? AND item=?", u.ID, pair[0]).Scan(&n)
-			isFav = (n > 0)
-		}
+		personIDs = append(personIDs, pair[0])
+	}
+	favorites, favoriteErr := a.userStore().ListFavorites(u.ID, personIDs)
+	if favoriteErr != nil {
+		log.Printf("list person favorites: %v", favoriteErr)
+	}
+	for _, pair := range pairs {
 		out = append(out, M{
 			"Id":        pair[0],
 			"Name":      pair[1],
 			"Type":      "Person",
 			"ImageTags": a.libraryImageTags(pair[0]),
 			"IsFolder":  false,
-			"UserData":  userItemDataMap(pair[0], 0, false, isFav),
+			"UserData":  makeUserItemDataDTO(pair[0], 0, false, favorites[pair[0]]),
 		})
 	}
 	if p.Count < 0 {
@@ -1032,19 +1019,14 @@ func (a *App) persons(w http.ResponseWriter, r *http.Request, u User) {
 
 }
 func (a *App) genres(w http.ResponseWriter, r *http.Request, list bool) {
-	rows, e := a.db.Query("SELECT DISTINCT g.genre FROM item_genres g JOIN items i ON i.id=g.item WHERE (?='' OR i.lib=?) ORDER BY g.genre", q(r, "ParentId"), q(r, "ParentId"))
-	if e != nil {
+	names, err := a.mediaItems().GenreNamesInLibrary(q(r, "ParentId"))
+	if err != nil {
 		fail(w, 500, "类型查询失败")
 		return
 	}
-	defer rows.Close()
-	names := []string{}
 	out := []M{}
-	for rows.Next() {
-		var n string
-		rows.Scan(&n)
-		names = append(names, n)
-		out = append(out, M{"Id": "genre-" + digest(n)[:32], "Name": n, "Type": "Genre", "ImageTags": M{}})
+	for _, name := range names {
+		out = append(out, M{"Id": "genre-" + digest(name)[:32], "Name": name, "Type": "Genre", "ImageTags": M{}})
 	}
 	if list {
 		respond(w, M{"Items": out, "TotalRecordCount": len(out), "StartIndex": 0})
@@ -1063,36 +1045,30 @@ func (a *App) genres(w http.ResponseWriter, r *http.Request, list bool) {
 func (a *App) browseFilters(r *http.Request, u User, where string, args []any, latest bool) (string, []any) {
 	filters := strings.ToLower(q(r, "Filters"))
 	if strings.EqualFold(q(r, "IsPlayed"), "true") || strings.Contains(filters, "isplayed") {
-		where += " AND id IN (SELECT item FROM userdata WHERE user_id=? AND played=1)"
-		args = append(args, u.ID)
+		predicate := a.userStore().PlayedItemPredicate(u.ID, false)
+		where += " AND " + predicate.SQL
+		args = append(args, predicate.Args...)
 	}
 	if strings.EqualFold(q(r, "IsPlayed"), "false") || strings.Contains(filters, "isunplayed") {
-		where += " AND id NOT IN (SELECT item FROM userdata WHERE user_id=? AND played=1)"
-		args = append(args, u.ID)
+		predicate := a.userStore().PlayedItemPredicate(u.ID, true)
+		where += " AND " + predicate.SQL
+		args = append(args, predicate.Args...)
 	}
 	if strings.EqualFold(q(r, "IsFavorite"), "true") || strings.Contains(filters, "isfavorite") {
-		where += " AND id IN (SELECT item FROM user_favorites WHERE user_id=?)"
-		args = append(args, u.ID)
+		predicate := a.userStore().FavoritePredicate(u.ID, FavoriteMediaItem, false)
+		where += " AND " + predicate.SQL
+		args = append(args, predicate.Args...)
 	}
 	if strings.EqualFold(q(r, "IsFavorite"), "false") {
-		where += " AND id NOT IN (SELECT item FROM user_favorites WHERE user_id=?)"
-		args = append(args, u.ID)
+		predicate := a.userStore().FavoritePredicate(u.ID, FavoriteMediaItem, true)
+		where += " AND " + predicate.SQL
+		args = append(args, predicate.Args...)
 	}
 	if strings.Contains(strings.ToLower(r.URL.Path), "/shows/nextup") {
-		// 严密约束：必须该电视剧有播放历史（played=1 或 position>0）才允许出现 NextUp
-		where += ` AND id IN (
- SELECT pick.id FROM (SELECT id FROM items WHERE kind='Series' AND id IN (
-   SELECT CASE WHEN p.kind='Season' THEN p.parent ELSE ep.parent END
-   FROM items ep LEFT JOIN items p ON p.id=ep.parent JOIN userdata ud ON ud.item=ep.id AND ud.user_id=?
-   WHERE (ud.played=1 OR ud.position>0)
- )) s
- CROSS JOIN LATERAL (
- SELECT e.id FROM (SELECT s.id UNION ALL SELECT id FROM items WHERE parent=s.id AND kind='Season') parents
- CROSS JOIN LATERAL (SELECT i.id,i.season,i.episode FROM items i WHERE i.parent=parents.id AND i.kind='Episode'
- AND NOT EXISTS (SELECT 1 FROM userdata d WHERE d.user_id=? AND d.item=i.id AND d.played=1)
- ORDER BY i.season,i.episode,i.id LIMIT 1) e
- ORDER BY e.season,e.episode,e.id LIMIT 1) pick)`
-		args = append(args, u.ID, u.ID)
+		// Only series with playback history can produce a NextUp item.
+		predicate := a.userStore().NextUpPredicate(u.ID)
+		where += " AND " + predicate.SQL
+		args = append(args, predicate.Args...)
 	}
 	if latest && q(r, "IncludeItemTypes") == "" {
 		where += " AND kind IN ('Movie','Series')"
@@ -1117,20 +1093,9 @@ func (a *App) browseFilters(r *http.Request, u User, where string, args []any, l
 		}
 	}
 	if v := q(r, "GenreIds"); v != "" {
-		wanted := map[string]bool{}
-		for _, v := range strings.Split(v, ",") {
-			wanted[v] = true
-		}
-		names := []string{}
-		rows, e := a.db.Query("SELECT DISTINCT genre FROM item_genres")
-		if e == nil {
-			for rows.Next() {
-				var name string
-				if rows.Scan(&name) == nil && wanted["genre-"+digest(name)[:32]] {
-					names = append(names, name)
-				}
-			}
-			rows.Close()
+		names, err := a.mediaItems().GenreNamesByIDs(strings.Split(v, ","))
+		if err != nil {
+			log.Printf("genre id filter lookup: %v", err)
 		}
 		if len(names) == 0 {
 			where += " AND 0=1"
@@ -1225,8 +1190,10 @@ func browseOrderWithContext(r *http.Request, parentItem *Item) string {
 }
 
 func (a *App) markActorImageFailure(person, path string) {
-	if strings.HasPrefix(person, "person-") {
-		a.db.Exec("INSERT INTO actor_image_failures(person,path,expires) VALUES(?,?,?) ON CONFLICT(person) DO UPDATE SET path=excluded.path,expires=excluded.expires", person, path, time.Now().Add(time.Hour).Unix())
+	if a.db != nil && strings.HasPrefix(person, "person-") {
+		if err := a.mediaItems().RecordPersonImageFailure(person, path, time.Now().Add(time.Hour).Unix()); err != nil {
+			log.Printf("record person image failure: %v", err)
+		}
 	}
 }
 

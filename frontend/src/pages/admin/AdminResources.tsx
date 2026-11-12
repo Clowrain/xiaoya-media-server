@@ -1,7 +1,26 @@
 import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, RefreshCw, Search } from 'lucide-react';
-import { notifyToast, request, waitForAdminJob } from '../../api/client';
-import type { AdminJob, SyncBatch } from '../../types';
+import { notifyToast } from '../../api/client';
+import { waitForAdminJob } from '../../api/jobs';
+import {
+  fetchResourceBatches,
+  fetchResourceChanges,
+  fetchResourceDetail,
+  fetchResources,
+  fetchResourceTasks,
+  fetchTrackingReviews,
+  performResourceAction,
+  runResourceTask,
+} from '../../api/resources';
+import type {
+  ManagedResource,
+  ManagedResourceDetail,
+  ResourceAction,
+  ResourceChange,
+  ResourceTask,
+  TrackingReview,
+} from '../../api/resources';
+import type { SyncBatch } from '../../types';
 
 const button = 'rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm hover:bg-zinc-700 disabled:opacity-50';
 const tabs = { resources: '资源', changes: '变更历史', batches: '扫描批次', tasks: '定时任务' };
@@ -11,29 +30,13 @@ const statuses: Record<string, string> = {
 };
 const time = (seconds?: number) => seconds ? new Date(seconds * 1000).toLocaleString() : '—';
 
-interface Resource {
-  id: string; source_path: string; status: string; origin_type: string;
-  local_strm_path?: string; last_error?: string; is_dir: boolean;
-}
-interface ResourceDetail {
-  resource: Resource;
-  cleanup_preview: { unmanaged: boolean; affected_resources: number };
-}
-interface Change {
-  id: string; change_type: string; old_path?: string; new_path?: string; detected_at: number;
-}
-interface Task {
-  task_key: string; name: string; status: string; last_run_at: number; last_error?: string; enabled: boolean;
-}
-interface TrackingReview { resource_id: string; path: string }
-
 export function AdminResources() {
   const [tab, setTab] = useState<keyof typeof tabs>('resources');
-  const [resources, setResources] = useState<Resource[]>([]);
-  const [detail, setDetail] = useState<ResourceDetail | null>(null);
-  const [changes, setChanges] = useState<Change[]>([]);
+  const [resources, setResources] = useState<ManagedResource[]>([]);
+  const [detail, setDetail] = useState<ManagedResourceDetail | null>(null);
+  const [changes, setChanges] = useState<ResourceChange[]>([]);
   const [batches, setBatches] = useState<SyncBatch[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<ResourceTask[]>([]);
   const [reviews, setReviews] = useState<TrackingReview[]>([]);
   const [keyword, setKeyword] = useState('');
   const [query, setQuery] = useState('');
@@ -44,24 +47,21 @@ export function AdminResources() {
   const [error, setError] = useState('');
   const size = 25;
 
-  const resourceURL = (id: string) => `/api/resources/${encodeURIComponent(id)}`;
-
   const load = async () => {
     setError('');
     try {
       switch (tab) {
         case 'resources': {
-          const params = new URLSearchParams({q: query, status: filter, limit: String(size), offset: String(page * size)});
-          const [r, t] = await Promise.all([
-            request<{items: Resource[]; total: number}>(`/api/resources?${params}`),
-            request<{items: TrackingReview[]}>('/api/alist/tracking-review'),
+          const [resourcePage, trackingReviews] = await Promise.all([
+            fetchResources({ q: query, status: filter, limit: size, offset: page * size }),
+            fetchTrackingReviews(),
           ]);
-          setResources(r.items); setTotal(r.total); setReviews(t.items);
+          setResources(resourcePage.items); setTotal(resourcePage.total); setReviews(trackingReviews);
           break;
         }
-        case 'changes': setChanges((await request<{items: Change[]}>('/api/resources/changes?limit=100')).items); break;
-        case 'batches': setBatches((await request<{items: SyncBatch[]}>('/api/batches?limit=100')).items); break;
-        case 'tasks': setTasks((await request<{items: Task[]}>('/api/tasks')).items); break;
+        case 'changes': setChanges(await fetchResourceChanges()); break;
+        case 'batches': setBatches(await fetchResourceBatches()); break;
+        case 'tasks': setTasks(await fetchResourceTasks()); break;
       }
     } catch (e: any) { setError(e.message || '无法读取资源与任务'); }
   };
@@ -70,18 +70,18 @@ export function AdminResources() {
 
   const open = async (id: string) => {
     setBusy(id);
-    try { setDetail(await request<ResourceDetail>(resourceURL(id))); }
+    try { setDetail(await fetchResourceDetail(id)); }
     catch (e: any) { notifyToast(e.message, 'error'); }
     finally { setBusy(''); }
   };
 
-  const action = async (id: string, mode: 'unmanage' | 'restore-management' | 'reprocess' | 'retry' | 'track') => {
+  const action = async (id: string, mode: ResourceAction) => {
     setBusy(id);
     try {
-      await request(`${resourceURL(id)}/${mode}${mode === 'unmanage' ? '?confirm=true' : ''}`, 'POST', {});
+      await performResourceAction(id, mode);
       const message = { unmanage: '已取消管理', 'restore-management': '已恢复管理', reprocess: '已重新生成', retry: '重试完成', track: '已启用追更' };
       notifyToast(message[mode], 'success');
-      if (detail?.resource.id === id) setDetail(await request<ResourceDetail>(resourceURL(id)));
+      if (detail?.resource.id === id) setDetail(await fetchResourceDetail(id));
       await load();
     } catch (e: any) { notifyToast(e.message, 'error'); }
     finally { setBusy(''); }
@@ -90,7 +90,7 @@ export function AdminResources() {
   const runTask = async (key: string) => {
     setBusy(key);
     try {
-      const job = await request<AdminJob>(`/api/tasks/${encodeURIComponent(key)}/run`, 'POST', {});
+      const job = await runResourceTask(key);
       const result = await waitForAdminJob(job.id);
       notifyToast(result.status === 'SUCCESS' ? '任务完成' : result.error || statuses[result.status], result.status === 'SUCCESS' ? 'success' : 'error');
       await load();
